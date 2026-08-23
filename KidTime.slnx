@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KidTime.ControlService/KidTime.ControlService.csproj" />
+    <Project Path="src/KidTime.Domain/KidTime.Domain.csproj" />
+    <Project Path="src/KidTime.Server/KidTime.Server.csproj" />
+    <Project Path="src/KidTime.SessionAgent/KidTime.SessionAgent.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KidTime.ControlService.Tests/KidTime.ControlService.Tests.csproj" />
+    <Project Path="tests/KidTime.Domain.Tests/KidTime.Domain.Tests.csproj" />
+  </Folder>
+</Solution>

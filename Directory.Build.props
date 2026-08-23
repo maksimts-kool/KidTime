@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <Version>0.2.10</Version>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <Deterministic>true</Deterministic>
+    <NoWarn>$(NoWarn);SYSLIB1054</NoWarn>
+  </PropertyGroup>
+</Project>

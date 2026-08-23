@@ -1,0 +1,6 @@
+@KidTime.Server_HostAddress = http://localhost:5270
+
+GET {{KidTime.Server_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

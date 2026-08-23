@@ -1,0 +1,13 @@
+.git
+.gitignore
+.data
+.env
+artifacts
+deploy
+**/bin
+**/obj
+**/node_modules
+**/.next
+**/*.user
+**/*.db
+tests
