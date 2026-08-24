@@ -16,3 +16,9 @@ export function formatSeen(value: string | null) {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
 }
+
+export function formatBytes(bytes: number | null | undefined) {
+  if (bytes == null || bytes <= 0) return "Unknown";
+  const megabytes = bytes / (1024 * 1024);
+  return megabytes >= 1024 ? `${(megabytes / 1024).toFixed(1)} GB` : `${megabytes.toFixed(1)} MB`;
+}

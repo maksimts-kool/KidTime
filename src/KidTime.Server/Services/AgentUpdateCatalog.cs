@@ -6,8 +6,10 @@ namespace KidTime.Server.Services;
 
 public sealed class AgentUpdateCatalog(IConfiguration configuration, ILogger<AgentUpdateCatalog> logger)
 {
+    private const string InstallerFileName = "KidTimeSetup.exe";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _directory = Path.GetFullPath(configuration["AgentUpdates:Directory"] ?? "/updates");
+    private volatile InstallerHash? _installerHash;
 
     public AgentUpdatePackage? GetLatest()
     {
@@ -43,6 +45,47 @@ public sealed class AgentUpdateCatalog(IConfiguration configuration, ILogger<Age
                && Version.TryParse(latest, out var available) && installed >= available;
     }
 
+    public string? GetInstallerPath()
+    {
+        var installerPath = Path.GetFullPath(Path.Combine(_directory, InstallerFileName));
+        var relative = Path.GetRelativePath(_directory, installerPath);
+        return !relative.StartsWith("..", StringComparison.Ordinal)
+               && !Path.IsPathRooted(relative)
+               && File.Exists(installerPath)
+            ? installerPath
+            : null;
+    }
+
+    /// <summary>
+    /// Describes the downloadable Windows Setup executable so the web panel can show its
+    /// version, size, and checksum before a parent copies it to the controlled PC.
+    /// </summary>
+    public InstallerPackage? GetInstaller()
+    {
+        var path = GetInstallerPath();
+        if (path is null) return null;
+        try
+        {
+            var file = new FileInfo(path);
+            var cached = _installerHash;
+            var hash = cached is not null && cached.Length == file.Length && cached.LastWriteTimeUtc == file.LastWriteTimeUtc
+                ? cached.Sha256
+                : null;
+            if (hash is null)
+            {
+                using var stream = file.OpenRead();
+                hash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+                _installerHash = new InstallerHash(file.Length, file.LastWriteTimeUtc, hash);
+            }
+            return new InstallerPackage(path, InstallerFileName, GetLatest()?.Manifest.Version, file.Length, hash);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(exception, "The Windows Setup executable could not be read.");
+            return null;
+        }
+    }
+
     public async Task<bool> VerifyPackageAsync(AgentUpdatePackage package, CancellationToken cancellationToken)
     {
         await using var stream = File.OpenRead(package.PackagePath);
@@ -51,6 +94,10 @@ public sealed class AgentUpdateCatalog(IConfiguration configuration, ILogger<Age
     }
 
     private sealed record ReleaseManifest(string Version, string FileName, string Sha256, long SizeBytes);
+
+    private sealed record InstallerHash(long Length, DateTime LastWriteTimeUtc, string Sha256);
 }
 
 public sealed record AgentUpdatePackage(AgentUpdateManifest Manifest, string PackagePath);
+
+public sealed record InstallerPackage(string Path, string FileName, string? Version, long SizeBytes, string Sha256);

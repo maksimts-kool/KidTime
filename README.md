@@ -48,7 +48,7 @@ No Scheduled Task, Windows service, or Docker autostart entry is installed on th
 
 - Windows 11
 - a child account that is a Standard User
-- an administrator who can deploy and manage the Windows service
+- an administrator who can approve the normal Windows setup prompt
 
 The agent publishes self-contained, so the controlled PC does not need .NET installed.
 
@@ -120,16 +120,26 @@ dotnet tool run dotnet-ef migrations add <MigrationName> `
 
 The server applies checked-in migrations when it starts. Do not use `EnsureCreated` against the PostgreSQL database.
 
-## Build the Windows agent
+## Build and enroll the Windows agent
 
-The server operator publishes the self-contained service and automatic-update ZIP:
+The server operator publishes the self-contained service, automatic-update ZIP, and consumer setup executable together:
 
 ```powershell
 ./scripts/build-agent.ps1
 docker compose up --build -d
 ```
 
-This creates `artifacts/releases/latest.json` and a versioned `kidtime-agent-<version>.zip`. The standalone Windows Setup executable and its web download/enrollment workflow have been removed. Initial deployment is currently an administrator-operated task through the repository's service scripts; a replacement guided installation flow can be designed later.
+This creates `artifacts/releases/KidTimeSetup.exe` and makes it available through the signed-in web panel. Controlled-device users never need PowerShell, SSH, .NET, or a ZIP extractor.
+
+To add a PC, open **Devices → Add device** in the web panel and follow the three steps:
+
+1. **Download setup.** The panel shows the published version, size, and SHA-256 of `KidTimeSetup.exe`. Download it and copy it to the child's PC.
+2. **Copy the code.** The panel creates a one-time, 30-minute enrollment code and shows a live countdown. The single **setup code** carries the server URL, the enrollment code, and the server certificate fingerprint together; the server URL and enrollment code are also shown separately for manual entry. An expired code can be replaced in place.
+3. **Connect.** Open setup on the child's PC and approve the normal Windows administrator prompt. Setup asks for the server URL and enrollment code (pasting a setup code fills both), then for the child's Standard User account. **Connect** stays disabled until all three required options are valid. The web panel window changes to **connected** by itself and links straight to the new device controls.
+
+Setup installs the service under `C:\Program Files\KidTime`, protects its data under `C:\ProgramData\KidTime`, configures the `KidTimeControl` LocalSystem service for automatic controlled-PC startup, enrolls the chosen Windows SID, and starts the service. The selected account is controllable as soon as the web panel confirms the connection. Setup does not disable Defender, UAC, the firewall, or any other Windows protection.
+
+The setup window itself is a WPF UI Fluent wizard: a Mica window with a three-step rail, per-field validation messages, a live account list that never offers administrator or disabled profiles, a review summary, and a progress bar during installation.
 
 ### Automatic service updates
 
@@ -144,7 +154,7 @@ docker compose up --build -d
 
 No SSH deployment is needed after the bootstrap. The **Devices** list and device detail page show the installed version, published version, update progress, and whether the services are current.
 
-The controlled account is stored by Windows SID, so account renames do not broaden the enforcement scope. It can be changed later under **Devices → device settings → Controlled Windows account**; KidTime never allows an administrator profile to be selected.
+The account chosen in setup is stored by Windows SID, so account renames do not broaden the enforcement scope. It can be changed later under **Devices → device settings → Controlled Windows account**; KidTime never allows an administrator profile to be selected.
 
 ## Agent lifecycle and logs
 
@@ -211,10 +221,16 @@ Integration checks on the VM should use a harmless executable such as Notepad be
 7. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
 8. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out enforcement remains independent.
 
+On a disposable PC, also verify enrollment end to end: open **Add device**, download the setup file, confirm **Connect** stays disabled until the server URL, enrollment code, and child account are all valid, confirm an expired code is rejected, and confirm the web panel switches to **connected** on its own.
+
 On a disposable enrolled test PC, also verify both removal paths: remove the server record in the web panel and confirm the card/history disappear, then open the cached screen-time window, select **Remove KidTime**, confirm invalid parent credentials are rejected, confirm valid credentials remove `KidTimeControl`, and verify both `C:\Program Files\KidTime` and `C:\ProgramData\KidTime` are gone.
 
 ## Troubleshooting
 
+- **Setup cannot reach the API:** verify the controlled PC can connect to TCP 5081 on the parent PC and that the URL shown by Add device resolves from the controlled PC. The one-time code carries the self-hosted server certificate pin automatically.
+- **Setup says no standard account was found:** create or enable a Standard User account in Windows Settings, then select **Refresh** in setup. Administrator and disabled accounts are intentionally excluded.
+- **Add device says the setup file is unavailable:** run `./scripts/build-agent.ps1` on the server PC, then recreate the server container so it can serve `KidTimeSetup.exe`.
+- **Setup reports that this PC is already connected:** remove KidTime from that PC first with **Remove KidTime** in its screen-time window; a second enrollment of the same PC is refused deliberately.
 - **Service starts but no UI agent appears:** confirm the signed-in profile is the Standard User selected under **Controlled Windows account**; inspect service logs for `WTSQueryUserToken`/`CreateProcessAsUser` failures.
 - **A newly created child profile is not selectable:** wait up to one minute for the service to report local accounts, refresh the device page, and confirm the account is enabled and is not an administrator.
 - **Rules show pending:** verify `LastSeenUtc`, the service’s HTTPS connectivity, and that the server URL uses an address reachable from the VM rather than `localhost`.
