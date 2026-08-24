@@ -23,6 +23,12 @@ public static class EnrollmentCommand
             return 2;
         }
 
+        if (!EnrollmentCode.TryParse(token, out var enrollmentToken, out var embeddedPin))
+        {
+            Console.Error.WriteLine("The enrollment token is not valid.");
+            return 2;
+        }
+
         var serverUri = new Uri(server);
         if (serverUri.Scheme != Uri.UriSchemeHttps)
         {
@@ -33,7 +39,7 @@ public static class EnrollmentCommand
         var options = new AgentOptions
         {
             ServerUrl = server.TrimEnd('/'),
-            PinnedServerCertificateSha256 = values.GetValueOrDefault("pin")
+            PinnedServerCertificateSha256 = values.GetValueOrDefault("pin") ?? embeddedPin
         };
         try
         {
@@ -42,11 +48,23 @@ public static class EnrollmentCommand
                 BaseAddress = new Uri(options.ServerUrl + "/"),
                 Timeout = TimeSpan.FromSeconds(30)
             };
+            WindowsUserAccount? controlledWindowsUser = null;
+            if (values.TryGetValue("user-sid", out var userSid) && values.TryGetValue("user-name", out var userName))
+            {
+                controlledWindowsUser = new WindowsUserAccount(
+                    userSid,
+                    userName,
+                    values.GetValueOrDefault("user-display-name") ?? userName,
+                    true,
+                    false);
+            }
+
             var request = new DeviceEnrollmentRequest(
-                token,
+                enrollmentToken,
                 Environment.MachineName,
                 Environment.OSVersion.VersionString,
-                TimeZoneInfo.Local.Id);
+                TimeZoneInfo.Local.Id,
+                controlledWindowsUser);
             using var response = await client.PostAsJsonAsync("api/agent/enroll", request, JsonOptions);
             if (!response.IsSuccessStatusCode)
             {

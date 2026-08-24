@@ -25,7 +25,9 @@ public sealed class AgentController(
     public async Task<IActionResult> Enroll(DeviceEnrollmentRequest request, CancellationToken cancellationToken)
     {
         var now = timeProvider.GetUtcNow();
-        var tokenHash = TokenUtilities.Hash(request.EnrollmentToken);
+        if (!EnrollmentCode.TryParse(request.EnrollmentToken, out var enrollmentToken, out _))
+            return Unauthorized(new { message = "Enrollment token is invalid, expired, or already used." });
+        var tokenHash = TokenUtilities.Hash(enrollmentToken);
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
         var enrollment = await dbContext.EnrollmentTokens.SingleOrDefaultAsync(
             token => token.TokenHash == tokenHash && token.UsedAtUtc == null && token.ExpiresAtUtc > now,
@@ -35,15 +37,28 @@ public sealed class AgentController(
             return Unauthorized(new { message = "Enrollment token is invalid, expired, or already used." });
         }
 
+        var controlledWindowsUser = NormalizeControlledWindowsUser(request.ControlledWindowsUser);
+        if (request.ControlledWindowsUser is not null && controlledWindowsUser is null)
+            return BadRequest(new { message = "Choose an enabled Standard User account." });
+
         var device = new Device
         {
             Name = request.DeviceName.Trim(),
             WindowsVersion = request.WindowsVersion.Trim(),
             TimeZoneId = request.TimeZoneId.Trim(),
             EnrolledAtUtc = now,
-            LastSeenUtc = now
+            LastSeenUtc = null,
+            WindowsUsersJson = controlledWindowsUser is null
+                ? "[]"
+                : JsonSerializer.Serialize(new[] { controlledWindowsUser }, new JsonSerializerOptions(JsonSerializerDefaults.Web))
         };
-        device.Rule = new DeviceRule { DeviceId = device.Id, Device = device };
+        device.Rule = new DeviceRule
+        {
+            DeviceId = device.Id,
+            Device = device,
+            ControlledUserSid = controlledWindowsUser?.Sid,
+            ControlledUserName = controlledWindowsUser?.AccountName
+        };
         var rawDeviceToken = TokenUtilities.Generate(48);
         device.Credentials.Add(new DeviceCredential
         {
@@ -61,6 +76,21 @@ public sealed class AgentController(
         logger.LogInformation("Enrolled device {DeviceName} ({DeviceId}).", device.Name, device.Id);
         var rules = await snapshots.CreateAsync(device.Id, cancellationToken);
         return Ok(new DeviceEnrollmentResponse(device.Id, rawDeviceToken, rules));
+    }
+
+    private static WindowsUserAccount? NormalizeControlledWindowsUser(WindowsUserAccount? user)
+    {
+        if (user is null || !user.IsEnabled || user.IsAdministrator
+            || string.IsNullOrWhiteSpace(user.Sid) || string.IsNullOrWhiteSpace(user.AccountName)
+            || user.Sid.Length > 184 || user.AccountName.Length > 255)
+            return null;
+        var displayName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.AccountName.Trim() : user.DisplayName.Trim();
+        return user with
+        {
+            Sid = user.Sid.Trim(),
+            AccountName = user.AccountName.Trim(),
+            DisplayName = displayName[..Math.Min(displayName.Length, 255)]
+        };
     }
 
     [Authorize(AuthenticationSchemes = DeviceAuthenticationDefaults.Scheme)]

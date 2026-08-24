@@ -48,8 +48,7 @@ No Scheduled Task, Windows service, or Docker autostart entry is installed on th
 
 - Windows 11
 - a child account that is a Standard User
-- OpenSSH Server reachable from the parent PC
-- an administrator account available through SSH for installing the LocalSystem service
+- an administrator who can approve the normal Windows setup prompt
 
 The agent publishes self-contained, so the controlled PC does not need .NET installed.
 
@@ -123,25 +122,25 @@ The server applies checked-in migrations when it starts. Do not use `EnsureCreat
 
 ## Build and enroll the Windows agent
 
-1. Start the server and sign in to the web panel.
-2. Go to **Settings** and create a 30-minute, one-time enrollment token.
-3. Find a LAN address for the parent PC that the VM can reach.
-4. Read the certificate pin from `.data/certs/kidtime.sha256`.
-5. Build and deploy through SSH:
+The server operator publishes the self-contained service, automatic-update ZIP, and consumer setup executable together:
 
 ```powershell
 ./scripts/build-agent.ps1
-./scripts/deploy-agent.ps1 `
-  -ComputerName "192.168.0.201" `
-  -UserName "<administrator>" `
-  -ServerUrl "https://<parent-pc-address>:5081" `
-  -EnrollmentToken "<one-time-token>" `
-  -CertificatePin (Get-Content -Raw .data/certs/kidtime.sha256)
+docker compose up --build -d
 ```
 
-The deployment copies the self-contained package through SCP, stops the previous service when present, installs to `C:\Program Files\KidTime`, enrolls only when no device credential exists, configures the `KidTimeControl` LocalSystem service for automatic controlled-PC startup, and confirms it reaches `Running`. This is also the one-time bootstrap for automatic service updates.
+This creates `artifacts/releases/KidTimeSetup.exe` and makes it available through the signed-in web panel. Controlled-device users never need PowerShell, SSH, .NET, or a ZIP extractor.
 
-The SSH session must have an elevated administrator token. The scripts do not disable Defender, UAC, firewall, or any other Windows protection.
+To add a PC:
+
+1. Sign in to the web panel and open **Devices**.
+2. Select **Add device**, then download **KidTime Setup (.exe)**.
+3. Open the setup file on the controlled PC and approve the normal Windows administrator prompt.
+4. Paste the server URL and 30-minute, one-time enrollment token shown in the web panel.
+5. Choose the child's enabled Standard User account and select **Connect**.
+6. Keep the Add device window open. It changes to **connected** automatically and links directly to the new device controls.
+
+Setup installs the service under `C:\Program Files\KidTime`, protects its data under `C:\ProgramData\KidTime`, configures the `KidTimeControl` LocalSystem service for automatic controlled-PC startup, enrolls the chosen Windows SID, and starts the service. The selected account is controllable as soon as the web panel confirms the connection. Setup does not disable Defender, UAC, the firewall, or any other Windows protection.
 
 ### Automatic service updates
 
@@ -156,7 +155,7 @@ docker compose up --build -d
 
 No SSH deployment is needed after the bootstrap. The **Devices** list and device detail page show the installed version, published version, update progress, and whether the services are current.
 
-After the service reports its first heartbeat, open **Devices → device settings → Controlled Windows account**. Select the child’s enabled Standard User profile and save. KidTime remains inactive until an account is selected, and it will not allow an administrator profile to be selected. The account is stored by Windows SID, so account renames do not broaden the enforcement scope.
+The account chosen in setup is stored by Windows SID, so account renames do not broaden the enforcement scope. It can be changed later under **Devices → device settings → Controlled Windows account**; KidTime never allows an administrator profile to be selected.
 
 ## Agent lifecycle and logs
 
@@ -221,7 +220,9 @@ Integration checks on the VM should use a harmless executable such as Notepad be
 
 ## Troubleshooting
 
-- **Enrollment cannot reach the API:** verify the VM can connect to TCP 5081 on the parent PC, the URL uses HTTPS, and the certificate pin is the exact content of `kidtime.sha256`.
+- **Setup cannot reach the API:** verify the controlled PC can connect to TCP 5081 on the parent PC and that the URL shown by Add device resolves from the controlled PC. The one-time token carries the self-hosted server certificate pin automatically.
+- **Setup says no child users are available:** create or enable a Standard User account in Windows Settings. Administrator and disabled accounts are intentionally excluded.
+- **The Add device window says the setup file is unavailable:** run `./scripts/build-agent.ps1` on the server PC, then recreate the server container so it can serve `KidTimeSetup.exe`.
 - **Service starts but no UI agent appears:** confirm the signed-in profile is the Standard User selected under **Controlled Windows account**; inspect service logs for `WTSQueryUserToken`/`CreateProcessAsUser` failures.
 - **A newly created child profile is not selectable:** wait up to one minute for the service to report local accounts, refresh the device page, and confirm the account is enabled and is not an administrator.
 - **Rules show pending:** verify `LastSeenUtc`, the service’s HTTPS connectivity, and that the server URL uses an address reachable from the VM rather than `localhost`.

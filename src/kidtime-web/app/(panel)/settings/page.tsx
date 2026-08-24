@@ -1,14 +1,12 @@
 import { CheckCircle2, CircleSlash2 } from "lucide-react";
-import { EnrollmentToken } from "@/components/enrollment-token";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function SettingsPage() {
   return (
     <>
-      <PageHeader eyebrow="Administration" title="Settings" description="Device enrollment and privacy information for this installation." />
+      <PageHeader eyebrow="Administration" title="Settings" description="Privacy information for this installation. Add Windows PCs from the Devices page." />
       <div className="grid gap-4">
-        <EnrollmentToken />
         <Card>
           <CardHeader><CardTitle>Privacy scope</CardTitle><CardDescription>KidTime collects only what is required for local screen-time enforcement.</CardDescription></CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">

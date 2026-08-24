@@ -7,7 +7,8 @@ public sealed record DeviceEnrollmentRequest(
     string EnrollmentToken,
     string DeviceName,
     string WindowsVersion,
-    string TimeZoneId);
+    string TimeZoneId,
+    WindowsUserAccount? ControlledWindowsUser = null);
 
 public sealed record DeviceEnrollmentResponse(
     Guid DeviceId,

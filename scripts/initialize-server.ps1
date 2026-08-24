@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$AdminEmail = "parent@kidtime.local",
-    [string]$AdminPassword
+    [string]$AdminPassword,
+    [string]$AgentUrl = "https://${env:COMPUTERNAME}:5081"
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +46,7 @@ $configuration = @(
     "KIDTIME_ADMIN_EMAIL=$AdminEmail"
     "KIDTIME_ADMIN_PASSWORD=$AdminPassword"
     "KIDTIME_CERT_PASSWORD=$certificatePassword"
+    "KIDTIME_AGENT_URL=$AgentUrl"
 ) -join [Environment]::NewLine
 [IO.File]::WriteAllText($envPath, $configuration + [Environment]::NewLine)
 
@@ -52,3 +54,4 @@ Write-Host "KidTime server configuration created."
 Write-Host "Parent email: $AdminEmail"
 Write-Host "The generated parent password is stored only in .env."
 Write-Host "Certificate pin written to .data\certs\kidtime.sha256."
+Write-Host "Windows setup will suggest this server URL: $AgentUrl"

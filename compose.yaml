@@ -32,6 +32,7 @@ services:
       Jwt__SigningKey: ${KIDTIME_JWT_KEY}
       Admin__Email: ${KIDTIME_ADMIN_EMAIL}
       Admin__Password: ${KIDTIME_ADMIN_PASSWORD}
+      AgentEnrollment__PublicUrl: ${KIDTIME_AGENT_URL:-}
     volumes:
       - ./.data/certs:/https:ro
       - ./artifacts/releases:/updates:ro

@@ -15,15 +15,22 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     headers: {
       Authorization: `Bearer ${token}`,
       ...(request.headers.get("content-type") ? { "Content-Type": request.headers.get("content-type")! } : {}),
+      ...(request.headers.get("range") ? { Range: request.headers.get("range")! } : {}),
     },
     body: method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer(),
     cache: "no-store",
   }).catch(() => null);
   if (!response) return NextResponse.json({ message: "KidTime API is unavailable." }, { status: 503 });
   if (response.status === 204) return new NextResponse(null, { status: 204 });
-  return new NextResponse(await response.arrayBuffer(), {
+  return new NextResponse(response.body, {
     status: response.status,
-    headers: { "Content-Type": response.headers.get("content-type") ?? "application/json" },
+    headers: {
+      "Content-Type": response.headers.get("content-type") ?? "application/json",
+      ...(response.headers.get("content-disposition") ? { "Content-Disposition": response.headers.get("content-disposition")! } : {}),
+      ...(response.headers.get("content-length") ? { "Content-Length": response.headers.get("content-length")! } : {}),
+      ...(response.headers.get("accept-ranges") ? { "Accept-Ranges": response.headers.get("accept-ranges")! } : {}),
+      ...(response.headers.get("content-range") ? { "Content-Range": response.headers.get("content-range")! } : {}),
+    },
   });
 }
 
