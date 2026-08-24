@@ -72,6 +72,18 @@ public sealed record SessionUsageSample(
     string? WindowTitle,
     ApplicationDescriptor? ForegroundApplication);
 
+public sealed record ParentRemovalRequest(string Email, string Password);
+
+public sealed record DeviceRemovalResult(bool Accepted, string Message);
+
+public sealed record SessionAgentRequest(
+    SessionUsageSample? UsageSample = null,
+    ParentRemovalRequest? RemovalRequest = null);
+
+public sealed record SessionAgentResponse(
+    EnforcementState? Enforcement = null,
+    DeviceRemovalResult? Removal = null);
+
 public sealed record UserNotification(
     string Title,
     string Message,

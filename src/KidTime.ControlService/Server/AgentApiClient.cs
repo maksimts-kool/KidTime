@@ -1,13 +1,15 @@
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KidTime.ControlService.Infrastructure;
+using KidTime.ControlService.Removal;
 using KidTime.Domain.Contracts;
 using Microsoft.Extensions.Options;
 
 namespace KidTime.ControlService.Server;
 
-public sealed class AgentApiClient
+public sealed class AgentApiClient : IParentDeviceRemovalClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -72,6 +74,32 @@ public sealed class AgentApiClient
 
     public HttpClientHandler CreateSignalRHandler() => CertificateValidation.CreateHandler(_options);
 
+    public async Task<bool> RemoveDeviceWithParentCredentialsAsync(
+        string email,
+        string password,
+        CancellationToken cancellationToken)
+    {
+        var credential = Credential ?? throw new InvalidOperationException("This agent has not been enrolled.");
+        using var loginRequest = new HttpRequestMessage(HttpMethod.Post, "api/auth/login")
+        {
+            Content = JsonContent.Create(new ParentLoginRequest(email, password), options: JsonOptions)
+        };
+        using var loginResponse = await _client.SendAsync(loginRequest, cancellationToken);
+        if (loginResponse.StatusCode == System.Net.HttpStatusCode.Unauthorized) return false;
+        loginResponse.EnsureSuccessStatusCode();
+        var login = await loginResponse.Content.ReadFromJsonAsync<ParentLoginResponse>(JsonOptions, cancellationToken)
+            ?? throw new InvalidDataException("Parent authentication returned an empty response.");
+        if (string.IsNullOrWhiteSpace(login.Token))
+            throw new InvalidDataException("Parent authentication did not return a session token.");
+
+        using var deleteRequest = new HttpRequestMessage(HttpMethod.Delete, $"api/devices/{credential.DeviceId}");
+        deleteRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", login.Token);
+        using var deleteResponse = await _client.SendAsync(deleteRequest, cancellationToken);
+        if (deleteResponse.StatusCode != System.Net.HttpStatusCode.NotFound)
+            deleteResponse.EnsureSuccessStatusCode();
+        return true;
+    }
+
     private async Task<T> SendAsync<T>(HttpMethod method, string path, object? body, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(method, path, body);
@@ -97,4 +125,7 @@ public sealed class AgentApiClient
         if (body is not null) request.Content = JsonContent.Create(body, options: JsonOptions);
         return request;
     }
+
+    private sealed record ParentLoginRequest(string Email, string Password);
+    private sealed record ParentLoginResponse(string Token);
 }

@@ -9,13 +9,93 @@ namespace KidTime.SessionAgent;
 
 public partial class StatusWindow : FluentWindow
 {
+    private readonly Func<ParentRemovalRequest, CancellationToken, Task<DeviceRemovalResult>> _removeKidTime;
     private bool _allowClose;
 
-    public StatusWindow()
+    public StatusWindow(Func<ParentRemovalRequest, CancellationToken, Task<DeviceRemovalResult>> removeKidTime)
     {
+        _removeKidTime = removeKidTime;
         InitializeComponent();
         SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, updateAccents: true);
         Closing += WindowClosing;
+    }
+
+    private async void RemoveKidTimeButton_Click(object sender, RoutedEventArgs e)
+    {
+        RemovalInfo.IsOpen = false;
+        var emailBox = new System.Windows.Controls.TextBox
+        {
+            MaxLength = 320,
+            MinWidth = 380,
+            Margin = new Thickness(0, 5, 0, 14)
+        };
+        System.Windows.Automation.AutomationProperties.SetName(emailBox, "Parent email address");
+        var passwordBox = new System.Windows.Controls.PasswordBox
+        {
+            MaxLength = 1024,
+            MinWidth = 380,
+            Margin = new Thickness(0, 5, 0, 8)
+        };
+        System.Windows.Automation.AutomationProperties.SetName(passwordBox, "Parent password");
+        var content = new System.Windows.Controls.StackPanel();
+        content.Children.Add(new System.Windows.Controls.TextBlock
+        {
+            Text = "This permanently removes KidTime services and local data. The server must be reachable to verify the parent account.",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 16)
+        });
+        content.Children.Add(new System.Windows.Controls.TextBlock
+        {
+            Text = "Parent email address",
+            FontWeight = FontWeights.SemiBold
+        });
+        content.Children.Add(emailBox);
+        content.Children.Add(new System.Windows.Controls.TextBlock
+        {
+            Text = "Parent password",
+            FontWeight = FontWeights.SemiBold
+        });
+        content.Children.Add(passwordBox);
+
+        var dialog = new ContentDialog(RootContentDialogHost)
+        {
+            Title = "Remove KidTime from this PC?",
+            Content = content,
+            PrimaryButtonText = "Verify and remove",
+            CloseButtonText = "Cancel",
+            PrimaryButtonAppearance = ControlAppearance.Danger,
+            DefaultButton = ContentDialogButton.Primary,
+            DialogWidth = 500
+        };
+        var choice = await dialog.ShowAsync(CancellationToken.None);
+        if (choice != ContentDialogResult.Primary) return;
+
+        var email = emailBox.Text;
+        var password = passwordBox.Password;
+        passwordBox.Clear();
+        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrEmpty(password))
+        {
+            ShowRemovalResult(new DeviceRemovalResult(false, "Enter the parent email address and password."));
+            return;
+        }
+
+        RemoveKidTimeButton.IsEnabled = false;
+        RemovalInfo.IsOpen = true;
+        RemovalInfo.Severity = InfoBarSeverity.Informational;
+        RemovalInfo.Title = "Checking parent account";
+        RemovalInfo.Message = "KidTime is securely verifying the login with the server.";
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var result = await _removeKidTime(new ParentRemovalRequest(email, password), timeout.Token);
+        ShowRemovalResult(result);
+        RemoveKidTimeButton.IsEnabled = !result.Accepted;
+    }
+
+    private void ShowRemovalResult(DeviceRemovalResult result)
+    {
+        RemovalInfo.IsOpen = true;
+        RemovalInfo.Severity = result.Accepted ? InfoBarSeverity.Success : InfoBarSeverity.Error;
+        RemovalInfo.Title = result.Accepted ? "Removal started" : "KidTime was not removed";
+        RemovalInfo.Message = result.Message;
     }
 
     public void UpdateStatus(SessionStatusSnapshot status)

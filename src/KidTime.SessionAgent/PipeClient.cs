@@ -13,11 +13,27 @@ internal sealed class PipeClient
 
     public async Task<EnforcementState?> ExchangeAsync(SessionUsageSample sample, CancellationToken cancellationToken)
     {
+        var response = await ExchangeAsync(new SessionAgentRequest(UsageSample: sample), cancellationToken);
+        return response.Enforcement;
+    }
+
+    public async Task<DeviceRemovalResult> RequestRemovalAsync(
+        ParentRemovalRequest request,
+        CancellationToken cancellationToken)
+    {
+        var response = await ExchangeAsync(new SessionAgentRequest(RemovalRequest: request), cancellationToken);
+        return response.Removal ?? throw new InvalidDataException("The service returned an empty removal response.");
+    }
+
+    private static async Task<SessionAgentResponse> ExchangeAsync(
+        SessionAgentRequest request,
+        CancellationToken cancellationToken)
+    {
         await using var pipe = new NamedPipeClientStream(".", "KidTime.ControlService.v1", PipeDirection.InOut,
             PipeOptions.Asynchronous, System.Security.Principal.TokenImpersonationLevel.Identification);
         await pipe.ConnectAsync(2_000, cancellationToken);
-        await WriteAsync(pipe, sample, cancellationToken);
-        return await ReadAsync<EnforcementState>(pipe, cancellationToken);
+        await WriteAsync(pipe, request, cancellationToken);
+        return await ReadAsync<SessionAgentResponse>(pipe, cancellationToken);
     }
 
     private static async Task<T> ReadAsync<T>(Stream stream, CancellationToken cancellationToken)

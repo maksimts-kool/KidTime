@@ -48,7 +48,7 @@ No Scheduled Task, Windows service, or Docker autostart entry is installed on th
 
 - Windows 11
 - a child account that is a Standard User
-- an administrator who can approve the normal Windows setup prompt
+- an administrator who can deploy and manage the Windows service
 
 The agent publishes self-contained, so the controlled PC does not need .NET installed.
 
@@ -120,27 +120,16 @@ dotnet tool run dotnet-ef migrations add <MigrationName> `
 
 The server applies checked-in migrations when it starts. Do not use `EnsureCreated` against the PostgreSQL database.
 
-## Build and enroll the Windows agent
+## Build the Windows agent
 
-The server operator publishes the self-contained service, automatic-update ZIP, and consumer setup executable together:
+The server operator publishes the self-contained service and automatic-update ZIP:
 
 ```powershell
 ./scripts/build-agent.ps1
 docker compose up --build -d
 ```
 
-This creates `artifacts/releases/KidTimeSetup.exe` and makes it available through the signed-in web panel. Controlled-device users never need PowerShell, SSH, .NET, or a ZIP extractor.
-
-To add a PC:
-
-1. Sign in to the web panel and open **Devices**.
-2. Select **Add device**, then download **KidTime Setup (.exe)**.
-3. Open the setup file on the controlled PC and approve the normal Windows administrator prompt.
-4. Paste the server URL and 30-minute, one-time enrollment token shown in the web panel.
-5. Choose the child's enabled Standard User account and select **Connect**.
-6. Keep the Add device window open. It changes to **connected** automatically and links directly to the new device controls.
-
-Setup installs the service under `C:\Program Files\KidTime`, protects its data under `C:\ProgramData\KidTime`, configures the `KidTimeControl` LocalSystem service for automatic controlled-PC startup, enrolls the chosen Windows SID, and starts the service. The selected account is controllable as soon as the web panel confirms the connection. Setup does not disable Defender, UAC, the firewall, or any other Windows protection.
+This creates `artifacts/releases/latest.json` and a versioned `kidtime-agent-<version>.zip`. The standalone Windows Setup executable and its web download/enrollment workflow have been removed. Initial deployment is currently an administrator-operated task through the repository's service scripts; a replacement guided installation flow can be designed later.
 
 ### Automatic service updates
 
@@ -155,7 +144,7 @@ docker compose up --build -d
 
 No SSH deployment is needed after the bootstrap. The **Devices** list and device detail page show the installed version, published version, update progress, and whether the services are current.
 
-The account chosen in setup is stored by Windows SID, so account renames do not broaden the enforcement scope. It can be changed later under **Devices → device settings → Controlled Windows account**; KidTime never allows an administrator profile to be selected.
+The controlled account is stored by Windows SID, so account renames do not broaden the enforcement scope. It can be changed later under **Devices → device settings → Controlled Windows account**; KidTime never allows an administrator profile to be selected.
 
 ## Agent lifecycle and logs
 
@@ -182,6 +171,10 @@ Logs are newline-delimited JSON. They include connectivity, rule revisions, disc
 SessionAgent places a shield icon in the controlled user's notification area. Left-clicking it opens a modern Fluent/Mica dashboard built from WPF UI's maintained Windows 11-style controls. The dashboard makes the remaining daily allowance visual with a determinate time ring, shows progress through the current weekly-schedule window, and presents every limited or blocked application as a card with its own state badge, allowance bar, and schedule summary. Server connection, synchronization, controlled profile, and cached rule revision are separate visual status cards. It follows the current Windows light/dark theme and accent color automatically.
 
 Right-clicking the tray icon shows server connection, last synchronization, the controlled Windows profile, and **Open KidTime**. The status view is supplied by the privileged service over the existing authenticated, process-validated named pipe; it does not let the Standard User edit or bypass rules. Offline status is explicit and cached rules remain enforced.
+
+The bottom of the screen-time window also offers **Remove KidTime**. Removal requires the parent’s KidTime email address and password and an online connection to the pinned server. After the server verifies those credentials, it deletes the device record and credential, then the LocalSystem helper removes `KidTimeControl`, the installed program files, cached rules, usage data, and the controlled profile’s KidTime notification registration. Windows administrator access by itself does not authorize this GUI flow, and removal cannot proceed offline.
+
+To remove only the server record, open **Devices → device settings → Remove device** in the parent web panel. This permanently deletes that device’s server rules, usage, application associations, enrollment record, and credentials, but deliberately does not reach into the PC or uninstall its services. The local **Remove KidTime** flow remains usable afterward because it authenticates with the parent account independently of the revoked device credential.
 
 The dashboard and tray use `WPF-UI` and `WPF-UI.Tray` 4.3.0. KidTime composes their existing FluentWindow, Card, ProgressRing, InfoBar, Badge, SymbolIcon, menu, and tray controls; it does not maintain a custom widget toolkit.
 
@@ -218,11 +211,10 @@ Integration checks on the VM should use a harmless executable such as Notepad be
 7. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
 8. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out enforcement remains independent.
 
+On a disposable enrolled test PC, also verify both removal paths: remove the server record in the web panel and confirm the card/history disappear, then open the cached screen-time window, select **Remove KidTime**, confirm invalid parent credentials are rejected, confirm valid credentials remove `KidTimeControl`, and verify both `C:\Program Files\KidTime` and `C:\ProgramData\KidTime` are gone.
+
 ## Troubleshooting
 
-- **Setup cannot reach the API:** verify the controlled PC can connect to TCP 5081 on the parent PC and that the URL shown by Add device resolves from the controlled PC. The one-time token carries the self-hosted server certificate pin automatically.
-- **Setup says no child users are available:** create or enable a Standard User account in Windows Settings. Administrator and disabled accounts are intentionally excluded.
-- **The Add device window says the setup file is unavailable:** run `./scripts/build-agent.ps1` on the server PC, then recreate the server container so it can serve `KidTimeSetup.exe`.
 - **Service starts but no UI agent appears:** confirm the signed-in profile is the Standard User selected under **Controlled Windows account**; inspect service logs for `WTSQueryUserToken`/`CreateProcessAsUser` failures.
 - **A newly created child profile is not selectable:** wait up to one minute for the service to report local accounts, refresh the device page, and confirm the account is enabled and is not an administrator.
 - **Rules show pending:** verify `LastSeenUtc`, the service’s HTTPS connectivity, and that the server URL uses an address reachable from the VM rather than `localhost`.

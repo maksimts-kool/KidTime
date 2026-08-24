@@ -15,7 +15,6 @@ namespace KidTime.Server.Controllers;
 [Route("api/enrollment-tokens")]
 public sealed class EnrollmentController(
     KidTimeDbContext dbContext,
-    AgentUpdateCatalog updates,
     IConfiguration configuration,
     TimeProvider timeProvider,
     ILogger<EnrollmentController> logger) : ControllerBase
@@ -41,8 +40,7 @@ public sealed class EnrollmentController(
             id = enrollment.Id,
             token = EnrollmentCode.Create(token, GetCertificatePin()),
             expiresAtUtc = enrollment.ExpiresAtUtc,
-            serverUrl = configuration["AgentEnrollment:PublicUrl"],
-            installerAvailable = updates.GetInstallerPath() is not null
+            serverUrl = configuration["AgentEnrollment:PublicUrl"]
         });
     }
 

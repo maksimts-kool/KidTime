@@ -11,13 +11,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { AddDevice } from "@/components/add-device";
 
 export default async function DevicesPage() {
   const devices = await backendFetch<DeviceSummary[]>("/api/devices");
   return (
     <>
-      <PageHeader eyebrow="Control" title="Devices" description="Limits, sync state, and current activity for enrolled Windows PCs." actions={<AddDevice />} />
+      <PageHeader eyebrow="Control" title="Devices" description="Limits, sync state, and current activity for enrolled Windows PCs." />
       {devices.length === 0 ? <EmptyDevices /> : (
         <div className="grid gap-4">
           {devices.map(device => {

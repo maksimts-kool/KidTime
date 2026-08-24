@@ -102,6 +102,19 @@ internal static class NativeWindowsNotification
         }
     }
 
+    public static void Unregister()
+    {
+        try
+        {
+            ToastNotificationManagerCompat.Uninstall();
+            SessionLogger.Information("KidTime native notification registration removed.");
+        }
+        catch (Exception exception)
+        {
+            SessionLogger.Information("KidTime native notification registration cleanup failed.", exception);
+        }
+    }
+
     private static void RemoveTrackedWarning(string warningKey, ToastNotification toast)
     {
         lock (Gate)

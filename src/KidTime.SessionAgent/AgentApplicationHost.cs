@@ -37,7 +37,7 @@ internal sealed class AgentApplicationHost : IDisposable
         // WPF-UI.Tray registers through Application.Current.MainWindow. Create its
         // presentation source without visibly opening it so the icon exists before
         // the first click. EnsureHandle alone does not attach a WPF visual source.
-        _statusWindow = new StatusWindow();
+        _statusWindow = new StatusWindow(RemoveKidTimeAsync);
         Application.Current.MainWindow = _statusWindow;
         _statusWindow.ShowActivated = false;
         _statusWindow.ShowInTaskbar = false;
@@ -140,6 +140,37 @@ internal sealed class AgentApplicationHost : IDisposable
         finally
         {
             _busy = false;
+        }
+    }
+
+    private async Task<DeviceRemovalResult> RemoveKidTimeAsync(
+        ParentRemovalRequest request,
+        CancellationToken cancellationToken)
+    {
+        _timer.Stop();
+        while (_busy)
+            await Task.Delay(100);
+        _busy = true;
+        var accepted = false;
+        try
+        {
+            var result = await _client.RequestRemovalAsync(request, cancellationToken);
+            accepted = result.Accepted;
+            if (result.Accepted)
+            {
+                NativeWindowsNotification.Unregister();
+            }
+            return result;
+        }
+        catch (Exception exception) when (exception is IOException or TimeoutException or OperationCanceledException)
+        {
+            SessionLogger.Information("Parent-authorized removal IPC failed.", exception);
+            return new DeviceRemovalResult(false, "The KidTime service did not answer. Wait a moment and try again.");
+        }
+        finally
+        {
+            _busy = false;
+            if (!accepted && !_disposed) _timer.Start();
         }
     }
 

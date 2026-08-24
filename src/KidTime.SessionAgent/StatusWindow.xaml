@@ -304,6 +304,32 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
+                <ui:Card Margin="0,16,0,0" Padding="20">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,20,0">
+                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="Remove KidTime from this PC" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="A parent must sign in online before the Windows service, local rules, usage data, and program files can be removed."
+                                       TextWrapping="Wrap" />
+                            <ui:InfoBar x:Name="RemovalInfo"
+                                        Margin="0,12,0,0"
+                                        IsClosable="False"
+                                        IsOpen="False" />
+                        </StackPanel>
+                        <ui:Button x:Name="RemoveKidTimeButton"
+                                   Grid.Column="1"
+                                   VerticalAlignment="Center"
+                                   Appearance="Danger"
+                                   Click="RemoveKidTimeButton_Click"
+                                   Content="Remove KidTime" />
+                    </Grid>
+                </ui:Card>
+
                 <TextBlock x:Name="UpdatedText"
                            Margin="2,8,2,0"
                            HorizontalAlignment="Right"
@@ -312,5 +338,7 @@
                            Text="Waiting for live status" />
             </StackPanel>
         </ScrollViewer>
+
+        <ui:ContentDialogHost x:Name="RootContentDialogHost" Grid.RowSpan="2" />
     </Grid>
 </ui:FluentWindow>

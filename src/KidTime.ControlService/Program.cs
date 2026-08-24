@@ -2,6 +2,7 @@ using KidTime.ControlService;
 using KidTime.ControlService.Enforcement;
 using KidTime.ControlService.Infrastructure;
 using KidTime.ControlService.Ipc;
+using KidTime.ControlService.Removal;
 using KidTime.ControlService.Server;
 using KidTime.ControlService.Sessions;
 using Microsoft.Extensions.Options;
@@ -21,6 +22,10 @@ builder.Logging.AddProvider(new JsonFileLoggerProvider(AgentPaths.ServiceLogFile
 builder.Services.AddSingleton<CredentialStore>();
 builder.Services.AddSingleton<LocalStore>();
 builder.Services.AddSingleton<AgentApiClient>();
+builder.Services.AddSingleton<SystemUninstaller>();
+builder.Services.AddSingleton<IParentDeviceRemovalClient>(provider => provider.GetRequiredService<AgentApiClient>());
+builder.Services.AddSingleton<ISystemUninstaller>(provider => provider.GetRequiredService<SystemUninstaller>());
+builder.Services.AddSingleton<DeviceRemovalService>();
 builder.Services.AddSingleton<EnforcementCoordinator>();
 builder.Services.AddSingleton<ApplicationInspector>();
 builder.Services.AddSingleton<ApplicationIconExtractor>();

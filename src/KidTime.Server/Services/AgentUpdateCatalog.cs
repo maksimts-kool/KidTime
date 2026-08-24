@@ -43,17 +43,6 @@ public sealed class AgentUpdateCatalog(IConfiguration configuration, ILogger<Age
                && Version.TryParse(latest, out var available) && installed >= available;
     }
 
-    public string? GetInstallerPath()
-    {
-        var installerPath = Path.GetFullPath(Path.Combine(_directory, "KidTimeSetup.exe"));
-        var relative = Path.GetRelativePath(_directory, installerPath);
-        return !relative.StartsWith("..", StringComparison.Ordinal)
-               && !Path.IsPathRooted(relative)
-               && File.Exists(installerPath)
-            ? installerPath
-            : null;
-    }
-
     public async Task<bool> VerifyPackageAsync(AgentUpdatePackage package, CancellationToken cancellationToken)
     {
         await using var stream = File.OpenRead(package.PackagePath);

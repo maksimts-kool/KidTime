@@ -6,6 +6,7 @@ import type { DeviceDetail } from "@/lib/types";
 import { DeviceRuleEditor } from "@/components/device-rule-editor";
 import { PageHeader } from "@/components/page-header";
 import { QuickBlock } from "@/components/quick-block";
+import { RemoveDevice } from "@/components/remove-device";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -32,7 +33,12 @@ export default async function DevicePage({ params }: { params: Promise<{ id: str
         eyebrow="Device settings"
         title={detail.device.name}
         description={`${detail.device.windowsVersion} · ${detail.device.timeZoneId}`}
-        actions={<QuickBlock deviceId={id} blocked={detail.rules.manuallyBlocked} />}
+        actions={(
+          <div className="flex flex-wrap items-center gap-2">
+            <QuickBlock deviceId={id} blocked={detail.rules.manuallyBlocked} />
+            <RemoveDevice deviceId={id} deviceName={detail.device.name} />
+          </div>
+        )}
       />
       <Card className="mb-4">
         <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

@@ -19,7 +19,8 @@ public sealed class DevicesController(
     RuleSnapshotFactory snapshots,
     AgentUpdateCatalog updates,
     IHubContext<DeviceHub> hubContext,
-    TimeProvider timeProvider) : ControllerBase
+    TimeProvider timeProvider,
+    ILogger<DevicesController> logger) : ControllerBase
 {
     public sealed record UpdateDeviceRuleRequest(
         int? DailyLimitSeconds,
@@ -105,6 +106,44 @@ public sealed class DevicesController(
             rules = await snapshots.CreateAsync(deviceId, cancellationToken),
             availableWindowsUsers = DeserializeWindowsUsers(device.WindowsUsersJson)
         });
+    }
+
+    [HttpDelete("{deviceId:guid}")]
+    public async Task<IActionResult> Delete(Guid deviceId, CancellationToken cancellationToken)
+    {
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var device = await dbContext.Devices.SingleOrDefaultAsync(x => x.Id == deviceId, cancellationToken);
+        if (device is null) return NotFound();
+
+        var applicationIds = await dbContext.DeviceApplications.AsNoTracking()
+            .Where(x => x.DeviceId == deviceId)
+            .Select(x => x.ApplicationId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        var usageBatches = await dbContext.ProcessedUsageBatches
+            .Where(x => x.DeviceId == deviceId)
+            .ToListAsync(cancellationToken);
+        var enrollmentTokens = await dbContext.EnrollmentTokens
+            .Where(x => x.EnrolledDeviceId == deviceId)
+            .ToListAsync(cancellationToken);
+
+        dbContext.ProcessedUsageBatches.RemoveRange(usageBatches);
+        dbContext.EnrollmentTokens.RemoveRange(enrollmentTokens);
+        dbContext.Devices.Remove(device);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        if (applicationIds.Count > 0)
+        {
+            var orphanedApplications = await dbContext.Applications
+                .Where(x => applicationIds.Contains(x.Id) && !x.Devices.Any())
+                .ToListAsync(cancellationToken);
+            dbContext.Applications.RemoveRange(orphanedApplications);
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        logger.LogInformation("Removed device {DeviceName} ({DeviceId}) and revoked its credentials.", device.Name, device.Id);
+        return NoContent();
     }
 
     [HttpPut("{deviceId:guid}/rules")]

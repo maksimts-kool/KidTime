@@ -4,7 +4,6 @@
     <Project Path="src/KidTime.Domain/KidTime.Domain.csproj" />
     <Project Path="src/KidTime.Server/KidTime.Server.csproj" />
     <Project Path="src/KidTime.SessionAgent/KidTime.SessionAgent.csproj" />
-    <Project Path="src/KidTime.Setup/KidTime.Setup.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/KidTime.ControlService.Tests/KidTime.ControlService.Tests.csproj" />

@@ -3,6 +3,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
 using KidTime.ControlService.Enforcement;
+using KidTime.ControlService.Removal;
 using KidTime.ControlService.Server;
 using KidTime.ControlService.Sessions;
 using KidTime.Domain.Contracts;
@@ -11,6 +12,7 @@ namespace KidTime.ControlService.Ipc;
 
 public sealed class NamedPipeHost(
     EnforcementCoordinator coordinator,
+    DeviceRemovalService removalService,
     AgentRuntimeStatus runtimeStatus,
     SessionAgentSupervisor supervisor,
     ILogger<NamedPipeHost> logger) : BackgroundService
@@ -33,10 +35,8 @@ public sealed class NamedPipeHost(
                         clientProcessId, supervisor.AgentProcessId);
                     continue;
                 }
-                var sample = await PipeProtocol.ReadAsync<SessionUsageSample>(pipe, stoppingToken);
-                var response = await coordinator.HandleSampleAsync(sample, stoppingToken);
-                var status = await coordinator.GetUserStatusAsync(runtimeStatus.Snapshot, stoppingToken);
-                response = response with { Status = status };
+                var request = await PipeProtocol.ReadAsync<SessionAgentRequest>(pipe, stoppingToken);
+                var response = await HandleRequestAsync(request, stoppingToken);
                 await PipeProtocol.WriteAsync(pipe, response, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
@@ -45,6 +45,26 @@ public sealed class NamedPipeHost(
                 logger.LogWarning(exception, "Invalid or interrupted SessionAgent IPC exchange.");
             }
         }
+    }
+
+    private async Task<SessionAgentResponse> HandleRequestAsync(
+        SessionAgentRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request is { UsageSample: { } sample, RemovalRequest: null })
+        {
+            var enforcement = await coordinator.HandleSampleAsync(sample, cancellationToken);
+            var status = await coordinator.GetUserStatusAsync(runtimeStatus.Snapshot, cancellationToken);
+            return new SessionAgentResponse(Enforcement: enforcement with { Status = status });
+        }
+
+        if (request is { UsageSample: null, RemovalRequest: { } removal })
+        {
+            var result = await removalService.AuthorizeAndScheduleAsync(removal, cancellationToken);
+            return new SessionAgentResponse(Removal: result);
+        }
+
+        throw new InvalidDataException("IPC request must contain exactly one supported operation.");
     }
 
     private static NamedPipeServerStream CreatePipe()

@@ -6,10 +6,8 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $output = Join-Path $projectRoot "artifacts\agent"
 $sessionOutput = Join-Path $output "SessionAgent"
 $releaseOutput = Join-Path $projectRoot "artifacts\releases"
-$setupOutput = Join-Path $projectRoot "artifacts\setup"
-$setupPayloadOutput = Join-Path $projectRoot "artifacts\setup-payload"
 
-foreach ($directory in @($output, $setupOutput, $setupPayloadOutput)) {
+foreach ($directory in @($output)) {
     if (Test-Path -LiteralPath $directory) {
         $resolved = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $directory).Path)
         $expected = [IO.Path]::GetFullPath($directory)
@@ -42,63 +40,4 @@ $hash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerI
     sha256 = $hash
     sizeBytes = $package.Length
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $releaseOutput "latest.json") -Encoding utf8
-
-dotnet publish (Join-Path $projectRoot "src\KidTime.Setup\KidTime.Setup.csproj") `
-    -c $Configuration -r win-x64 --self-contained true -o $setupPayloadOutput `
-    -p:PublishSingleFile=false -p:DebugType=None -p:DebugSymbols=false `
-    "-p:KidTimePayloadPath=$packagePath"
-$setupApplication = Join-Path $setupPayloadOutput "KidTimeSetup.exe"
-if (-not (Test-Path -LiteralPath $setupApplication)) { throw "KidTime Setup was not published." }
-New-Item -ItemType Directory -Path $setupOutput -Force | Out-Null
-
-# WPF native libraries do not load reliably from .NET 10's single-file bundle on all
-# supported Windows builds. IExpress keeps the user-facing download to one EXE while
-# running the normal, fully self-contained WPF publish from a temporary directory.
-$setupExecutable = Join-Path $setupOutput "KidTimeSetup.exe"
-$directivePath = Join-Path $setupOutput "KidTimeSetup.sed"
-$payloadFiles = @(Get-ChildItem -LiteralPath $setupPayloadOutput -File | Sort-Object Name)
-$directive = [Collections.Generic.List[string]]::new()
-$directive.AddRange([string[]]@(
-    "[Version]",
-    "Class=IEXPRESS",
-    "SEDVersion=3",
-    "[Options]",
-    "PackagePurpose=InstallApp",
-    "ShowInstallProgramWindow=0",
-    "HideExtractAnimation=1",
-    "UseLongFileName=1",
-    "InsideCompressed=0",
-    "CAB_FixedSize=0",
-    "CAB_ResvCodeSigning=0",
-    "RebootMode=N",
-    "InstallPrompt=",
-    "DisplayLicense=",
-    "FinishMessage=",
-    "TargetName=$setupExecutable",
-    "FriendlyName=KidTime Setup",
-    "AppLaunched=KidTimeSetup.exe",
-    "PostInstallCmd=<None>",
-    "AdminQuietInstCmd=KidTimeSetup.exe",
-    "UserQuietInstCmd=KidTimeSetup.exe",
-    "SourceFiles=SourceFiles",
-    "[Strings]"
-))
-for ($index = 0; $index -lt $payloadFiles.Count; $index++) {
-    $directive.Add("FILE$index=`"$($payloadFiles[$index].Name)`"")
-}
-$directive.Add("[SourceFiles]")
-$directive.Add("SourceFiles0=$setupPayloadOutput\")
-$directive.Add("[SourceFiles0]")
-for ($index = 0; $index -lt $payloadFiles.Count; $index++) {
-    $directive.Add("%FILE$index%=")
-}
-[IO.File]::WriteAllLines($directivePath, $directive, [Text.Encoding]::ASCII)
-
-$iexpress = Join-Path $env:SystemRoot "System32\iexpress.exe"
-$iexpressProcess = Start-Process -FilePath $iexpress -ArgumentList @("/N", "/Q", $directivePath) -Wait -PassThru -WindowStyle Hidden
-if ($iexpressProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $setupExecutable)) {
-    throw "The single-file KidTime Setup package could not be created."
-}
-Remove-Item -LiteralPath $directivePath -Force
-Copy-Item -LiteralPath $setupExecutable -Destination (Join-Path $releaseOutput "KidTimeSetup.exe") -Force
-Write-Host "Self-contained agent $version, automatic update package, and KidTimeSetup.exe were created in $releaseOutput"
+Write-Host "Self-contained agent $version and automatic update package were created in $releaseOutput"
