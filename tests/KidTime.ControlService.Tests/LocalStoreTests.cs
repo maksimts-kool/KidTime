@@ -371,6 +371,82 @@ public sealed class LocalStoreTests : IDisposable
         Assert.Equal("pc-sign-out", pcDismissal.Notification.PersistentNotificationKey);
     }
 
+    [Fact]
+    public async Task User_status_separates_daily_schedule_app_and_connection_information()
+    {
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var clock = new TrustedClock();
+        clock.Synchronize(new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero));
+        var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
+        await store.AddUsageAsync(date, null, 600, CancellationToken.None);
+        await store.AddUsageAsync(date, "limited-app", 120, CancellationToken.None);
+
+        var schedule = new WeeklySchedule
+        {
+            Days =
+            [
+                new DaySchedule
+                {
+                    Day = DayOfWeek.Monday,
+                    Windows = [new TimeWindow(new TimeOnly(11, 0), new TimeOnly(14, 0))]
+                }
+            ]
+        };
+        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        coordinator.UpdateRules(new DeviceRuleSnapshot
+        {
+            Revision = 19,
+            TimeZoneId = "UTC",
+            ControlledUserName = "TESTPC\\child",
+            DailyLimitSeconds = 3_600,
+            Schedule = schedule,
+            Applications =
+            [
+                new ApplicationRuleSnapshot
+                {
+                    IdentityKey = "limited-app",
+                    DisplayName = "Limited app",
+                    DailyLimitSeconds = 1_200,
+                    Schedule = schedule
+                },
+                new ApplicationRuleSnapshot
+                {
+                    IdentityKey = "blocked-app",
+                    DisplayName = "Blocked app",
+                    ManuallyBlocked = true
+                },
+                new ApplicationRuleSnapshot
+                {
+                    IdentityKey = "unrestricted-app",
+                    DisplayName = "Unrestricted app"
+                }
+            ]
+        });
+        var server = new ServerConnectionStatus(
+            true,
+            "Connected",
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            null);
+
+        var status = await coordinator.GetUserStatusAsync(server, CancellationToken.None);
+
+        Assert.Equal("TESTPC\\child", status.ControlledUserName);
+        Assert.Equal(19, status.RuleRevision);
+        Assert.Equal(3_000, status.ScreenTime.DailyRemainingSeconds);
+        Assert.True(status.ScreenTime.IsWithinSchedule);
+        Assert.NotNull(status.ScreenTime.ScheduleAvailableUntilUtc);
+        Assert.Equal(2, status.Applications.Count);
+        var limited = Assert.Single(status.Applications, item => item.IdentityKey == "limited-app");
+        Assert.Equal(1_080, limited.Allowance.DailyRemainingSeconds);
+        Assert.True(limited.Allowance.IsAllowed);
+        var blocked = Assert.Single(status.Applications, item => item.IdentityKey == "blocked-app");
+        Assert.True(blocked.IsManuallyBlocked);
+        Assert.False(blocked.Allowance.IsAllowed);
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

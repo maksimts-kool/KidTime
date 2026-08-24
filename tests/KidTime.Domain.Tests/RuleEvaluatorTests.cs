@@ -195,6 +195,21 @@ public sealed class RuleEvaluatorTests
     }
 
     [Fact]
+    public void Schedule_status_reports_current_and_next_allowance_separately()
+    {
+        var schedule = Schedule((DayOfWeek.Monday, "13:00", "14:00"));
+
+        Assert.False(RuleEvaluator.IsWithinSchedule(schedule, MondayNoonUtc, "UTC"));
+        Assert.Equal(
+            new DateTimeOffset(2026, 8, 24, 13, 0, 0, TimeSpan.Zero),
+            RuleEvaluator.FindNextAllowanceStartUtc(schedule, MondayNoonUtc, "UTC"));
+        Assert.True(RuleEvaluator.IsWithinSchedule(schedule, MondayNoonUtc.AddHours(1), "UTC"));
+        Assert.Equal(
+            new DateTimeOffset(2026, 8, 24, 13, 0, 0, TimeSpan.Zero),
+            RuleEvaluator.FindCurrentAllowanceStartUtc(schedule, MondayNoonUtc.AddHours(1), "UTC"));
+    }
+
+    [Fact]
     public void Overnight_allowance_reports_the_next_day_end()
     {
         var schedule = Schedule((DayOfWeek.Monday, "22:00", "02:00"));

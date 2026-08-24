@@ -29,6 +29,7 @@ builder.Services.AddSingleton<TrustedClock>();
 builder.Services.AddSingleton<SyncTrigger>();
 builder.Services.AddSingleton<WindowsAccountProvider>();
 builder.Services.AddSingleton<AgentUpdateState>();
+builder.Services.AddSingleton<AgentRuntimeStatus>();
 builder.Services.AddSingleton<SessionAgentSupervisor>();
 builder.Services.AddHostedService<AgentWorker>();
 builder.Services.AddHostedService<AgentUpdateWorker>();

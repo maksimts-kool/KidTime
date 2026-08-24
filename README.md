@@ -15,12 +15,13 @@ Parent browser ──HTTP──> Next.js web proxy ──JWT──> ASP.NET Core
 Controlled PC                                      ControlService (LocalSystem)
                                                    ├── SQLite rules/usage queue
                                                    ├── process discovery/enforcement
-                                                   ├── persistent final warning + Windows sign-out
+                                                   ├── final-warning timing + Windows sign-out
                                                    └── secured named pipe
                                                           │
                                                    SessionAgent (logged-in user)
                                                    ├── foreground app + idle detection
-                                                   └── native Windows app notifications
+                                                   ├── native Windows tray status UI
+                                                   └── native Windows notifications
 ```
 
 - REST handles enrollment, heartbeats, rules, usage batches, discovery, and administration.
@@ -177,6 +178,14 @@ On the controlled PC:
 
 Logs are newline-delimited JSON. They include connectivity, rule revisions, discovery, blocks, synchronization, and SessionAgent restarts, but never credentials or enrollment tokens.
 
+## Controlled-user tray and status window
+
+SessionAgent places a shield icon in the controlled user's notification area. Left-clicking it opens a modern Fluent/Mica dashboard built from WPF UI's maintained Windows 11-style controls. The dashboard makes the remaining daily allowance visual with a determinate time ring, shows progress through the current weekly-schedule window, and presents every limited or blocked application as a card with its own state badge, allowance bar, and schedule summary. Server connection, synchronization, controlled profile, and cached rule revision are separate visual status cards. It follows the current Windows light/dark theme and accent color automatically.
+
+Right-clicking the tray icon shows server connection, last synchronization, the controlled Windows profile, and **Open KidTime**. The status view is supplied by the privileged service over the existing authenticated, process-validated named pipe; it does not let the Standard User edit or bypass rules. Offline status is explicit and cached rules remain enforced.
+
+The dashboard and tray use `WPF-UI` and `WPF-UI.Tray` 4.3.0. KidTime composes their existing FluentWindow, Card, ProgressRing, InfoBar, Badge, SymbolIcon, menu, and tray controls; it does not maintain a custom widget toolkit.
+
 ## Offline enforcement
 
 The SQLite transaction path is:
@@ -206,7 +215,7 @@ Integration checks on the VM should use a harmless executable such as Notepad be
 3. set a one-minute Notepad limit and verify it closes at exhaustion;
 4. disconnect only the VM from the parent server, launch a cached-blocked app, and confirm it remains blocked;
 5. reconnect and confirm pending statistics upload;
-6. manually block the PC, confirm the non-modal countdown banner remains visible for 60 seconds, and confirm Windows signs the session out;
+6. manually block the PC, confirm the native final-warning notification appears with the 60-second grace period, expires instead of leaving a topmost window behind, and confirm Windows signs the session out;
 7. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
 8. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out enforcement remains independent.
 

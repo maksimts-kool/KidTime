@@ -15,6 +15,7 @@ public sealed class AgentWorker(
     SyncTrigger trigger,
     WindowsAccountProvider accounts,
     AgentUpdateState updateState,
+    AgentRuntimeStatus runtimeStatus,
     ILogger<AgentWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -37,6 +38,7 @@ public sealed class AgentWorker(
         {
             if (api.Credential is null)
             {
+                runtimeStatus.MarkNotEnrolled();
                 logger.LogWarning("Device is not enrolled. Run the enrollment command before starting the service.");
                 await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
                 continue;
@@ -48,10 +50,12 @@ public sealed class AgentWorker(
                 try
                 {
                     await SynchronizeAsync(stoppingToken);
+                    runtimeStatus.MarkSynchronizationSucceeded();
                     nextSync = now.AddSeconds(Math.Clamp(api.Options.SyncIntervalSeconds, 15, 3_600));
                 }
                 catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or InvalidDataException)
                 {
+                    runtimeStatus.MarkSynchronizationFailed(exception.Message);
                     logger.LogWarning(exception, "Synchronization failed; cached rules remain active and usage stays queued locally.");
                     nextSync = now.AddSeconds(20);
                 }
@@ -77,10 +81,12 @@ public sealed class AgentWorker(
                         update.Status,
                         update.Error,
                         update.CheckedAtUtc), stoppingToken);
+                    runtimeStatus.MarkContactSucceeded();
                     nextHeartbeat = now.AddSeconds(Math.Clamp(api.Options.HeartbeatIntervalSeconds, 10, 600));
                 }
                 catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
                 {
+                    runtimeStatus.MarkDisconnected();
                     logger.LogInformation("Server disconnected: {Message}", exception.Message);
                     nextHeartbeat = now.AddSeconds(15);
                 }

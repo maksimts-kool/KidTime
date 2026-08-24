@@ -171,6 +171,59 @@ public sealed class EnforcementCoordinator(
         finally { _gate.Release(); }
     }
 
+    public async Task<SessionStatusSnapshot> GetUserStatusAsync(
+        ServerConnectionStatus server,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var rules = _rules;
+            var now = clock.GetUtcNow();
+            var localDate = RuleEvaluator.GetLocalDate(now, rules.TimeZoneId);
+            var pcUsage = await store.GetUsageAsync(localDate, null, cancellationToken);
+            var pcDecision = RuleEvaluator.EvaluateDevice(rules, now, pcUsage);
+            var screenTime = BuildAllowanceStatus(
+                pcDecision,
+                pcUsage,
+                rules.DailyLimitSeconds,
+                rules.Schedule,
+                now,
+                rules.TimeZoneId);
+
+            var applications = new List<ApplicationTimeStatus>();
+            foreach (var rule in rules.Applications
+                         .Where(item => item.ManuallyBlocked
+                                        || item.DailyLimitSeconds is not null
+                                        || item.Schedule.IsConfigured)
+                         .OrderBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase))
+            {
+                var usage = await store.GetUsageAsync(localDate, rule.IdentityKey, cancellationToken);
+                var decision = RuleEvaluator.EvaluateApplication(rule, now, rules.TimeZoneId, usage);
+                applications.Add(new ApplicationTimeStatus(
+                    rule.IdentityKey,
+                    rule.DisplayName,
+                    rule.ManuallyBlocked,
+                    BuildAllowanceStatus(
+                        decision,
+                        usage,
+                        rule.DailyLimitSeconds,
+                        rule.Schedule,
+                        now,
+                        rules.TimeZoneId)));
+            }
+
+            return new SessionStatusSnapshot(
+                now,
+                rules.ControlledUserName,
+                rules.Revision,
+                server,
+                screenTime,
+                applications);
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<RuleDecision> EvaluateApplicationAsync(string identityKey, CancellationToken cancellationToken)
         => (await EvaluateApplicationStatusAsync(identityKey, cancellationToken))?.Decision ?? RuleDecision.Allowed;
 
@@ -376,6 +429,36 @@ public sealed class EnforcementCoordinator(
             ? $"daily:{localDate:yyyy-MM-dd}"
             : $"schedule:{scheduleEnd!.Value.UtcTicks}";
         return new TimeRestriction(remaining, key, activeRemaining, scheduleEnd);
+    }
+
+    private static TimeAllowanceStatus BuildAllowanceStatus(
+        RuleDecision decision,
+        int activeSeconds,
+        int? dailyLimitSeconds,
+        WeeklySchedule schedule,
+        DateTimeOffset utcNow,
+        string timeZoneId)
+    {
+        var isWithinSchedule = RuleEvaluator.IsWithinSchedule(schedule, utcNow, timeZoneId);
+        var scheduleEnd = isWithinSchedule
+            ? RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, utcNow, timeZoneId)
+            : null;
+        return new TimeAllowanceStatus(
+            decision.IsAllowed,
+            decision.Reason,
+            decision.Message,
+            activeSeconds,
+            dailyLimitSeconds,
+            dailyLimitSeconds is int limit ? Math.Max(0, limit - activeSeconds) : null,
+            schedule.IsConfigured,
+            isWithinSchedule,
+            isWithinSchedule
+                ? RuleEvaluator.FindCurrentAllowanceStartUtc(schedule, utcNow, timeZoneId)
+                : null,
+            scheduleEnd,
+            !isWithinSchedule
+                ? RuleEvaluator.FindNextAllowanceStartUtc(schedule, utcNow, timeZoneId)
+                : null);
     }
 
     private static string FormatRemaining(int seconds)

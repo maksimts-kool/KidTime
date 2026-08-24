@@ -78,6 +78,40 @@ public sealed record UserNotification(
     string? PersistentNotificationKey = null,
     bool DismissPersistentNotification = false);
 
+public sealed record ServerConnectionStatus(
+    bool IsConnected,
+    string ConnectionMessage,
+    DateTimeOffset? LastSuccessfulContactUtc,
+    DateTimeOffset? LastSuccessfulSynchronizationUtc,
+    string? LastSynchronizationError);
+
+public sealed record TimeAllowanceStatus(
+    bool IsAllowed,
+    BlockReason Reason,
+    string Message,
+    int TodayActiveSeconds,
+    int? DailyLimitSeconds,
+    int? DailyRemainingSeconds,
+    bool HasWeeklySchedule,
+    bool IsWithinSchedule,
+    DateTimeOffset? ScheduleAvailableSinceUtc,
+    DateTimeOffset? ScheduleAvailableUntilUtc,
+    DateTimeOffset? ScheduleAvailableAgainUtc);
+
+public sealed record ApplicationTimeStatus(
+    string IdentityKey,
+    string DisplayName,
+    bool IsManuallyBlocked,
+    TimeAllowanceStatus Allowance);
+
+public sealed record SessionStatusSnapshot(
+    DateTimeOffset GeneratedAtUtc,
+    string? ControlledUserName,
+    long RuleRevision,
+    ServerConnectionStatus Server,
+    TimeAllowanceStatus ScreenTime,
+    IReadOnlyList<ApplicationTimeStatus> Applications);
+
 public sealed record EnforcementState(
     bool IsPcBlocked,
     RuleDecision PcDecision,
@@ -85,4 +119,5 @@ public sealed record EnforcementState(
     int TodayActiveSeconds,
     int? DailyLimitSeconds,
     int RemainingSeconds,
-    UserNotification? Notification);
+    UserNotification? Notification,
+    SessionStatusSnapshot? Status = null);

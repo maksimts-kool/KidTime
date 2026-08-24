@@ -117,6 +117,51 @@ public static class RuleEvaluator
         return null;
     }
 
+    public static bool IsWithinSchedule(
+        WeeklySchedule schedule,
+        DateTimeOffset utcNow,
+        string timeZoneId) =>
+        !schedule.IsConfigured
+        || schedule.Allows(TimeZoneInfo.ConvertTime(utcNow, ResolveTimeZone(timeZoneId)).DateTime);
+
+    public static DateTimeOffset? FindCurrentAllowanceStartUtc(
+        WeeklySchedule schedule,
+        DateTimeOffset utcNow,
+        string timeZoneId)
+    {
+        if (!schedule.IsConfigured || !IsWithinSchedule(schedule, utcNow, timeZoneId))
+        {
+            return null;
+        }
+
+        var timeZone = ResolveTimeZone(timeZoneId);
+        var currentMinute = new DateTimeOffset(
+            utcNow.Year, utcNow.Month, utcNow.Day, utcNow.Hour, utcNow.Minute, 0, TimeSpan.Zero);
+        for (var minutes = 0; minutes <= 8 * 24 * 60; minutes++)
+        {
+            var candidate = currentMinute.AddMinutes(-minutes);
+            if (!schedule.Allows(TimeZoneInfo.ConvertTime(candidate, timeZone).DateTime))
+            {
+                return candidate.AddMinutes(1);
+            }
+        }
+
+        return null;
+    }
+
+    public static DateTimeOffset? FindNextAllowanceStartUtc(
+        WeeklySchedule schedule,
+        DateTimeOffset utcNow,
+        string timeZoneId)
+    {
+        if (!schedule.IsConfigured)
+        {
+            return null;
+        }
+
+        return FindNextAllowedUtc(schedule, utcNow, ResolveTimeZone(timeZoneId));
+    }
+
     private static TimeZoneInfo ResolveTimeZone(string timeZoneId)
     {
         try

@@ -3,6 +3,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
 using KidTime.ControlService.Enforcement;
+using KidTime.ControlService.Server;
 using KidTime.ControlService.Sessions;
 using KidTime.Domain.Contracts;
 
@@ -10,6 +11,7 @@ namespace KidTime.ControlService.Ipc;
 
 public sealed class NamedPipeHost(
     EnforcementCoordinator coordinator,
+    AgentRuntimeStatus runtimeStatus,
     SessionAgentSupervisor supervisor,
     ILogger<NamedPipeHost> logger) : BackgroundService
 {
@@ -33,6 +35,8 @@ public sealed class NamedPipeHost(
                 }
                 var sample = await PipeProtocol.ReadAsync<SessionUsageSample>(pipe, stoppingToken);
                 var response = await coordinator.HandleSampleAsync(sample, stoppingToken);
+                var status = await coordinator.GetUserStatusAsync(runtimeStatus.Snapshot, stoppingToken);
+                response = response with { Status = status };
                 await PipeProtocol.WriteAsync(pipe, response, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
