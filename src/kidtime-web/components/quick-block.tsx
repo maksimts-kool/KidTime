@@ -1,5 +1,6 @@
 "use client";
 
+import { appPath } from "@/lib/paths";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { LockKeyhole, UnlockKeyhole } from "lucide-react";
@@ -22,7 +23,7 @@ export function QuickBlock({ deviceId, blocked }: { deviceId: string; blocked: b
   const [busy, setBusy] = useState(false);
   async function toggle() {
     setBusy(true);
-    await fetch(`/api/backend/devices/${deviceId}/${blocked ? "unblock" : "block"}`, {
+    await fetch(appPath(`/api/backend/devices/${deviceId}/${blocked ? "unblock" : "block"}`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: blocked ? undefined : JSON.stringify({ minutes: null, untilUtc: null }),

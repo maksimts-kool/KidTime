@@ -5,6 +5,9 @@ RUN npm ci
 
 FROM node:24-alpine AS build
 WORKDIR /app
+# Next.js resolves the base path at build time, so it has to be known before npm run build.
+ARG NEXT_PUBLIC_BASE_PATH=""
+ENV NEXT_PUBLIC_BASE_PATH=$NEXT_PUBLIC_BASE_PATH
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY src/kidtime-web .
 RUN npm run build

@@ -1,5 +1,6 @@
 "use client";
 
+import { appPath } from "@/lib/paths";
 import { FormEvent, useState } from "react";
 import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -32,7 +33,7 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
     const hours = Number(data.get("limitHours"));
     const minutes = Number(data.get("limitMinutes"));
     try {
-      const response = await fetch(`/api/backend/devices/${deviceId}/rules`, {
+      const response = await fetch(appPath(`/api/backend/devices/${deviceId}/rules`), {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           controlledUserSid: data.get("controlledUserSid") || null,

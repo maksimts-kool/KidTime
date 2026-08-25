@@ -2,11 +2,11 @@ name: kidtime
 services:
   postgres:
     image: postgres:18-alpine
-    restart: "no"
+    restart: unless-stopped
     environment:
       POSTGRES_DB: kidtime
       POSTGRES_USER: kidtime
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/initialize-server.ps1 first}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/initialize-server.sh on the Docker host first}
     volumes:
       - kidtime-postgres:/var/lib/postgresql
     healthcheck:
@@ -19,7 +19,7 @@ services:
     build:
       context: .
       dockerfile: src/KidTime.Server/Dockerfile
-    restart: "no"
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -27,30 +27,37 @@ services:
       ASPNETCORE_HTTP_PORTS: "8080"
       ASPNETCORE_HTTPS_PORTS: "8443"
       ASPNETCORE_Kestrel__Certificates__Default__Path: /https/kidtime.pfx
-      ASPNETCORE_Kestrel__Certificates__Default__Password: ${KIDTIME_CERT_PASSWORD}
+      ASPNETCORE_Kestrel__Certificates__Default__Password: ${KIDTIME_CERT_PASSWORD:?Run scripts/initialize-server.sh on the Docker host first}
       ConnectionStrings__KidTime: Host=postgres;Port=5432;Database=kidtime;Username=kidtime;Password=${POSTGRES_PASSWORD}
-      Jwt__SigningKey: ${KIDTIME_JWT_KEY}
+      Jwt__SigningKey: ${KIDTIME_JWT_KEY:?Run scripts/initialize-server.sh on the Docker host first}
       Admin__Email: ${KIDTIME_ADMIN_EMAIL}
       Admin__Password: ${KIDTIME_ADMIN_PASSWORD}
       AgentEnrollment__PublicUrl: ${KIDTIME_AGENT_URL:-}
     volumes:
-      - ./.data/certs:/https:ro
-      - ./artifacts/releases:/updates:ro
+      # Absolute host paths so the stack behaves the same whether Portainer, a Git
+      # checkout, or the Compose CLI decides the working directory.
+      - ${KIDTIME_CERT_DIR:-/opt/kidtime/certs}:/https:ro
+      - ${KIDTIME_RELEASE_DIR:-/opt/kidtime/releases}:/updates:ro
       - kidtime-dataprotection:/home/app/.aspnet/DataProtection-Keys
     ports:
-      - "5081:8443"
+      # Behind a reverse proxy, set KIDTIME_BIND=127.0.0.1 so only the proxy can reach
+      # the container. On a plain LAN server the default exposes it to the network.
+      - "${KIDTIME_BIND:-0.0.0.0}:${KIDTIME_SERVER_PORT:-5081}:8443"
 
   web:
     build:
       context: .
       dockerfile: src/kidtime-web/Dockerfile
-    restart: "no"
+      args:
+        # Baked into the bundle by next build; empty serves the panel at the domain root.
+        NEXT_PUBLIC_BASE_PATH: ${KIDTIME_BASE_PATH:-}
+    restart: unless-stopped
     depends_on:
       - server
     environment:
       KIDTIME_API_URL: http://server:8080
     ports:
-      - "3000:3000"
+      - "${KIDTIME_BIND:-0.0.0.0}:${KIDTIME_WEB_PORT:-3000}:3000"
 
 volumes:
   kidtime-postgres:

@@ -1,5 +1,6 @@
 "use client";
 
+import { appPath } from "@/lib/paths";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,7 @@ export function LoginForm() {
     setBusy(true);
     setError("");
     const data = new FormData(event.currentTarget);
-    const response = await fetch("/api/session", {
+    const response = await fetch(appPath("/api/session"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: data.get("email"), password: data.get("password") }),

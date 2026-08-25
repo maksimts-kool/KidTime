@@ -1,3 +1,4 @@
+import { appPath } from "@/lib/paths";
 import Image from "next/image";
 import { AppWindow } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,7 +24,7 @@ export function ApplicationIcon({
     >
       {hasIcon ? (
         <Image
-          src={`/api/backend/applications/${applicationId}/icon`}
+          src={appPath(`/api/backend/applications/${applicationId}/icon`)}
           width={pixels}
           height={pixels}
           sizes={`${pixels}px`}

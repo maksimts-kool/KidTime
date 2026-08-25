@@ -1,5 +1,6 @@
 "use client";
 
+import { appPath } from "@/lib/paths";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -103,7 +104,7 @@ export function AddDevice({ emptyState = false }: { emptyState?: boolean }) {
       return;
     }
     reset();
-    const response = await fetch("/api/backend/installer", { cache: "no-store" }).catch(() => null);
+    const response = await fetch(appPath("/api/backend/installer"), { cache: "no-store" }).catch(() => null);
     if (!response?.ok) {
       setError("KidTime could not reach the server. Check that it is running, then try again.");
       return;
@@ -114,7 +115,7 @@ export function AddDevice({ emptyState = false }: { emptyState?: boolean }) {
   const createToken = useCallback(async () => {
     setBusy(true);
     setError("");
-    const response = await fetch("/api/backend/enrollment-tokens", {
+    const response = await fetch(appPath("/api/backend/enrollment-tokens"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ validForMinutes: 30 }),
@@ -139,7 +140,7 @@ export function AddDevice({ emptyState = false }: { emptyState?: boolean }) {
     if (!open || !enrollmentId || status.status === "connected" || status.status === "expired") return;
     let cancelled = false;
     async function check() {
-      const response = await fetch(`/api/backend/enrollment-tokens/${enrollmentId}`, { cache: "no-store" }).catch(() => null);
+      const response = await fetch(appPath(`/api/backend/enrollment-tokens/${enrollmentId}`), { cache: "no-store" }).catch(() => null);
       if (!response?.ok || cancelled) return;
       const next = await response.json() as EnrollmentStatus;
       if (cancelled) return;
@@ -219,7 +220,7 @@ export function AddDevice({ emptyState = false }: { emptyState?: boolean }) {
                     <Button
                       variant="outline"
                       onClick={() => setDownloaded(true)}
-                      render={<a href="/api/backend/installer/download" download={installer.fileName ?? "KidTimeSetup.exe"} />}
+                      render={<a href={appPath("/api/backend/installer/download")} download={installer.fileName ?? "KidTimeSetup.exe"} />}
                     >
                       <Download data-icon="inline-start" />Download setup (.exe)
                     </Button>
@@ -236,7 +237,7 @@ export function AddDevice({ emptyState = false }: { emptyState?: boolean }) {
                   </>
                 ) : (
                   <p className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                    This server has not published a setup file yet. Run <code className="font-medium">./scripts/build-agent.ps1</code> on the server PC, recreate the containers, then reopen this window.
+                    This server has not published a setup file yet. Build the agent on the Windows build machine, upload the release to the server, publish it with <code className="font-medium">scripts/publish-agent-release.sh</code>, then reopen this window.
                   </p>
                 )}
               </StepPanel>

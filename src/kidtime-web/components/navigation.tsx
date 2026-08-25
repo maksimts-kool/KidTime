@@ -1,5 +1,6 @@
 "use client";
 
+import { appPath } from "@/lib/paths";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { AppWindow, BarChart3, LayoutDashboard, LogOut, MonitorCog, Settings } from "lucide-react";
@@ -18,7 +19,7 @@ export function Navigation() {
   const pathname = usePathname();
   const router = useRouter();
   async function signOut() {
-    await fetch("/api/session", { method: "DELETE" });
+    await fetch(appPath("/api/session"), { method: "DELETE" });
     router.replace("/login");
     router.refresh();
   }

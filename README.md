@@ -1,6 +1,6 @@
 # KidTime
 
-KidTime is a self-hosted Windows screen-time and application-control system. The server and web panel run on the parent PC; a privileged `ControlService` and interactive `SessionAgent` run on the controlled Windows 11 PC.
+KidTime is a self-hosted Windows screen-time and application-control system. The server and web panel run as Docker containers on an Ubuntu host, typically managed with Portainer; a privileged `ControlService` and interactive `SessionAgent` run on the controlled Windows 11 PC.
 
 KidTime deliberately does **not** collect or filter websites, DNS queries, browser history, searches, messages, keystrokes, screenshots, camera/microphone data, or network traffic.
 
@@ -35,14 +35,23 @@ See [Architecture and security](docs/architecture-security.md) for rule preceden
 
 ## Prerequisites
 
-### Parent/server PC
+### Server (Ubuntu)
 
-- Windows with Docker Desktop running manually
-- .NET 10 SDK (only for development, migration, tests, and agent builds)
+- Ubuntu 22.04 or newer with Docker Engine and the Compose plugin
+- Portainer CE, if the stack is managed through a UI rather than the Compose CLI
+- `openssl` and `git`, both present on a standard Ubuntu install
+- TCP 5081 reachable from every controlled PC, and TCP 3000 reachable from the parent's browser
+
+The stack uses `restart: unless-stopped`, so the server comes back on its own after a host reboot.
+
+### Windows build machine
+
+Only needed to produce agent releases; it is not part of the running system.
+
+- Windows 11 with the .NET 10 SDK
 - Node.js 24+ (only for frontend development)
-- OpenSSH client for VM deployment
 
-No Scheduled Task, Windows service, or Docker autostart entry is installed on the parent PC.
+`ControlService`, `SessionAgent`, and `Setup` target `net10.0-windows`, the last two are WPF, and the single-file installer is assembled with IExpress. That build cannot run on Linux, so `scripts/build-agent.ps1` is the one PowerShell script the project still keeps.
 
 ### Controlled PC
 
@@ -54,67 +63,102 @@ The agent publishes self-contained, so the controlled PC does not need .NET inst
 
 ## Start the server
 
-First-time initialization creates random database, JWT, HTTPS-certificate, and parent-account secrets:
+Clone the repository on the Ubuntu host and run first-time initialization. It creates random database, JWT, HTTPS-certificate, and parent-account secrets, generates the self-signed server certificate, and creates the two host directories the server container mounts:
 
-```powershell
-./scripts/initialize-server.ps1 -AdminEmail "parent@example.com"
+```bash
+sudo ./scripts/initialize-server.sh --admin-email "parent@example.com"
 ```
 
-If `-AdminPassword` is omitted, a strong password is generated. It is stored in the untracked `.env` file. The script also creates an HTTPS development certificate and writes its SHA-256 pin to `.data/certs/kidtime.sha256`.
+If `--admin-password` is omitted, a strong password is generated. Every secret is written to the untracked `.env` file with `0600` permissions. The certificate lands in `/opt/kidtime/certs/kidtime.pfx` and its SHA-256 pin — the value the Windows agent pins — in `/opt/kidtime/certs/kidtime.sha256`. Pass `--host` once per additional name or address that belongs in the certificate, and `--agent-url` when the controlled PCs reach the server by a name rather than the detected address.
 
-Start the stack manually:
+### Deploy with Portainer
 
-```powershell
+1. **Stacks → Add stack → Repository**, pointing at this repository, with `compose.yaml` as the Compose path.
+2. Under **Environment variables**, switch to advanced mode and paste the contents of the generated `.env` (`cat .env`).
+3. **Deploy the stack.** Portainer builds the server and web images on the host, which takes a few minutes the first time.
+
+Later updates are a **Pull and redeploy** on the same stack.
+
+### Deploy with the Compose CLI
+
+```bash
 docker compose up --build -d
 ```
 
-Open `http://localhost:3000`. The agent API is exposed at `https://<parent-pc-address>:5081`; the browser web service reaches the API over the private Compose network.
+Either way, open `http://<server-address>:3000` from the parent's browser. The agent API is exposed at `https://<server-address>:5081`; the web container reaches the API over the private Compose network, so the parent's browser never sees the self-signed certificate.
+
+### Publish behind a reverse proxy
+
+A host that already terminates TLS for other sites can serve KidTime from the same domain. That also gives the agent a publicly trusted certificate instead of the pinned self-signed one. Initialize with the proxy settings so the containers publish on loopback only:
+
+```bash
+sudo ./scripts/initialize-server.sh --admin-email "parent@example.com" --bind 127.0.0.1 --web-port 3010 --base-path /kidtime --agent-url https://example.org/kidtime-api
+```
+
+`--base-path` is compiled into the web bundle, so changing it later means rebuilding the web image. Route two prefixes to the stack: the panel keeps its prefix, the agent API has its prefix stripped.
+
+```caddyfile
+@kidtime_api path /kidtime-api/*
+handle @kidtime_api {
+	uri strip_prefix /kidtime-api
+	reverse_proxy https://127.0.0.1:5081 {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
+
+@kidtime path /kidtime/*
+handle @kidtime {
+	reverse_proxy 127.0.0.1:3010
+}
+```
+
+The proxy hop stays on HTTPS so the server container keeps using its own certificate to encrypt the Data Protection keys; `tls_insecure_skip_verify` covers only that loopback hop. The agent validates the public certificate by chain and consults the pin only when chain validation fails, so ordinary certificate renewals do not disturb enrolled PCs.
 
 Stop without deleting PostgreSQL data:
 
-```powershell
+```bash
 docker compose down
 ```
 
-View status and logs:
+View status and logs — Portainer's container view shows the same output:
 
-```powershell
+```bash
 docker compose ps
 docker compose logs --tail 200 server web postgres
 ```
 
-The Compose services intentionally use `restart: "no"`; they do not come back automatically when Docker starts.
-
 ## Development startup
 
-Start PostgreSQL, then run API and web separately if hot reload is useful:
+The API and web projects are cross-platform, so this works on the Ubuntu host or on a workstation. Compose interpolates the whole file even when a single service is started, so a complete `.env` has to be present either way. Start PostgreSQL, then run API and web separately if hot reload is useful:
 
-```powershell
+```bash
 docker compose up -d postgres
-$env:ConnectionStrings__KidTime = "Host=localhost;Port=5432;Database=kidtime;Username=kidtime;Password=<from .env>"
-$env:Jwt__SigningKey = "<from .env>"
-$env:Admin__Email = "<from .env>"
-$env:Admin__Password = "<from .env>"
+export ConnectionStrings__KidTime="Host=localhost;Port=5432;Database=kidtime;Username=kidtime;Password=<from .env>"
+export Jwt__SigningKey="<from .env>"
+export Admin__Email="<from .env>"
+export Admin__Password="<from .env>"
 dotnet run --project src/KidTime.Server
 ```
 
-```powershell
-Set-Location src/kidtime-web
-$env:KIDTIME_API_URL = "https://localhost:5081"
+```bash
+cd src/kidtime-web
+export KIDTIME_API_URL="https://localhost:5081"
 npm run dev
 ```
 
-For a self-signed API certificate, the containerized web path is the supported development setup because it uses the internal HTTP endpoint. A production installation should replace the generated certificate with one trusted for the parent PC hostname.
+For a self-signed API certificate, the containerized web path is the supported development setup because it uses the internal HTTP endpoint. A production installation should replace the generated certificate with one trusted for the server's hostname; the Windows agent pins the certificate either way.
 
 ## Database migrations
 
 Restore the pinned local EF tool and create a migration:
 
-```powershell
+```bash
 dotnet tool restore
-dotnet tool run dotnet-ef migrations add <MigrationName> `
-  --project src/KidTime.Server/KidTime.Server.csproj `
-  --startup-project src/KidTime.Server/KidTime.Server.csproj `
+dotnet tool run dotnet-ef migrations add <MigrationName> \
+  --project src/KidTime.Server/KidTime.Server.csproj \
+  --startup-project src/KidTime.Server/KidTime.Server.csproj \
   --output-dir Data/Migrations
 ```
 
@@ -122,14 +166,25 @@ The server applies checked-in migrations when it starts. Do not use `EnsureCreat
 
 ## Build and enroll the Windows agent
 
-The server operator publishes the self-contained service, automatic-update ZIP, and consumer setup executable together:
+Agent releases are built on the Windows machine and then uploaded to the Ubuntu server. On Windows, publish the self-contained service, automatic-update ZIP, and consumer setup executable together:
 
 ```powershell
 ./scripts/build-agent.ps1
-docker compose up --build -d
 ```
 
-This creates `artifacts/releases/KidTimeSetup.exe` and makes it available through the signed-in web panel. Controlled-device users never need PowerShell, SSH, .NET, or a ZIP extractor.
+Copy the resulting `artifacts/releases` directory to the server, then publish it there:
+
+```bash
+scp -r artifacts/releases <user>@<server-address>:~/kidtime-release
+```
+
+```bash
+./scripts/publish-agent-release.sh ~/kidtime-release
+```
+
+`publish-agent-release.sh` verifies the uploaded package against the size and SHA-256 in `latest.json` before installing it, and writes the manifest last so the server never advertises a release whose package has not fully landed. The server reads that directory on every request, so nothing has to be restarted or rebuilt.
+
+This makes `KidTimeSetup.exe` available through the signed-in web panel. Controlled-device users never need PowerShell, SSH, .NET, or a ZIP extractor.
 
 To add a PC, open **Devices → Add device** in the web panel and follow the three steps:
 
@@ -143,31 +198,33 @@ The setup window itself is a WPF UI Fluent wizard: a Mica window with a three-st
 
 ### Automatic service updates
 
-`build-agent.ps1` also publishes `artifacts/releases/latest.json` and a versioned ZIP. Compose mounts that release directory read-only into the API. Every enrolled Windows service checks the authenticated update endpoint periodically (five minutes by default), downloads a newer package over the certificate-pinned HTTPS connection, verifies its exact size and SHA-256 hash, stages it under `C:\ProgramData\KidTime\updates`, and installs it through a hidden LocalSystem helper. The helper keeps a local rollback copy and restarts `KidTimeControl`; enrollment and cached rules remain in ProgramData and are not replaced.
+`build-agent.ps1` also publishes `artifacts/releases/latest.json` and a versioned ZIP. Compose mounts the server's release directory (`/opt/kidtime/releases` by default) read-only into the API. Every enrolled Windows service checks the authenticated update endpoint periodically (five minutes by default), downloads a newer package over the certificate-pinned HTTPS connection, verifies its exact size and SHA-256 hash, stages it under `C:\ProgramData\KidTime\updates`, and installs it through a hidden LocalSystem helper. The helper keeps a local rollback copy and restarts `KidTimeControl`; enrollment and cached rules remain in ProgramData and are not replaced.
 
-Build a newer version and rebuild the server to publish it:
+Publishing a newer version is the same build-and-upload pair:
 
 ```powershell
 ./scripts/build-agent.ps1
-docker compose up --build -d
 ```
 
-No SSH deployment is needed after the bootstrap. The **Devices** list and device detail page show the installed version, published version, update progress, and whether the services are current.
+```bash
+./scripts/publish-agent-release.sh ~/kidtime-release
+```
+
+Enrolled PCs pick the release up on their next update check; no deployment to the controlled PCs is needed. The **Devices** list and device detail page show the installed version, published version, update progress, and whether the services are current.
 
 The account chosen in setup is stored by Windows SID, so account renames do not broaden the enforcement scope. It can be changed later under **Devices → device settings → Controlled Windows account**; KidTime never allows an administrator profile to be selected.
 
 ## Agent lifecycle and logs
 
-Restart and inspect through SSH:
+Server-side logs come from Docker, either in Portainer's container view or on the host:
 
-```powershell
-./scripts/restart-agent.ps1 -ComputerName "192.168.0.201" -UserName "<administrator>"
-./scripts/collect-logs.ps1 -ComputerName "192.168.0.201" -UserName "<administrator>" -Lines 300
+```bash
+docker compose logs --tail 200 server web postgres
 ```
 
-On the controlled PC:
+On the controlled PC, as an administrator:
 
-- service state: `Get-Service KidTimeControl`
+- service state: `Get-Service KidTimeControl`, restart with `Restart-Service KidTimeControl`
 - service data/rules/queue: `C:\ProgramData\KidTime\agent.db`
 - service config: `C:\ProgramData\KidTime\agentsettings.json`
 - service logs: `C:\ProgramData\KidTime\logs\control-service.ndjson`
@@ -202,10 +259,19 @@ If the server is unavailable, the service continues evaluating the cached PC and
 
 ## Tests and verification
 
+The full solution includes `net10.0-windows` projects, so it is tested on the Windows build machine:
+
 ```powershell
 dotnet test KidTime.slnx
 Set-Location src/kidtime-web
 npm run build
+```
+
+On Linux, the cross-platform half still runs:
+
+```bash
+dotnet test tests/KidTime.Domain.Tests
+cd src/kidtime-web && npm run build
 ```
 
 Automated tests cover daily limits, manual blocks, temporary-block expiry, schedules and overnight windows, timezone day changes, update-tolerant application identity, installer/runtime identity reconciliation, helper-process filtering, rule-change notifications, persisted first-block grace, automatic-update version comparison, controlled-account SID isolation, cached offline rules, durable pending usage, idle exclusion, and cached app-limit evaluation.
@@ -215,7 +281,7 @@ Integration checks on the VM should use a harmless executable such as Notepad be
 1. allow Notepad and observe foreground usage;
 2. block Notepad in the web panel and launch it again;
 3. set a one-minute Notepad limit and verify it closes at exhaustion;
-4. disconnect only the VM from the parent server, launch a cached-blocked app, and confirm it remains blocked;
+4. disconnect only the VM from the server, launch a cached-blocked app, and confirm it remains blocked;
 5. reconnect and confirm pending statistics upload;
 6. manually block the PC, confirm the native final-warning notification appears with the 60-second grace period, expires instead of leaving a topmost window behind, and confirm Windows signs the session out;
 7. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
@@ -227,13 +293,13 @@ On a disposable enrolled test PC, also verify both removal paths: remove the ser
 
 ## Troubleshooting
 
-- **Setup cannot reach the API:** verify the controlled PC can connect to TCP 5081 on the parent PC and that the URL shown by Add device resolves from the controlled PC. The one-time code carries the self-hosted server certificate pin automatically.
+- **Setup cannot reach the API:** verify the controlled PC can connect to TCP 5081 on the Ubuntu server and that the URL shown by Add device resolves from the controlled PC. Check the host firewall (`sudo ufw status`) if the port is filtered. The one-time code carries the self-hosted server certificate pin automatically.
 - **Setup says no standard account was found:** create or enable a Standard User account in Windows Settings, then select **Refresh** in setup. Administrator and disabled accounts are intentionally excluded.
-- **Add device says the setup file is unavailable:** run `./scripts/build-agent.ps1` on the server PC, then recreate the server container so it can serve `KidTimeSetup.exe`.
+- **Add device says the setup file is unavailable:** run `./scripts/build-agent.ps1` on the Windows build machine, upload `artifacts/releases`, and publish it with `./scripts/publish-agent-release.sh`. If the files are already in `/opt/kidtime/releases`, confirm they are world-readable — the server container runs as a non-root user.
 - **Setup reports that this PC is already connected:** remove KidTime from that PC first with **Remove KidTime** in its screen-time window; a second enrollment of the same PC is refused deliberately.
 - **Service starts but no UI agent appears:** confirm the signed-in profile is the Standard User selected under **Controlled Windows account**; inspect service logs for `WTSQueryUserToken`/`CreateProcessAsUser` failures.
 - **A newly created child profile is not selectable:** wait up to one minute for the service to report local accounts, refresh the device page, and confirm the account is enabled and is not an administrator.
-- **Rules show pending:** verify `LastSeenUtc`, the service’s HTTPS connectivity, and that the server URL uses an address reachable from the VM rather than `localhost`.
+- **Rules show pending:** verify `LastSeenUtc`, the service’s HTTPS connectivity, and that the server URL uses the Ubuntu host's LAN address rather than `localhost`.
 - **An app is not listed:** start it once. Only parent-manageable user applications are registered; Windows infrastructure, services, helpers, runtimes, updaters, and KidTime components are intentionally excluded.
 - **Usage is lower than elapsed login time:** this is expected. Only non-idle foreground time counts.
 - **Changing `.env` admin password has no effect:** the environment variables seed only the first parent account. Use a future password-change flow or update the stored password hash deliberately; do not delete PostgreSQL data merely to rotate a password.

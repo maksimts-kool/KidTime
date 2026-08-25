@@ -1,3 +1,6 @@
+# Builds the Windows agent, update package, and setup executable.
+# This is the one script that has to run on Windows: the SessionAgent and Setup
+# projects are WPF, and the single-file installer is assembled with IExpress.
 [CmdletBinding()]
 param([ValidateSet("Debug", "Release")][string]$Configuration = "Release")
 
@@ -102,3 +105,4 @@ if ($iexpressProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $setupExecu
 Remove-Item -LiteralPath $directivePath -Force
 Copy-Item -LiteralPath $setupExecutable -Destination (Join-Path $releaseOutput "KidTimeSetup.exe") -Force
 Write-Host "Self-contained agent $version, automatic update package, and KidTimeSetup.exe were created in $releaseOutput"
+Write-Host "Upload that directory to the Ubuntu server and publish it with scripts/publish-agent-release.sh"

@@ -1,5 +1,6 @@
 "use client";
 
+import { appPath } from "@/lib/paths";
 import { FormEvent, useState } from "react";
 import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -29,7 +30,7 @@ export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSecond
     setBusy(true);
     const data = new FormData(event.currentTarget);
     try {
-      const result = await fetch(`/api/backend/applications/${applicationId}/rules`, {
+      const result = await fetch(appPath(`/api/backend/applications/${applicationId}/rules`), {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ manuallyBlocked: isBlocked, dailyLimitSeconds: limitEnabled ? Number(data.get("hours")) * 3600 + Number(data.get("minutes")) * 60 : null, schedule: editableToSchedule(days) }),
       });

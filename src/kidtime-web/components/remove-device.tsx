@@ -1,5 +1,6 @@
 "use client";
 
+import { appPath } from "@/lib/paths";
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -26,7 +27,7 @@ export function RemoveDevice({ deviceId, deviceName }: { deviceId: string; devic
     setBusy(true);
     setError("");
     try {
-      const response = await fetch(`/api/backend/devices/${deviceId}`, { method: "DELETE" });
+      const response = await fetch(appPath(`/api/backend/devices/${deviceId}`), { method: "DELETE" });
       if (!response.ok) {
         setError("The device could not be removed. Try again.");
         return;
