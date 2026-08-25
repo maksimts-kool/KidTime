@@ -70,7 +70,37 @@ public sealed record SessionUsageSample(
     int IdleSeconds,
     int ProcessId,
     string? WindowTitle,
-    ApplicationDescriptor? ForegroundApplication);
+    ApplicationDescriptor? ForegroundApplication,
+    bool StatusRequested = true);
+
+/// <summary>
+/// One agent-side fault worth showing the parent. Reports are diagnostics only: they never
+/// carry credentials, window titles, or any other content outside the documented privacy scope.
+/// </summary>
+public sealed record DiagnosticReport(
+    Guid ReportId,
+    DateTimeOffset OccurredAtUtc,
+    string Component,
+    string Severity,
+    string Message,
+    string? ExceptionType = null,
+    string? Detail = null,
+    string? AgentVersion = null);
+
+public sealed record DiagnosticReportBatch(IReadOnlyList<DiagnosticReport> Reports);
+
+public static class DiagnosticComponents
+{
+    public const string ControlService = "ControlService";
+    public const string SessionAgent = "SessionAgent";
+}
+
+public static class DiagnosticSeverities
+{
+    public const string Warning = "Warning";
+    public const string Error = "Error";
+    public const string Fatal = "Fatal";
+}
 
 public sealed record ParentRemovalRequest(string Email, string Password);
 
@@ -78,18 +108,26 @@ public sealed record DeviceRemovalResult(bool Accepted, string Message);
 
 public sealed record SessionAgentRequest(
     SessionUsageSample? UsageSample = null,
-    ParentRemovalRequest? RemovalRequest = null);
+    ParentRemovalRequest? RemovalRequest = null,
+    IReadOnlyList<DiagnosticReport>? Diagnostics = null);
 
 public sealed record SessionAgentResponse(
     EnforcementState? Enforcement = null,
     DeviceRemovalResult? Removal = null);
 
+/// <summary>
+/// A message for the controlled user. <paramref name="IsUrgent"/> selects the Windows "urgent"
+/// toast scenario, which stays on screen and breaks through Focus Assist; it is reserved for the
+/// final warning before Windows signs the session out or closes an application. Everything else
+/// - reminders, rule changes, availability, and completed updates - is an ordinary toast.
+/// </summary>
 public sealed record UserNotification(
     string Title,
     string Message,
     int? CountdownSeconds = null,
     string? PersistentNotificationKey = null,
-    bool DismissPersistentNotification = false);
+    bool DismissPersistentNotification = false,
+    bool IsUrgent = false);
 
 public sealed record ServerConnectionStatus(
     bool IsConnected,

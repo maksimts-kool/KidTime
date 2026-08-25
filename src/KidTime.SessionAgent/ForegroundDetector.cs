@@ -9,6 +9,9 @@ namespace KidTime.SessionAgent;
 
 internal static class ForegroundDetector
 {
+    private static readonly TimeSpan DescriptorRefreshInterval = TimeSpan.FromMinutes(10);
+    private static readonly Dictionary<string, CachedDescriptor> Descriptors = new(StringComparer.OrdinalIgnoreCase);
+
     public static (int ProcessId, string? WindowTitle, ApplicationDescriptor? Application) GetForeground()
     {
         var window = GetForegroundWindow();
@@ -20,25 +23,64 @@ internal static class ForegroundDetector
         {
             var path = ReadProcessPath(processId);
             if (string.IsNullOrWhiteSpace(path)) return ((int)processId, title, null);
-            var version = FileVersionInfo.GetVersionInfo(path);
-            return ((int)processId, title, new ApplicationDescriptor
-            {
-                DisplayName = First(version.ProductName, Path.GetFileNameWithoutExtension(path)),
-                ExecutableName = Path.GetFileName(path),
-                ExecutablePath = path,
-                ProductName = NullIfEmpty(version.ProductName),
-                OriginalFilename = NullIfEmpty(version.OriginalFilename),
-                Company = NullIfEmpty(version.CompanyName),
-                SignaturePublisher = ReadSignaturePublisher(path),
-                FileVersion = NullIfEmpty(version.FileVersion),
-                PackageFamilyName = ReadPackageFamilyName(processId)
-            });
+            return ((int)processId, title, DescribeApplication(path, processId));
         }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException
+                                          or IOException or UnauthorizedAccessException
+                                          or System.ComponentModel.Win32Exception)
         {
             return ((int)processId, title, null);
         }
     }
+
+    /// <summary>
+    /// Reading version metadata and parsing an Authenticode signature costs file I/O and a
+    /// certificate parse. The same executable stays in the foreground for minutes at a time and
+    /// this runs every two seconds, so the description is cached and only rebuilt when the file
+    /// on disk actually changes - which is what an application update looks like.
+    /// </summary>
+    private static ApplicationDescriptor DescribeApplication(string path, uint processId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (Descriptors.TryGetValue(path, out var cached))
+        {
+            if (now - cached.ValidatedAtUtc < DescriptorRefreshInterval) return cached.Descriptor;
+            var current = new FileInfo(path);
+            if (current.Exists && current.LastWriteTimeUtc == cached.LastWriteUtc && current.Length == cached.Length)
+            {
+                Descriptors[path] = cached with { ValidatedAtUtc = now };
+                return cached.Descriptor;
+            }
+        }
+
+        var file = new FileInfo(path);
+        var version = FileVersionInfo.GetVersionInfo(path);
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = First(version.ProductName, Path.GetFileNameWithoutExtension(path)),
+            ExecutableName = Path.GetFileName(path),
+            ExecutablePath = path,
+            ProductName = NullIfEmpty(version.ProductName),
+            OriginalFilename = NullIfEmpty(version.OriginalFilename),
+            Company = NullIfEmpty(version.CompanyName),
+            SignaturePublisher = ReadSignaturePublisher(path),
+            FileVersion = NullIfEmpty(version.FileVersion),
+            PackageFamilyName = ReadPackageFamilyName(processId)
+        };
+        if (Descriptors.Count >= 64) Descriptors.Clear();
+        Descriptors[path] = new CachedDescriptor(
+            descriptor,
+            file.Exists ? file.LastWriteTimeUtc : default,
+            file.Exists ? file.Length : 0,
+            now);
+        return descriptor;
+    }
+
+    private sealed record CachedDescriptor(
+        ApplicationDescriptor Descriptor,
+        DateTime LastWriteUtc,
+        long Length,
+        DateTimeOffset ValidatedAtUtc);
 
     private static uint ResolveApplicationProcess(IntPtr window, uint ownerProcessId)
     {
@@ -83,7 +125,11 @@ internal static class ForegroundDetector
 #pragma warning restore SYSLIB0026, SYSLIB0057
             return certificate.GetNameInfo(X509NameType.SimpleName, false);
         }
-        catch (CryptographicException) { return null; }
+        catch (Exception exception) when (exception is CryptographicException or IOException
+                                          or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     private static string? ReadProcessPath(uint processId)

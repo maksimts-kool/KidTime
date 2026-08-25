@@ -126,6 +126,31 @@ public sealed class DailyApplicationUsage
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>
+/// One fault reported by an enrolled PC, collapsed by fingerprint so a bug that repeats stays
+/// one row with a count. This is the only way a parent sees what went wrong on a device they
+/// usually cannot reach.
+/// </summary>
+public sealed class DeviceDiagnosticEvent
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid DeviceId { get; set; }
+    public Device Device { get; set; } = null!;
+    public Guid LastReportId { get; set; }
+    public required string Fingerprint { get; set; }
+    public required string Component { get; set; }
+    public required string Severity { get; set; }
+    public required string Message { get; set; }
+    public string? ExceptionType { get; set; }
+    public string? Detail { get; set; }
+    public string? AgentVersion { get; set; }
+    public int OccurrenceCount { get; set; } = 1;
+    public DateTimeOffset FirstOccurredAtUtc { get; set; }
+    public DateTimeOffset LastOccurredAtUtc { get; set; }
+    public DateTimeOffset ReceivedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? ResolvedAtUtc { get; set; }
+}
+
 public sealed class ProcessedUsageBatch
 {
     public Guid BatchId { get; set; }

@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text.Json;
+using KidTime.ControlService.Enforcement;
 using KidTime.ControlService.Infrastructure;
 using KidTime.Domain.Contracts;
 
@@ -9,13 +11,16 @@ namespace KidTime.ControlService.Server;
 public sealed class AgentUpdateWorker(
     AgentApiClient api,
     AgentUpdateState state,
+    EnforcementCoordinator coordinator,
     IHostApplicationLifetime lifetime,
     ILogger<AgentUpdateWorker> logger) : BackgroundService
 {
     private const string ServiceName = "KidTimeControl";
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        AnnounceCompletedUpdate();
         await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -102,6 +107,39 @@ public sealed class AgentUpdateWorker(
         await Task.Delay(500, cancellationToken);
         lifetime.StopApplication();
     }
+
+    /// <summary>
+    /// The updater script writes its outcome and restarts the service, so the first run after an
+    /// update is where the result is known. A success becomes one ordinary notification for the
+    /// child; a failure becomes an error the parent sees in the panel.
+    /// </summary>
+    private void AnnounceCompletedUpdate()
+    {
+        try
+        {
+            if (!File.Exists(AgentPaths.UpdateStatusFile)) return;
+            var outcome = JsonSerializer.Deserialize<UpdateOutcome>(
+                File.ReadAllText(AgentPaths.UpdateStatusFile), JsonOptions);
+            File.Delete(AgentPaths.UpdateStatusFile);
+            if (outcome is null) return;
+            if (!string.Equals(outcome.Status, "Installed", StringComparison.OrdinalIgnoreCase))
+            {
+                state.Set("Failed", outcome.Error);
+                logger.LogError("Automatic update to {Version} failed and was rolled back: {Error}",
+                    outcome.Version ?? "unknown", outcome.Error ?? "no detail reported");
+                return;
+            }
+
+            logger.LogInformation("Automatic update to {Version} completed.", state.CurrentVersion);
+            coordinator.NotifyServicesUpdated(state.CurrentVersion);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            logger.LogWarning(exception, "The recorded update outcome could not be read.");
+        }
+    }
+
+    private sealed record UpdateOutcome(string? Status, string? Version, string? Error);
 
     public static bool IsNewer(string availableVersion, string installedVersion) =>
         Version.TryParse(availableVersion, out var available)

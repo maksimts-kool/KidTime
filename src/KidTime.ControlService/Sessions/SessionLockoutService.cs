@@ -91,8 +91,7 @@ public sealed class SessionLockoutService(
         var firstWarning = await store.TryConsumeFirstPcBlockGraceAsync(
             BuildEpisodeKey(status), cancellationToken);
         var warningSeconds = firstWarning ? FirstWarningSeconds : RepeatWarningSeconds;
-        var message = BuildWarning(status, warningSeconds);
-        coordinator.NotifyPcSignOut(message, warningSeconds);
+        coordinator.NotifyPcSignOut(status.Decision, warningSeconds);
         logger.LogWarning("Persistent final warning queued for session {SessionId} ({User}); sign-out in {Seconds} seconds.",
             sessionId, user, warningSeconds);
 
@@ -105,17 +104,6 @@ public sealed class SessionLockoutService(
     private string BuildEpisodeKey(PcEnforcementStatus status) =>
         $"{coordinator.Rules.Revision}|{status.Decision.Reason}|{status.Decision.AvailableAtUtc?.UtcTicks}";
 
-    private static string BuildWarning(PcEnforcementStatus status, int warningSeconds)
-    {
-        var available = status.Decision.AvailableAtUtc is { } time
-            ? $"You can sign in again after {time.ToLocalTime():dddd, HH:mm}."
-            : "You can sign in again after your parent unlocks this PC.";
-        var usage = status.DailyLimitSeconds is int limit
-            ? $"\nUsed today: {FormatDuration(status.TodayActiveSeconds)} of {FormatDuration(limit)}."
-            : string.Empty;
-        return $"{status.Decision.Message}{usage}\n\nYou will be signed out in {warningSeconds} seconds.\n{available}";
-    }
-
     private void ResetSessionWarning()
     {
         _warnedSessionId = null;
@@ -123,6 +111,4 @@ public sealed class SessionLockoutService(
         _signOutIssued = false;
         _signOutAtTimestamp = 0;
     }
-
-    private static string FormatDuration(int seconds) => $"{seconds / 3600}h {(seconds % 3600) / 60:00}m";
 }

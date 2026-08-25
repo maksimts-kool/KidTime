@@ -36,6 +36,11 @@ public sealed class DevicesController(
         var now = timeProvider.GetUtcNow();
         var latestAgentVersion = updates.GetLatest()?.Manifest.Version;
         var devices = await dbContext.Devices.AsNoTracking().Include(x => x.Rule).ToListAsync(cancellationToken);
+        var faultCounts = await dbContext.DeviceDiagnosticEvents.AsNoTracking()
+            .Where(item => item.ResolvedAtUtc == null)
+            .GroupBy(item => item.DeviceId)
+            .Select(group => new { DeviceId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(entry => entry.DeviceId, entry => entry.Count, cancellationToken);
         var result = new List<object>(devices.Count);
         foreach (var device in devices)
         {
@@ -68,7 +73,8 @@ public sealed class DevicesController(
                     (device.Rule.ManualBlockUntilUtc is null || device.Rule.ManualBlockUntilUtc > now),
                 device.Rule.ManualBlockUntilUtc,
                 ruleRevision = device.Rule.Revision,
-                appliedRuleRevision = device.AppliedRuleRevision
+                appliedRuleRevision = device.AppliedRuleRevision,
+                unresolvedFaults = faultCounts.GetValueOrDefault(device.Id)
             });
         }
 

@@ -16,6 +16,7 @@ public sealed class KidTimeDbContext(DbContextOptions<KidTimeDbContext> options)
     public DbSet<DailyApplicationUsage> DailyApplicationUsages => Set<DailyApplicationUsage>();
     public DbSet<ProcessedUsageBatch> ProcessedUsageBatches => Set<ProcessedUsageBatch>();
     public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
+    public DbSet<DeviceDiagnosticEvent> DeviceDiagnosticEvents => Set<DeviceDiagnosticEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -118,6 +119,22 @@ public sealed class KidTimeDbContext(DbContextOptions<KidTimeDbContext> options)
             entity.HasKey(x => x.Id);
             entity.HasIndex(x => new { x.DeviceId, x.AcknowledgedAtUtc });
             entity.Property(x => x.Type).HasMaxLength(50);
+        });
+
+        modelBuilder.Entity<DeviceDiagnosticEvent>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => new { x.DeviceId, x.Fingerprint }).IsUnique();
+            entity.HasIndex(x => new { x.DeviceId, x.LastOccurredAtUtc });
+            entity.HasOne(x => x.Device).WithMany()
+                .HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+            entity.Property(x => x.Fingerprint).HasMaxLength(64);
+            entity.Property(x => x.Component).HasMaxLength(32);
+            entity.Property(x => x.Severity).HasMaxLength(16);
+            entity.Property(x => x.Message).HasMaxLength(300);
+            entity.Property(x => x.ExceptionType).HasMaxLength(200);
+            entity.Property(x => x.Detail).HasMaxLength(4000);
+            entity.Property(x => x.AgentVersion).HasMaxLength(50);
         });
     }
 }

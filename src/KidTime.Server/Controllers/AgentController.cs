@@ -236,6 +236,82 @@ public sealed class AgentController(
         return NoContent();
     }
 
+    /// <summary>
+    /// Accepts fault reports from an enrolled agent. Reports are untrusted input: every field is
+    /// re-normalized here, repeats collapse onto one row by fingerprint, an upload that is
+    /// retried after an uncertain response does not double count, and the per-device history is
+    /// capped so a crash loop cannot grow the database without bound.
+    /// </summary>
+    [Authorize(AuthenticationSchemes = DeviceAuthenticationDefaults.Scheme)]
+    [HttpPost("diagnostics")]
+    public async Task<IActionResult> ReportDiagnostics(DiagnosticReportBatch batch, CancellationToken cancellationToken)
+    {
+        if (batch.Reports.Count == 0) return NoContent();
+        var now = timeProvider.GetUtcNow();
+        foreach (var submitted in batch.Reports.Take(DiagnosticReportPolicy.MaximumReportsPerBatch))
+        {
+            var report = DiagnosticReportPolicy.Normalize(submitted);
+            var fingerprint = DiagnosticReportPolicy.CreateFingerprint(report);
+            var occurredAtUtc = report.OccurredAtUtc > now ? now : report.OccurredAtUtc;
+            var existing = await dbContext.DeviceDiagnosticEvents.SingleOrDefaultAsync(
+                item => item.DeviceId == DeviceId && item.Fingerprint == fingerprint,
+                cancellationToken);
+            if (existing is null)
+            {
+                dbContext.DeviceDiagnosticEvents.Add(new DeviceDiagnosticEvent
+                {
+                    DeviceId = DeviceId,
+                    LastReportId = report.ReportId,
+                    Fingerprint = fingerprint,
+                    Component = report.Component,
+                    Severity = report.Severity,
+                    Message = report.Message,
+                    ExceptionType = report.ExceptionType,
+                    Detail = report.Detail,
+                    AgentVersion = report.AgentVersion,
+                    FirstOccurredAtUtc = occurredAtUtc,
+                    LastOccurredAtUtc = occurredAtUtc,
+                    ReceivedAtUtc = now
+                });
+                continue;
+            }
+
+            if (existing.LastReportId == report.ReportId) continue;
+            existing.LastReportId = report.ReportId;
+            existing.OccurrenceCount++;
+            existing.Severity = report.Severity;
+            existing.Message = report.Message;
+            existing.ExceptionType = report.ExceptionType;
+            existing.Detail = report.Detail;
+            existing.AgentVersion = report.AgentVersion;
+            existing.LastOccurredAtUtc = occurredAtUtc;
+            existing.ReceivedAtUtc = now;
+            existing.ResolvedAtUtc = null;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await TrimDiagnosticsAsync(cancellationToken);
+        logger.LogInformation("Stored {Count} diagnostic report(s) from {DeviceId}.", batch.Reports.Count, DeviceId);
+        return NoContent();
+    }
+
+    private async Task TrimDiagnosticsAsync(CancellationToken cancellationToken)
+    {
+        const int keep = 200;
+        var total = await dbContext.DeviceDiagnosticEvents.CountAsync(
+            item => item.DeviceId == DeviceId, cancellationToken);
+        if (total <= keep) return;
+        var expired = await dbContext.DeviceDiagnosticEvents
+            .Where(item => item.DeviceId == DeviceId)
+            .OrderByDescending(item => item.LastOccurredAtUtc)
+            .Skip(keep)
+            .Select(item => item.Id)
+            .ToListAsync(cancellationToken);
+        await dbContext.DeviceDiagnosticEvents
+            .Where(item => expired.Contains(item.Id))
+            .ExecuteDeleteAsync(cancellationToken);
+    }
+
     [Authorize(AuthenticationSchemes = DeviceAuthenticationDefaults.Scheme)]
     [HttpPost("applications")]
     public async Task<IActionResult> DiscoverApplication(

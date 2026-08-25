@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, Monitor } from "lucide-react";
+import { ChevronRight, Monitor, TriangleAlert } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
 import { formatDuration, formatSeen } from "@/lib/format";
 import type { DeviceSummary } from "@/lib/types";
@@ -31,6 +31,12 @@ export default async function DevicesPage() {
                     <Badge variant={device.isAgentUpToDate ? "secondary" : "destructive"} className={device.isAgentUpToDate ? "text-primary" : undefined}>
                       {device.isAgentUpToDate ? `Services v${device.agentVersion} current` : device.agentUpdateStatus === "Installing" ? "Services updating" : `Services outdated${device.latestAgentVersion ? ` · v${device.latestAgentVersion} available` : ""}`}
                     </Badge>
+                    {device.unresolvedFaults > 0 && (
+                      <Badge variant="destructive" render={<Link href={`/diagnostics?deviceId=${device.id}`} />}>
+                        <TriangleAlert data-icon="inline-start" />
+                        {device.unresolvedFaults === 1 ? "1 error reported" : `${device.unresolvedFaults} errors reported`}
+                      </Badge>
+                    )}
                   </CardTitle>
                   <CardDescription>{device.windowsVersion} · Last seen {formatSeen(device.lastSeenUtc)}</CardDescription>
                   <CardAction className="flex items-center gap-2">

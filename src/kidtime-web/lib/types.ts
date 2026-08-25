@@ -21,6 +21,23 @@ export type DeviceSummary = {
   manualBlockUntilUtc: string | null;
   ruleRevision: number;
   appliedRuleRevision: number;
+  unresolvedFaults: number;
+};
+
+export type DiagnosticEvent = {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  component: string;
+  severity: string;
+  message: string;
+  exceptionType: string | null;
+  detail: string | null;
+  agentVersion: string | null;
+  occurrenceCount: number;
+  firstOccurredAtUtc: string;
+  lastOccurredAtUtc: string;
+  resolvedAtUtc: string | null;
 };
 
 export type TimeWindow = { start: string; end: string };

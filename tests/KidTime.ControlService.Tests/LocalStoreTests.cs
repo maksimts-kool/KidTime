@@ -110,11 +110,89 @@ public sealed class LocalStoreTests : IDisposable
 
         await coordinator.HandleSampleAsync(Sample(1, 0, 0, app), CancellationToken.None);
         await coordinator.HandleSampleAsync(Sample(2, 5_000, 600, app), CancellationToken.None);
+        await coordinator.FlushUsageAsync(CancellationToken.None);
         Assert.Equal(0, await store.GetUsageAsync(date, null, CancellationToken.None));
 
         await coordinator.HandleSampleAsync(Sample(3, 10_000, 0, app), CancellationToken.None);
+        await coordinator.FlushUsageAsync(CancellationToken.None);
         Assert.Equal(5, await store.GetUsageAsync(date, null, CancellationToken.None));
         Assert.Equal(5, await store.GetUsageAsync(date, ApplicationIdentity.CreateKey(app), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Counted_seconds_are_buffered_between_flushes_and_survive_a_restart()
+    {
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var clock = new TrustedClock();
+        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 1, TimeZoneId = "UTC", DailyLimitSeconds = 3_600 });
+        var app = Descriptor();
+        var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
+
+        await coordinator.HandleSampleAsync(Sample(1, 0, 0, app), CancellationToken.None);
+        var state = await coordinator.HandleSampleAsync(Sample(2, 20_000, 0, app), CancellationToken.None);
+
+        // Enforcement sees the seconds immediately even though the database has not been touched.
+        Assert.Equal(20, state.TodayActiveSeconds);
+        Assert.Equal(0, await store.GetUsageAsync(date, null, CancellationToken.None));
+
+        await coordinator.FlushUsageAsync(CancellationToken.None);
+        Assert.Equal(20, await store.GetUsageAsync(date, null, CancellationToken.None));
+
+        var reopened = new LocalStore(DatabaseFile);
+        await reopened.InitializeAsync(CancellationToken.None);
+        Assert.Equal(20, await reopened.GetUsageAsync(date, null, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Diagnostic_reports_are_queued_until_the_server_accepts_them()
+    {
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var report = new DiagnosticReport(
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow,
+            DiagnosticComponents.SessionAgent,
+            DiagnosticSeverities.Fatal,
+            "The KidTime tray agent stopped because of an unhandled error.",
+            "System.InvalidOperationException",
+            "at KidTime.SessionAgent.AgentApplicationHost..ctor()",
+            "0.2.21");
+        await store.QueueDiagnosticAsync(report, DiagnosticReportPolicy.CreateFingerprint(report), CancellationToken.None);
+
+        var reopened = new LocalStore(DatabaseFile);
+        await reopened.InitializeAsync(CancellationToken.None);
+        var pending = await reopened.GetPendingDiagnosticsAsync(CancellationToken.None);
+
+        var queued = Assert.Single(pending);
+        Assert.Equal(report.ReportId, queued.ReportId);
+        Assert.Equal(DiagnosticSeverities.Fatal, queued.Severity);
+
+        await reopened.CompleteDiagnosticsAsync([queued.ReportId], CancellationToken.None);
+        Assert.Empty(await reopened.GetPendingDiagnosticsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Reporting_a_fault_spools_it_and_flushing_moves_it_into_the_upload_queue()
+    {
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var reporter = new DiagnosticReporter(Path.Combine(_directory, "diagnostics.ndjson"));
+
+        reporter.ReportFatal("The control service stopped because of an unhandled exception.", new InvalidOperationException("boom"));
+        // A crash loop reports the same fault repeatedly; the queue keeps one entry for it.
+        reporter.ReportFatal("The control service stopped because of an unhandled exception.", new InvalidOperationException("boom"));
+        await reporter.FlushToStoreAsync(store, CancellationToken.None);
+
+        var pending = await store.GetPendingDiagnosticsAsync(CancellationToken.None);
+        var queued = Assert.Single(pending);
+        Assert.Equal(DiagnosticComponents.ControlService, queued.Component);
+        Assert.Equal("System.InvalidOperationException", queued.ExceptionType);
+        Assert.Contains("boom", queued.Detail);
     }
 
     [Fact]
@@ -163,8 +241,9 @@ public sealed class LocalStoreTests : IDisposable
         var state = await coordinator.HandleSampleAsync(Sample(1, 0, 0, app), CancellationToken.None);
 
         Assert.NotNull(state.Notification);
-        Assert.Equal("Test app time available", state.Notification.Title);
-        Assert.Contains("active time remains", state.Notification.Message);
+        Assert.Equal("Test app time", state.Notification.Title);
+        Assert.Contains("left today", state.Notification.Message);
+        Assert.False(state.Notification.IsUrgent);
     }
 
     [Fact]
@@ -183,7 +262,8 @@ public sealed class LocalStoreTests : IDisposable
 
         Assert.NotNull(state.Notification);
         Assert.Equal("PC time limit changed", state.Notification.Title);
-        Assert.Contains("2h to 1h", state.Notification.Message);
+        Assert.Contains("daily time is now 1h", state.Notification.Message);
+        Assert.False(state.Notification.IsUrgent);
     }
 
     [Fact]
@@ -222,7 +302,7 @@ public sealed class LocalStoreTests : IDisposable
 
         Assert.NotNull(state.Notification);
         Assert.Equal("Test app time limit changed", state.Notification.Title);
-        Assert.Contains("no limit to 1h", state.Notification.Message);
+        Assert.Contains("daily time is now 1h", state.Notification.Message);
     }
 
     [Fact]
@@ -273,26 +353,45 @@ public sealed class LocalStoreTests : IDisposable
             TimeZoneId = "UTC",
             Applications = [new ApplicationRuleSnapshot { IdentityKey = identity, DisplayName = "Test app", DailyLimitSeconds = 1000 }]
         });
-        await coordinator.HandleSampleAsync(Sample(1, 0, 0, app), CancellationToken.None);
+        var notifications = await AccrueAsync(coordinator, app, 800);
 
-        var state = await coordinator.HandleSampleAsync(Sample(2, 2_000, 0, app), CancellationToken.None);
+        var titles = notifications.Select(item => item.Title).ToList();
+        Assert.Contains("15 minutes of Test app left", titles);
+        Assert.Contains("5 minutes of Test app left", titles);
+        Assert.Contains("2 minutes of Test app left", titles);
+        Assert.All(notifications, item => Assert.Null(item.CountdownSeconds));
+        Assert.All(notifications, item => Assert.False(item.IsUrgent));
+    }
 
-        Assert.NotNull(state.Notification);
-        Assert.Equal("Test app time warning", state.Notification.Title);
-        Assert.Contains("15 minutes remaining", state.Notification.Message);
-        Assert.Null(state.Notification.CountdownSeconds);
+    /// <summary>
+    /// Feeds samples until the requested number of active seconds has been counted, the way the
+    /// tray agent does, and returns every notification the coordinator produced along the way.
+    /// </summary>
+    private static async Task<List<UserNotification>> AccrueAsync(
+        EnforcementCoordinator coordinator,
+        ApplicationDescriptor app,
+        int seconds)
+    {
+        var notifications = new List<UserNotification>();
+        long sequence = 1;
+        long elapsed = 0;
 
-        await store.AddUsageAsync(date, identity, 600, CancellationToken.None);
-        state = await coordinator.HandleSampleAsync(Sample(3, 2_000, 0, app), CancellationToken.None);
-        Assert.NotNull(state.Notification);
-        Assert.Contains("5 minutes remaining", state.Notification.Message);
-        Assert.Null(state.Notification.CountdownSeconds);
+        // The first sample establishes the monotonic baseline and counts nothing, exactly as the
+        // first sample after a service start does.
+        var first = await coordinator.HandleSampleAsync(Sample(sequence, elapsed, 0, app), CancellationToken.None);
+        if (first.Notification is { } opened) notifications.Add(opened);
 
-        await store.AddUsageAsync(date, identity, 180, CancellationToken.None);
-        state = await coordinator.HandleSampleAsync(Sample(4, 2_000, 0, app), CancellationToken.None);
-        Assert.NotNull(state.Notification);
-        Assert.Contains("2 minutes remaining", state.Notification.Message);
-        Assert.Null(state.Notification.CountdownSeconds);
+        var remaining = seconds;
+        while (remaining > 0)
+        {
+            var step = Math.Min(30, remaining);
+            remaining -= step;
+            sequence++;
+            elapsed += step * 1_000;
+            var state = await coordinator.HandleSampleAsync(Sample(sequence, elapsed, 0, app), CancellationToken.None);
+            if (state.Notification is { } notification) notifications.Add(notification);
+        }
+        return notifications;
     }
 
     [Fact]
@@ -308,14 +407,12 @@ public sealed class LocalStoreTests : IDisposable
         await store.AddUsageAsync(date, null, 99, CancellationToken.None);
         var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 11, TimeZoneId = "UTC", DailyLimitSeconds = 1000 });
-        await coordinator.HandleSampleAsync(Sample(1, 0, 0, app), CancellationToken.None);
+        var notifications = await AccrueAsync(coordinator, app, 60);
 
-        var state = await coordinator.HandleSampleAsync(Sample(2, 2_000, 0, app), CancellationToken.None);
-
-        Assert.NotNull(state.Notification);
-        Assert.Equal("PC time warning", state.Notification.Title);
-        Assert.Contains("sign you out", state.Notification.Message);
-        Assert.Null(state.Notification.CountdownSeconds);
+        var warning = Assert.Single(notifications, item => item.Title == "15 minutes of PC time left");
+        Assert.Contains("signs you out", warning.Message);
+        Assert.Null(warning.CountdownSeconds);
+        Assert.False(warning.IsUrgent);
     }
 
     [Fact]
@@ -339,6 +436,7 @@ public sealed class LocalStoreTests : IDisposable
             CancellationToken.None);
 
         Assert.NotNull(appWarning.Notification);
+        Assert.True(appWarning.Notification.IsUrgent);
         Assert.Equal(60, appWarning.Notification.CountdownSeconds);
         Assert.Equal("application:test-app", appWarning.Notification.PersistentNotificationKey);
         Assert.False(appWarning.Notification.DismissPersistentNotification);
@@ -352,12 +450,15 @@ public sealed class LocalStoreTests : IDisposable
         Assert.True(dismissal.Notification.DismissPersistentNotification);
         Assert.Equal("application:test-app", dismissal.Notification.PersistentNotificationKey);
 
-        coordinator.NotifyPcSignOut("Windows will sign you out in 60 seconds.", 60);
+        coordinator.NotifyPcSignOut(
+            new RuleDecision(false, BlockReason.DailyLimitReached, "The daily limit is reached."),
+            60);
         var pcWarning = await coordinator.HandleSampleAsync(
             new SessionUsageSample(3, 2_000, false, 0, Environment.ProcessId, "Desktop", null),
             CancellationToken.None);
 
         Assert.NotNull(pcWarning.Notification);
+        Assert.True(pcWarning.Notification.IsUrgent);
         Assert.Equal(60, pcWarning.Notification.CountdownSeconds);
         Assert.Equal("pc-sign-out", pcWarning.Notification.PersistentNotificationKey);
 

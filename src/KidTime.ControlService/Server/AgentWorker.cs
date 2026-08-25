@@ -2,7 +2,6 @@ using KidTime.ControlService.Enforcement;
 using KidTime.ControlService.Infrastructure;
 using KidTime.ControlService.Sessions;
 using KidTime.Domain.Contracts;
-using KidTime.Domain.Rules;
 
 namespace KidTime.ControlService.Server;
 
@@ -16,6 +15,7 @@ public sealed class AgentWorker(
     WindowsAccountProvider accounts,
     AgentUpdateState updateState,
     AgentRuntimeStatus runtimeStatus,
+    DiagnosticReporter diagnostics,
     ILogger<AgentWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -32,6 +32,20 @@ public sealed class AgentWorker(
         }
 
         await discovery.DiscoverAsync(stoppingToken);
+        try
+        {
+            await SynchronizationLoopAsync(stoppingToken);
+        }
+        finally
+        {
+            // Counted seconds are buffered in memory between flushes, so a service that is
+            // stopping - a restart, an automatic update, a shutdown - writes them out first.
+            await coordinator.FlushUsageAsync(CancellationToken.None);
+        }
+    }
+
+    private async Task SynchronizationLoopAsync(CancellationToken stoppingToken)
+    {
         var nextSync = DateTimeOffset.MinValue;
         var nextHeartbeat = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
@@ -66,14 +80,13 @@ public sealed class AgentWorker(
                 try
                 {
                     var rules = coordinator.Rules;
-                    var localDate = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), rules.TimeZoneId);
-                    var today = await store.GetUsageAsync(localDate, null, stoppingToken);
+                    var today = await coordinator.GetPcStatusAsync(stoppingToken);
                     var update = updateState.Snapshot;
                     await api.HeartbeatAsync(new DeviceHeartbeatRequest(
                         WindowsSession.GetActiveUserName(),
                         coordinator.ForegroundName,
                         coordinator.ForegroundIdentity,
-                        today,
+                        today.TodayActiveSeconds,
                         clock.GetUtcNow(),
                         rules.Revision,
                         await accounts.GetAccountsAsync(stoppingToken),
@@ -99,6 +112,9 @@ public sealed class AgentWorker(
 
     private async Task SynchronizeAsync(CancellationToken cancellationToken)
     {
+        await UploadDiagnosticsAsync(cancellationToken);
+        // Buffered seconds have to reach the database before the batch that uploads them is cut.
+        await coordinator.FlushUsageAsync(cancellationToken);
         foreach (var application in await store.GetApplicationsToSyncAsync(cancellationToken))
         {
             await api.UploadApplicationAsync(application, cancellationToken);
@@ -119,5 +135,18 @@ public sealed class AgentWorker(
         foreach (var command in sync.Commands)
             await api.AcknowledgeCommandAsync(command.Id, cancellationToken);
         logger.LogInformation("Synchronization completed at rule revision {Revision}.", sync.Rules.Revision);
+    }
+
+    /// <summary>
+    /// Faults are uploaded before rules and usage so a parent still learns about a failing PC
+    /// even when a later step of the same synchronization is what keeps failing.
+    /// </summary>
+    private async Task UploadDiagnosticsAsync(CancellationToken cancellationToken)
+    {
+        await diagnostics.FlushToStoreAsync(store, cancellationToken);
+        var pending = await store.GetPendingDiagnosticsAsync(cancellationToken);
+        if (pending.Count == 0) return;
+        await api.UploadDiagnosticsAsync(new DiagnosticReportBatch(pending), cancellationToken);
+        await store.CompleteDiagnosticsAsync(pending.Select(report => report.ReportId), cancellationToken);
     }
 }

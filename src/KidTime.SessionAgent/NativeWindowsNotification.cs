@@ -12,27 +12,31 @@ internal static class NativeWindowsNotification
     private static readonly object Gate = new();
     private static readonly Dictionary<string, ToastNotification> FinalWarnings = new(StringComparer.Ordinal);
 
-    public static void Show(string title, string message)
+    /// <summary>
+    /// Shows an ordinary toast. Only the final warning before a forced sign-out or close uses
+    /// the urgent scenario, which stays on screen and overrides Focus Assist; reminders, rule
+    /// changes, availability, and completed updates must not interrupt like that.
+    /// </summary>
+    public static void Show(string title, string message, bool isUrgent = false)
     {
         try
         {
-            var content = new ToastContentBuilder()
+            var builder = new ToastContentBuilder()
                 .AddText(title)
-                .AddText(message)
-                .AddAudio(new Uri("ms-winsoundevent:Notification.Reminder"))
-                .GetToastContent();
+                .AddText(message);
+            if (isUrgent) builder.AddAudio(new Uri("ms-winsoundevent:Notification.Reminder"));
             var xml = new XmlDocument();
-            xml.LoadXml(content.GetContent());
-            xml.DocumentElement.SetAttribute("scenario", "urgent");
+            xml.LoadXml(builder.GetToastContent().GetContent());
+            if (isUrgent) xml.DocumentElement.SetAttribute("scenario", "urgent");
             var toast = new ToastNotification(xml)
             {
                 Tag = Guid.NewGuid().ToString("N")[..16],
                 Group = "KidTime",
-                ExpirationTime = DateTimeOffset.Now.AddMinutes(15),
-                Priority = ToastNotificationPriority.High
+                ExpirationTime = DateTimeOffset.Now.AddMinutes(isUrgent ? 15 : 5),
+                Priority = isUrgent ? ToastNotificationPriority.High : ToastNotificationPriority.Default
             };
             ToastNotificationManagerCompat.CreateToastNotifier().Show(toast);
-            SessionLogger.Information($"Urgent native Windows notification shown: {title}");
+            SessionLogger.Information($"Native Windows notification shown ({(isUrgent ? "urgent" : "normal")}): {title}");
         }
         catch (Exception exception)
         {
@@ -54,11 +58,12 @@ internal static class NativeWindowsNotification
             if (previous is not null) TryHide(notifier, previous);
             RemoveFromHistory(tag);
 
+            // Two short lines only: the title carries the countdown, the body carries the
+            // reason. A child reading an urgent toast has seconds, not paragraphs.
             var content = new ToastContentBuilder()
                 .SetToastDuration(ToastDuration.Long)
                 .AddText(title)
                 .AddText(message)
-                .AddText($"Final warning - {Math.Max(1, countdownSeconds)} seconds remaining")
                 .AddAudio(new Uri("ms-winsoundevent:Notification.Reminder"))
                 .GetToastContent();
             var xml = new XmlDocument();

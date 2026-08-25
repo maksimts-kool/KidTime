@@ -3,6 +3,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
 using KidTime.ControlService.Enforcement;
+using KidTime.ControlService.Infrastructure;
 using KidTime.ControlService.Removal;
 using KidTime.ControlService.Server;
 using KidTime.ControlService.Sessions;
@@ -15,6 +16,7 @@ public sealed class NamedPipeHost(
     DeviceRemovalService removalService,
     AgentRuntimeStatus runtimeStatus,
     SessionAgentSupervisor supervisor,
+    DiagnosticReporter diagnostics,
     ILogger<NamedPipeHost> logger) : BackgroundService
 {
     public const string PipeName = "KidTime.ControlService.v1";
@@ -51,10 +53,16 @@ public sealed class NamedPipeHost(
         SessionAgentRequest request,
         CancellationToken cancellationToken)
     {
+        AcceptDiagnostics(request.Diagnostics);
+
         if (request is { UsageSample: { } sample, RemovalRequest: null })
         {
             var enforcement = await coordinator.HandleSampleAsync(sample, cancellationToken);
-            var status = await coordinator.GetUserStatusAsync(runtimeStatus.Snapshot, cancellationToken);
+            // The screen-time window is the only consumer of the full snapshot, and building it
+            // reads every application rule. The agent asks for it only while that window is open.
+            var status = sample.StatusRequested
+                ? await coordinator.GetUserStatusAsync(runtimeStatus.Snapshot, cancellationToken)
+                : null;
             return new SessionAgentResponse(Enforcement: enforcement with { Status = status });
         }
 
@@ -64,7 +72,23 @@ public sealed class NamedPipeHost(
             return new SessionAgentResponse(Removal: result);
         }
 
+        if (request is { UsageSample: null, RemovalRequest: null, Diagnostics.Count: > 0 })
+            return new SessionAgentResponse();
+
         throw new InvalidDataException("IPC request must contain exactly one supported operation.");
+    }
+
+    /// <summary>
+    /// Fault reports are the third and last shape this pipe accepts. They are inert data: the
+    /// component is stamped by the service rather than trusted from the message, every field is
+    /// truncated, and the batch is bounded, so the unelevated agent cannot use this path to
+    /// impersonate the service, flood the queue, or reach any privileged operation.
+    /// </summary>
+    private void AcceptDiagnostics(IReadOnlyList<DiagnosticReport>? reports)
+    {
+        if (reports is null) return;
+        foreach (var report in reports.Take(DiagnosticReportPolicy.MaximumReportsPerBatch))
+            diagnostics.Enqueue(DiagnosticReportPolicy.Normalize(report, DiagnosticComponents.SessionAgent));
     }
 
     private static NamedPipeServerStream CreatePipe()

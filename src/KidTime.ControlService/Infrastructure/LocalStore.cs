@@ -8,6 +8,7 @@ namespace KidTime.ControlService.Infrastructure;
 
 public sealed class LocalStore
 {
+    private const int MaximumQueuedDiagnostics = 200;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string _connectionString;
@@ -60,6 +61,12 @@ public sealed class LocalStore
                     batch_id TEXT PRIMARY KEY,
                     payload_json TEXT NOT NULL,
                     created_at_utc TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS diagnostics (
+                    report_id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    occurred_at_utc TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS application_block_grace (
                     identity_key TEXT NOT NULL,
@@ -331,6 +338,69 @@ public sealed class LocalStore
 
     public Task<bool> TryConsumeFirstPcBlockGraceAsync(string episodeKey, CancellationToken cancellationToken) =>
         TryConsumeFirstApplicationBlockGraceAsync("__pc__", episodeKey, cancellationToken);
+
+    /// <summary>
+    /// Queues one fault for upload. The queue is bounded so a component that fails in a loop
+    /// while the server is unreachable can never fill the controlled PC's disk.
+    /// </summary>
+    public async Task QueueDiagnosticAsync(
+        DiagnosticReport report,
+        string fingerprint,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken);
+            await using var insert = connection.CreateCommand();
+            insert.CommandText = """
+                INSERT INTO diagnostics(report_id,fingerprint,payload_json,occurred_at_utc)
+                VALUES($id,$fingerprint,$json,$occurred)
+                ON CONFLICT(report_id) DO NOTHING
+                """;
+            insert.Parameters.AddWithValue("$id", report.ReportId.ToString());
+            insert.Parameters.AddWithValue("$fingerprint", fingerprint);
+            insert.Parameters.AddWithValue("$json", JsonSerializer.Serialize(report, JsonOptions));
+            insert.Parameters.AddWithValue("$occurred", report.OccurredAtUtc.ToString("O"));
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+
+            await using var trim = connection.CreateCommand();
+            trim.CommandText = """
+                DELETE FROM diagnostics WHERE report_id IN (
+                    SELECT report_id FROM diagnostics ORDER BY occurred_at_utc DESC LIMIT -1 OFFSET $keep)
+                """;
+            trim.Parameters.AddWithValue("$keep", MaximumQueuedDiagnostics);
+            await trim.ExecuteNonQueryAsync(cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<IReadOnlyList<DiagnosticReport>> GetPendingDiagnosticsAsync(CancellationToken cancellationToken)
+    {
+        var reports = new List<DiagnosticReport>();
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT payload_json FROM diagnostics ORDER BY occurred_at_utc LIMIT $limit";
+            command.Parameters.AddWithValue("$limit", DiagnosticReportPolicy.MaximumReportsPerBatch);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (JsonSerializer.Deserialize<DiagnosticReport>(reader.GetString(0), JsonOptions) is { } report)
+                    reports.Add(report);
+            }
+        }
+        finally { _gate.Release(); }
+        return reports;
+    }
+
+    public async Task CompleteDiagnosticsAsync(IEnumerable<Guid> reportIds, CancellationToken cancellationToken)
+    {
+        foreach (var reportId in reportIds)
+            await ExecuteAsync("DELETE FROM diagnostics WHERE report_id=$id", cancellationToken, ("$id", reportId.ToString()));
+    }
 
     private async Task ExecuteAsync(string sql, CancellationToken cancellationToken, params (string Name, object Value)[] parameters)
     {

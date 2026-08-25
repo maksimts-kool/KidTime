@@ -2,7 +2,12 @@ using System.Text.Json;
 
 namespace KidTime.ControlService.Infrastructure;
 
-public sealed class JsonFileLoggerProvider(string path) : ILoggerProvider
+/// <summary>
+/// Writes the service log and, for <see cref="LogLevel.Error"/> and above, hands the same entry
+/// to <see cref="DiagnosticReporter"/> so the parent sees the failure in the web panel. Warnings
+/// stay local: offline synchronization and transient IPC retries are expected operation.
+/// </summary>
+public sealed class JsonFileLoggerProvider(string path, DiagnosticReporter? diagnostics = null) : ILoggerProvider
 {
     private readonly object _lock = new();
     private StreamWriter? _writer;
@@ -26,6 +31,8 @@ public sealed class JsonFileLoggerProvider(string path) : ILoggerProvider
             _writer.WriteLine(payload);
             _writer.Flush();
         }
+
+        if (level >= LogLevel.Error) diagnostics?.ReportError($"{category}: {message}", exception);
     }
 
     private StreamWriter CreateWriter()

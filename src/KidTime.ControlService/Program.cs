@@ -14,11 +14,26 @@ if (args.FirstOrDefault()?.Equals("enroll", StringComparison.OrdinalIgnoreCase) 
 }
 
 AgentPaths.EnsureDirectories();
+
+// The controlled PC is normally unreachable once it is handed over, so every fault has to end
+// up in the parent's panel. The reporter is created before the host so that a failure during
+// startup - the window where nothing else is wired yet - is still recorded and uploaded later.
+var diagnostics = new DiagnosticReporter();
+AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) => diagnostics.ReportFatal(
+    "The control service stopped because of an unhandled exception.",
+    eventArgs.ExceptionObject as Exception);
+TaskScheduler.UnobservedTaskException += (_, eventArgs) =>
+{
+    diagnostics.ReportError("A background task failed without being observed.", eventArgs.Exception);
+    eventArgs.SetObserved();
+};
+
 var builder = Host.CreateApplicationBuilder(args);
 builder.Configuration.AddJsonFile(AgentPaths.ConfigurationFile, optional: true, reloadOnChange: true);
 builder.Services.Configure<AgentOptions>(builder.Configuration.GetSection("Agent"));
 builder.Services.AddWindowsService(options => options.ServiceName = "KidTime Control Service");
-builder.Logging.AddProvider(new JsonFileLoggerProvider(AgentPaths.ServiceLogFile));
+builder.Logging.AddProvider(new JsonFileLoggerProvider(AgentPaths.ServiceLogFile, diagnostics));
+builder.Services.AddSingleton(diagnostics);
 builder.Services.AddSingleton<CredentialStore>();
 builder.Services.AddSingleton<LocalStore>();
 builder.Services.AddSingleton<AgentApiClient>();

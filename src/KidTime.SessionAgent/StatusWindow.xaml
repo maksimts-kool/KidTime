@@ -6,10 +6,10 @@
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  mc:Ignorable="d"
                  Title="KidTime"
-                 Width="980"
-                 Height="760"
-                 MinWidth="820"
-                 MinHeight="620"
+                 Width="920"
+                 Height="700"
+                 MinWidth="760"
+                 MinHeight="560"
                  WindowStartupLocation="CenterScreen"
                  ExtendsContentIntoTitleBar="True"
                  WindowBackdropType="Mica"
@@ -17,6 +17,8 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -26,319 +28,384 @@
                      ShowMaximize="True"
                      ShowMinimize="True" />
 
-        <ScrollViewer Grid.Row="1"
+        <Grid Grid.Row="1" Margin="30,10,30,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock FontFamily="Segoe UI Variable Display"
+                           FontSize="28"
+                           FontWeight="SemiBold"
+                           Text="Your time today" />
+                <TextBlock x:Name="HeadlineSubtitle"
+                           Margin="0,3,0,0"
+                           Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                           FontSize="13"
+                           Text="Connecting to the KidTime service" />
+            </StackPanel>
+            <ui:Badge x:Name="OverallBadge"
+                      Grid.Column="1"
+                      Margin="16,6,0,0"
+                      Padding="12,6"
+                      VerticalAlignment="Top"
+                      Appearance="Info"
+                      Content="Connecting" />
+        </Grid>
+
+        <!-- A four-button strip instead of a TabControl: only the visible panel stays in the
+             visual tree, so the window costs nothing to keep open on a slow PC. -->
+        <StackPanel Grid.Row="2" Margin="30,16,30,0" Orientation="Horizontal">
+            <ui:Button x:Name="TodayTabButton" Margin="0,0,8,0" Padding="14,7" Appearance="Primary" Click="TabButton_Click" Tag="Today">
+                <StackPanel Orientation="Horizontal">
+                    <ui:SymbolIcon Margin="0,0,8,0" Symbol="Timer24" FontSize="17" />
+                    <TextBlock Text="Today" />
+                </StackPanel>
+            </ui:Button>
+            <ui:Button x:Name="AppsTabButton" Margin="0,0,8,0" Padding="14,7" Appearance="Secondary" Click="TabButton_Click" Tag="Apps">
+                <StackPanel Orientation="Horizontal">
+                    <ui:SymbolIcon Margin="0,0,8,0" Symbol="AppsList24" FontSize="17" />
+                    <TextBlock Text="Apps" />
+                    <ui:Badge x:Name="AppsCountBadge" Margin="8,0,0,0" Padding="7,1" Appearance="Secondary" Content="0" />
+                </StackPanel>
+            </ui:Button>
+            <ui:Button x:Name="StatusTabButton" Margin="0,0,8,0" Padding="14,7" Appearance="Secondary" Click="TabButton_Click" Tag="Status">
+                <StackPanel Orientation="Horizontal">
+                    <ui:SymbolIcon Margin="0,0,8,0" Symbol="PlugConnected24" FontSize="17" />
+                    <TextBlock Text="Connection" />
+                </StackPanel>
+            </ui:Button>
+            <ui:Button x:Name="AboutTabButton" Padding="14,7" Appearance="Secondary" Click="TabButton_Click" Tag="About">
+                <StackPanel Orientation="Horizontal">
+                    <ui:SymbolIcon Margin="0,0,8,0" Symbol="Info24" FontSize="17" />
+                    <TextBlock Text="About" />
+                </StackPanel>
+            </ui:Button>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="3"
+                      Margin="0,4,0,0"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
-            <StackPanel MaxWidth="1120" Margin="30,20,30,32">
-                <Grid Margin="2,0,2,18">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock FontFamily="Segoe UI Variable Display"
-                                   FontSize="30"
-                                   FontWeight="SemiBold"
-                                   Text="Your time today" />
-                        <TextBlock Margin="0,5,0,0"
-                                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
-                                   FontSize="14"
-                                   Text="A live view of screen time, schedules, and controlled apps." />
-                    </StackPanel>
-                    <ui:Badge x:Name="OverallBadge"
-                              Grid.Column="1"
-                              Margin="16,6,0,0"
-                              Padding="12,6"
-                              VerticalAlignment="Top"
-                              Appearance="Info"
-                              Content="Connecting" />
-                </Grid>
+            <Grid Margin="30,14,30,28">
 
-                <ui:Card Margin="0,0,0,18" Padding="26">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="250" />
-                            <ColumnDefinition Width="24" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                <!-- Today -->
+                <StackPanel x:Name="TodayPanel">
+                    <ui:Card Padding="24">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="240" />
+                                <ColumnDefinition Width="24" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-                        <Grid Width="214" Height="214" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <ui:ProgressRing x:Name="DailyRing"
-                                             Width="204"
-                                             Height="204"
-                                             HorizontalAlignment="Center"
-                                             VerticalAlignment="Center"
-                                             CoverRingStroke="{ui:ThemeResource ControlStrokeColorDefaultBrush}"
-                                             IsIndeterminate="True"
-                                             Progress="0" />
-                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <TextBlock x:Name="RemainingText"
-                                           MaxWidth="150"
-                                           HorizontalAlignment="Center"
-                                           FontFamily="Segoe UI Variable Display"
-                                           FontSize="29"
+                            <Grid Width="204" Height="204" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <ui:ProgressRing x:Name="DailyRing"
+                                                 Width="196"
+                                                 Height="196"
+                                                 HorizontalAlignment="Center"
+                                                 VerticalAlignment="Center"
+                                                 CoverRingStroke="{ui:ThemeResource ControlStrokeColorDefaultBrush}"
+                                                 IsIndeterminate="True"
+                                                 Progress="0" />
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock x:Name="RemainingText"
+                                               MaxWidth="150"
+                                               HorizontalAlignment="Center"
+                                               FontFamily="Segoe UI Variable Display"
+                                               FontSize="29"
+                                               FontWeight="SemiBold"
+                                               Text="--"
+                                               TextAlignment="Center"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock x:Name="RemainingCaption"
+                                               Margin="0,4,0,0"
+                                               HorizontalAlignment="Center"
+                                               Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                               FontSize="13"
+                                               Text="loading time"
+                                               TextAlignment="Center" />
+                                </StackPanel>
+                            </Grid>
+
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                <TextBlock FontFamily="Segoe UI Variable Display"
+                                           FontSize="21"
                                            FontWeight="SemiBold"
-                                           Text="--"
-                                           TextAlignment="Center"
-                                           TextWrapping="Wrap" />
-                                <TextBlock x:Name="RemainingCaption"
-                                           Margin="0,4,0,0"
-                                           HorizontalAlignment="Center"
+                                           Text="Daily screen time" />
+                                <TextBlock x:Name="DailyUsageText"
+                                           Margin="0,5,0,18"
                                            Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
-                                           FontSize="13"
-                                           Text="loading time"
-                                           TextAlignment="Center" />
+                                           FontSize="14"
+                                           Text="Waiting for the service..." />
+
+                                <Border Padding="16,14"
+                                        Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
+                                        CornerRadius="10">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="34" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <ui:SymbolIcon Symbol="CalendarClock24" FontSize="22" />
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock FontSize="12"
+                                                           FontWeight="SemiBold"
+                                                           Text="WEEKLY SCHEDULE" />
+                                                <TextBlock x:Name="ScheduleHeadline"
+                                                           Margin="0,3,0,0"
+                                                           FontSize="15"
+                                                           FontWeight="SemiBold"
+                                                           Text="Loading schedule" />
+                                            </StackPanel>
+                                        </Grid>
+                                        <ProgressBar x:Name="ScheduleProgress"
+                                                     Grid.Row="1"
+                                                     Height="7"
+                                                     Margin="34,14,0,0"
+                                                     Maximum="100"
+                                                     Visibility="Collapsed" />
+                                        <TextBlock x:Name="ScheduleDetail"
+                                                   Grid.Row="2"
+                                                   Margin="34,8,0,0"
+                                                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                                   Text="Schedule information will appear here."
+                                                   TextWrapping="Wrap" />
+                                    </Grid>
+                                </Border>
+
+                                <ui:InfoBar x:Name="RestrictionInfo"
+                                            Margin="0,14,0,0"
+                                            IsClosable="False"
+                                            IsOpen="False"
+                                            Severity="Warning"
+                                            Title="Screen time unavailable" />
                             </StackPanel>
                         </Grid>
+                    </ui:Card>
+                </StackPanel>
 
-                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                            <TextBlock FontFamily="Segoe UI Variable Display"
-                                       FontSize="22"
-                                       FontWeight="SemiBold"
-                                       Text="Daily screen time" />
-                            <TextBlock x:Name="DailyUsageText"
-                                       Margin="0,5,0,18"
-                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
-                                       FontSize="14"
-                                       Text="Waiting for the service..." />
+                <!-- Apps -->
+                <StackPanel x:Name="AppsPanel" Visibility="Collapsed">
+                    <ui:Card x:Name="EmptyAppsCard" Padding="24">
+                        <StackPanel HorizontalAlignment="Center">
+                            <ui:SymbolIcon HorizontalAlignment="Center" Symbol="CheckmarkCircle24" FontSize="32" />
+                            <TextBlock Margin="0,10,0,0" HorizontalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="No app limits or blocks" />
+                            <TextBlock Margin="0,4,0,0" HorizontalAlignment="Center" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="Only apps your parent limits appear in this list." />
+                        </StackPanel>
+                    </ui:Card>
 
-                            <Border Padding="16,14"
-                                    Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
-                                    CornerRadius="10">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
+                    <ItemsControl x:Name="ApplicationsItems" Visibility="Collapsed">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <ui:Card Margin="0,0,0,10" Padding="18">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="34" />
+                                            <ColumnDefinition Width="50" />
                                             <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <ui:SymbolIcon Symbol="CalendarClock24" FontSize="22" />
-                                        <StackPanel Grid.Column="1">
-                                            <TextBlock FontSize="12"
-                                                       FontWeight="SemiBold"
-                                                       Text="WEEKLY SCHEDULE" />
-                                            <TextBlock x:Name="ScheduleHeadline"
-                                                       Margin="0,3,0,0"
-                                                       FontSize="15"
-                                                       FontWeight="SemiBold"
-                                                       Text="Loading schedule" />
-                                        </StackPanel>
-                                    </Grid>
-                                    <ProgressBar x:Name="ScheduleProgress"
-                                                 Grid.Row="1"
-                                                 Height="7"
-                                                 Margin="34,14,0,0"
-                                                 Maximum="100"
-                                                 Visibility="Collapsed" />
-                                    <TextBlock x:Name="ScheduleDetail"
-                                               Grid.Row="2"
-                                               Margin="34,8,0,0"
-                                               Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
-                                               Text="Schedule information will appear here."
-                                               TextWrapping="Wrap" />
-                                </Grid>
-                            </Border>
-
-                            <ui:InfoBar x:Name="RestrictionInfo"
-                                        Margin="0,14,0,0"
-                                        IsClosable="False"
-                                        IsOpen="False"
-                                        Severity="Warning"
-                                        Title="Screen time unavailable" />
-                        </StackPanel>
-                    </Grid>
-                </ui:Card>
-
-                <TextBlock Margin="2,0,0,10"
-                           FontFamily="Segoe UI Variable Display"
-                           FontSize="18"
-                           FontWeight="SemiBold"
-                           Text="Control status" />
-                <Grid Margin="0,0,0,22">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="12" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="12" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-
-                    <ui:Card Grid.Column="0" Padding="18">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="48" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Border Width="38" Height="38"
-                                    Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
-                                    CornerRadius="10">
-                                <ui:SymbolIcon x:Name="ServerIcon" Symbol="CloudCheckmark24" FontSize="22" />
-                            </Border>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock FontSize="12" FontWeight="SemiBold" Text="SERVER" />
-                                <TextBlock x:Name="ServerStatusText" Margin="0,3,0,0" FontSize="15" FontWeight="SemiBold" Text="Connecting" />
-                                <TextBlock x:Name="ServerDetailText" Margin="0,3,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="No contact yet" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                        </Grid>
-                    </ui:Card>
-
-                    <ui:Card Grid.Column="2" Padding="18">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="48" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Border Width="38" Height="38"
-                                    Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
-                                    CornerRadius="10">
-                                <ui:SymbolIcon x:Name="SyncIcon" Symbol="ArrowSync24" FontSize="22" />
-                            </Border>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock FontSize="12" FontWeight="SemiBold" Text="SYNCHRONIZATION" />
-                                <TextBlock x:Name="SyncStatusText" Margin="0,3,0,0" FontSize="15" FontWeight="SemiBold" Text="Waiting" />
-                                <TextBlock x:Name="SyncDetailText" Margin="0,3,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="Cached rules active" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                        </Grid>
-                    </ui:Card>
-
-                    <ui:Card Grid.Column="4" Padding="18">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="48" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Border Width="38" Height="38"
-                                    Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
-                                    CornerRadius="10">
-                                <ui:SymbolIcon Symbol="Person24" FontSize="22" />
-                            </Border>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock FontSize="12" FontWeight="SemiBold" Text="CONTROLLED PROFILE" />
-                                <TextBlock x:Name="ProfileStatusText" Margin="0,3,0,0" FontSize="15" FontWeight="SemiBold" Text="Loading" TextTrimming="CharacterEllipsis" />
-                                <TextBlock x:Name="ProfileDetailText" Margin="0,3,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="Rule revision --" />
-                            </StackPanel>
-                        </Grid>
-                    </ui:Card>
-                </Grid>
-
-                <Grid Margin="2,0,2,10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock FontFamily="Segoe UI Variable Display"
-                               FontSize="20"
-                               FontWeight="SemiBold"
-                               Text="Apps with limits or blocks" />
-                    <ui:Badge x:Name="AppsCountBadge"
-                              Grid.Column="1"
-                              Padding="9,4"
-                              Appearance="Secondary"
-                              Content="0" />
-                </Grid>
-
-                <ui:Card x:Name="EmptyAppsCard" Padding="24">
-                    <StackPanel HorizontalAlignment="Center">
-                        <ui:SymbolIcon HorizontalAlignment="Center" Symbol="CheckmarkCircle24" FontSize="32" />
-                        <TextBlock Margin="0,10,0,0" HorizontalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="No app limits or blocks" />
-                        <TextBlock Margin="0,4,0,0" HorizontalAlignment="Center" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="Only controlled apps appear in this list." />
-                    </StackPanel>
-                </ui:Card>
-
-                <ItemsControl x:Name="ApplicationsItems" Visibility="Collapsed">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <ui:Card Margin="0,0,0,10" Padding="18">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="50" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-
-                                    <Border Width="40" Height="40"
-                                            Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
-                                            CornerRadius="10">
-                                        <ui:SymbolIcon Symbol="AppGeneric24" FontSize="23" />
-                                    </Border>
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding DisplayName}" />
-                                        <TextBlock Margin="0,3,0,0"
-                                                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
-                                                   Text="{Binding DailySummary}" />
-                                    </StackPanel>
-                                    <ui:Badge Grid.Column="2"
-                                              Margin="12,3,0,0"
-                                              Padding="10,5"
-                                              VerticalAlignment="Top"
-                                              Appearance="{Binding StatusAppearance}"
-                                              Content="{Binding StatusText}" />
-
-                                    <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
-                                        <ProgressBar Height="6"
-                                                     Maximum="100"
-                                                     Value="{Binding DailyRemainingPercent}"
-                                                     Visibility="{Binding DailyProgressVisibility}" />
-                                        <StackPanel Grid.Row="1" Margin="0,9,0,0" Orientation="Horizontal">
-                                            <ui:SymbolIcon Margin="0,0,7,0" Symbol="CalendarClock20" FontSize="18" />
-                                            <TextBlock Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
-                                                       Text="{Binding ScheduleSummary}"
-                                                       TextWrapping="Wrap" />
-                                        </StackPanel>
-                                    </Grid>
-                                </Grid>
-                            </ui:Card>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
 
-                <ui:Card Margin="0,16,0,0" Padding="20">
+                                        <Border Width="40" Height="40"
+                                                Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
+                                                CornerRadius="10">
+                                            <ui:SymbolIcon Symbol="AppGeneric24" FontSize="23" />
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding DisplayName}" />
+                                            <TextBlock Margin="0,3,0,0"
+                                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                                       Text="{Binding DailySummary}" />
+                                        </StackPanel>
+                                        <ui:Badge Grid.Column="2"
+                                                  Margin="12,3,0,0"
+                                                  Padding="10,5"
+                                                  VerticalAlignment="Top"
+                                                  Appearance="{Binding StatusAppearance}"
+                                                  Content="{Binding StatusText}" />
+
+                                        <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <ProgressBar Height="6"
+                                                         Maximum="100"
+                                                         Value="{Binding DailyRemainingPercent}"
+                                                         Visibility="{Binding DailyProgressVisibility}" />
+                                            <StackPanel Grid.Row="1" Margin="0,9,0,0" Orientation="Horizontal">
+                                                <ui:SymbolIcon Margin="0,0,7,0" Symbol="CalendarClock20" FontSize="18" />
+                                                <TextBlock Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                                           Text="{Binding ScheduleSummary}"
+                                                           TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Grid>
+                                </ui:Card>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- Connection -->
+                <StackPanel x:Name="StatusPanel" Visibility="Collapsed">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Margin="0,0,20,0">
-                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="Remove KidTime from this PC" />
-                            <TextBlock Margin="0,4,0,0"
-                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
-                                       Text="A parent must sign in online before the Windows service, local rules, usage data, and program files can be removed."
-                                       TextWrapping="Wrap" />
-                            <ui:InfoBar x:Name="RemovalInfo"
-                                        Margin="0,12,0,0"
-                                        IsClosable="False"
-                                        IsOpen="False" />
-                        </StackPanel>
-                        <ui:Button x:Name="RemoveKidTimeButton"
-                                   Grid.Column="1"
-                                   VerticalAlignment="Center"
-                                   Appearance="Danger"
-                                   Click="RemoveKidTimeButton_Click"
-                                   Content="Remove KidTime" />
-                    </Grid>
-                </ui:Card>
 
-                <TextBlock x:Name="UpdatedText"
-                           Margin="2,8,2,0"
-                           HorizontalAlignment="Right"
-                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                           FontSize="12"
-                           Text="Waiting for live status" />
-            </StackPanel>
+                        <ui:Card Grid.Column="0" Padding="18">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="48" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border Width="38" Height="38"
+                                        Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
+                                        CornerRadius="10">
+                                    <ui:SymbolIcon x:Name="ServerIcon" Symbol="CloudCheckmark24" FontSize="22" />
+                                </Border>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock FontSize="12" FontWeight="SemiBold" Text="SERVER" />
+                                    <TextBlock x:Name="ServerStatusText" Margin="0,3,0,0" FontSize="15" FontWeight="SemiBold" Text="Connecting" />
+                                    <TextBlock x:Name="ServerDetailText" Margin="0,3,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="No contact yet" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Grid>
+                        </ui:Card>
+
+                        <ui:Card Grid.Column="2" Padding="18">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="48" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border Width="38" Height="38"
+                                        Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
+                                        CornerRadius="10">
+                                    <ui:SymbolIcon x:Name="SyncIcon" Symbol="ArrowSync24" FontSize="22" />
+                                </Border>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock FontSize="12" FontWeight="SemiBold" Text="SYNCHRONIZATION" />
+                                    <TextBlock x:Name="SyncStatusText" Margin="0,3,0,0" FontSize="15" FontWeight="SemiBold" Text="Waiting" />
+                                    <TextBlock x:Name="SyncDetailText" Margin="0,3,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="Cached rules active" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Grid>
+                        </ui:Card>
+
+                        <ui:Card Grid.Column="4" Padding="18">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="48" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border Width="38" Height="38"
+                                        Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
+                                        CornerRadius="10">
+                                    <ui:SymbolIcon Symbol="Person24" FontSize="22" />
+                                </Border>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock FontSize="12" FontWeight="SemiBold" Text="CONTROLLED PROFILE" />
+                                    <TextBlock x:Name="ProfileStatusText" Margin="0,3,0,0" FontSize="15" FontWeight="SemiBold" Text="Loading" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="ProfileDetailText" Margin="0,3,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="Rule revision --" />
+                                </StackPanel>
+                            </Grid>
+                        </ui:Card>
+                    </Grid>
+
+                    <TextBlock x:Name="UpdatedText"
+                               Margin="2,12,2,0"
+                               HorizontalAlignment="Right"
+                               Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                               FontSize="12"
+                               Text="Waiting for live status" />
+                </StackPanel>
+
+                <!-- About -->
+                <StackPanel x:Name="AboutPanel" Visibility="Collapsed">
+                    <ui:Card Padding="22">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Width="52" Height="52" Margin="0,0,18,0"
+                                    Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="12">
+                                <ui:SymbolIcon Symbol="ShieldCheckmark24" FontSize="28" />
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock FontSize="18" FontWeight="SemiBold" Text="KidTime" />
+                                <TextBlock x:Name="VersionText"
+                                           Margin="0,3,0,0"
+                                           Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                           Text="Version" />
+                                <TextBlock x:Name="UpdateChannelText"
+                                           Margin="0,2,0,0"
+                                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                           FontSize="12"
+                                           Text="KidTime updates itself in the background." />
+                            </StackPanel>
+                        </Grid>
+                    </ui:Card>
+
+                    <ui:Card Margin="0,12,0,0" Padding="22">
+                        <StackPanel>
+                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="What KidTime sees" />
+                            <TextBlock Margin="0,6,0,0"
+                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Active time on this PC and which app is in front. That is all."
+                                       TextWrapping="Wrap" />
+                            <TextBlock Margin="0,10,0,0" FontSize="16" FontWeight="SemiBold" Text="What KidTime never sees" />
+                            <TextBlock Margin="0,6,0,0"
+                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Websites, searches, messages, keystrokes, your screen, your camera, or your microphone."
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card Margin="0,12,0,0" Padding="20">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Margin="0,0,20,0">
+                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="Remove KidTime from this PC" />
+                                <TextBlock Margin="0,4,0,0"
+                                           Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                           Text="A parent must sign in online before the Windows service, local rules, usage data, and program files can be removed."
+                                           TextWrapping="Wrap" />
+                                <ui:InfoBar x:Name="RemovalInfo"
+                                            Margin="0,12,0,0"
+                                            IsClosable="False"
+                                            IsOpen="False" />
+                            </StackPanel>
+                            <ui:Button x:Name="RemoveKidTimeButton"
+                                       Grid.Column="1"
+                                       VerticalAlignment="Center"
+                                       Appearance="Danger"
+                                       Click="RemoveKidTimeButton_Click"
+                                       Content="Remove KidTime" />
+                        </Grid>
+                    </ui:Card>
+                </StackPanel>
+            </Grid>
         </ScrollViewer>
 
-        <ui:ContentDialogHost x:Name="RootContentDialogHost" Grid.RowSpan="2" />
+        <ui:ContentDialogHost x:Name="RootContentDialogHost" Grid.RowSpan="4" />
     </Grid>
 </ui:FluentWindow>

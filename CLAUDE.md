@@ -1,0 +1,496 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+It is also the repository's only long-form document. Architecture, security rationale, verification
+steps, and troubleshooting live here; `README.md` stays a compact deployment guide and should not
+grow prose that belongs in this file.
+
+## What this is
+
+KidTime is a self-hosted Windows screen-time and application-control system. Two halves live in one
+repo:
+
+- **Server half** (cross-platform, Docker on Ubuntu): `src/KidTime.Server` (ASP.NET Core API +
+  SignalR + PostgreSQL) and `src/kidtime-web` (Next.js parent panel).
+- **Agent half** (Windows-only, installed on the controlled PC): `src/KidTime.ControlService`
+  (LocalSystem worker service — the enforcement boundary), `src/KidTime.SessionAgent` (WPF tray UI
+  in the child's session), `src/KidTime.Setup` (WPF installer, `KidTimeSetup.exe`).
+- `src/KidTime.Domain` is shared by both halves: rule models and evaluator, wire contracts,
+  application identity and catalog policy. Anything both sides must agree on belongs here.
+
+## Commands
+
+The full solution contains `net10.0-windows` projects, so a complete build/test only works on
+Windows. On Linux only the cross-platform half builds.
+
+```powershell
+dotnet build KidTime.slnx
+dotnet test KidTime.slnx
+```
+
+```bash
+dotnet test tests/KidTime.Domain.Tests
+```
+
+Single test or class (xunit via VSTest):
+
+```bash
+dotnet test tests/KidTime.Domain.Tests --filter "FullyQualifiedName~RuleEvaluatorTests"
+```
+
+Web panel — `npm run build`, `npm run lint`, and `npm run dev` (which needs `KIDTIME_API_URL`
+exported):
+
+```bash
+cd src/kidtime-web && npm run build
+```
+
+Server locally, with `ConnectionStrings__KidTime`, `Jwt__SigningKey`, `Admin__Email`, and
+`Admin__Password` exported from `.env` and `docker compose up -d postgres` already running. Compose
+interpolates the whole file even when a single service starts, so a complete `.env` must exist
+either way:
+
+```bash
+dotnet run --project src/KidTime.Server
+```
+
+For a self-signed API certificate, the containerized web path is the supported development setup,
+because it reaches the API over the internal HTTP endpoint instead of the pinned one.
+
+EF migrations use the repo-pinned local tool and land in `Data/Migrations`:
+
+```bash
+dotnet tool restore
+dotnet tool run dotnet-ef migrations add <Name> --project src/KidTime.Server/KidTime.Server.csproj --startup-project src/KidTime.Server/KidTime.Server.csproj --output-dir Data/Migrations
+```
+
+`DatabaseInitializer` applies checked-in migrations at startup and seeds the first parent account
+from `Admin__*`. Never `EnsureCreated` against PostgreSQL. The `Admin__*` variables seed only the
+first account; they do not rotate an existing password.
+
+Windows agent release (Windows build machine only — WPF plus IExpress):
+
+```powershell
+./scripts/build-agent.ps1
+```
+
+It publishes self-contained single-file binaries, writes `artifacts/releases/{latest.json,
+kidtime-agent-<version>.zip, KidTimeSetup.exe}`, and embeds the same ZIP into setup as a resource.
+`scripts/publish-agent-release.sh <dir>` installs that upload on the server, verifying size and
+SHA-256 before writing `latest.json` last, so the server never advertises a package that has not
+fully landed. `scripts/initialize-server.sh` generates all secrets, the self-signed certificate,
+and `.env`.
+
+## Architecture
+
+### Enforcement boundary
+
+`ControlService` is the only component trusted to hold device credentials, cache rules, count
+accepted samples, decide allow/block state, terminate blocked processes, and supervise
+`SessionAgent`. It runs as LocalSystem. `SessionAgent` runs unelevated in the logged-in desktop
+because services cannot safely provide ordinary interactive UI.
+
+Enforcement is scoped to exactly one Windows SID. The parent selects one enabled Standard User; its
+SID is cached in the rule snapshot, and the service launches SessionAgent, counts usage, terminates
+apps, and signs out sessions **only when that exact SID owns the active console session**. With no
+selected SID, enforcement is inactive. Administrator accounts are reported but cannot be selected,
+and the server rejects an administrator or disabled account at enrollment independently of setup.
+
+The named pipe is a trust boundary, not a convenience channel. `NamedPipeHost` grants
+transport-level read/write to authenticated local users so the Standard User's SessionAgent can
+connect, but accepts a connection only when the kernel-reported client process ID matches the exact
+SessionAgent that `SessionAgentSupervisor` launched and supervises. The SessionAgent process DACL
+grants control only to LocalSystem and administrators. Messages are length-bounded and permit
+exactly three request shapes: a foreground telemetry sample, a parent-login removal request, or a
+batch of fault reports. The reports are inert data - the service stamps the component itself,
+truncates every field through `DiagnosticReportPolicy`, and bounds the batch - so the unelevated
+agent cannot use them to impersonate the service or reach a privileged operation. **Do not widen
+the protocol** to let the unelevated agent submit rules or arbitrary privileged commands.
+The service accepts the removal request only after the parent credentials succeed against the
+certificate-pinned server, and never logs those credentials.
+
+A local administrator remains outside the security boundary: an administrator can take ownership,
+alter files, stop protected services, boot to recovery, or change accounts. KidTime therefore
+requires a separate Standard User for the controlled child, and the administrator account used for
+deployment must not be the child's everyday account.
+
+### Request paths and authentication
+
+Two authentication schemes coexist on the same API. Parent endpoints use JWT bearer; agent endpoints
+(`api/agent/*` and the `/hubs/device` SignalR hub) use `DeviceAuthenticationHandler`, a custom scheme
+validating the SHA-256 digest of the device credential. Both are wired in
+`src/KidTime.Server/Program.cs`.
+
+The browser never holds a JWT. `src/kidtime-web/app/api/session/route.ts` exchanges the login for an
+HTTP-only, strict-same-site cookie; server components read the API through `lib/backend.ts` and
+client components through the catch-all proxy `app/api/backend/[...path]/route.ts`. Add new API
+calls through those two, never by fetching the backend directly from the browser.
+
+### Rule flow
+
+1. Parent edits rules → `DevicesController` / `ApplicationsController` mutate the rule row,
+   **increment `DeviceRule.Revision`**, insert a `DeviceCommand`, and push it over
+   `IHubContext<DeviceHub>` to the `device:<id>` group. Revision bumping and the SignalR push must
+   stay together — the agent detects change by revision.
+2. `RuleSnapshotFactory` flattens device and application rules into the `DeviceRuleSnapshot` that
+   crosses the wire, filtering out non-user-manageable apps via `ApplicationCatalogPolicy`.
+3. `AgentWorker` is the sync loop: upload discovered apps → upload durable usage batches →
+   `GET api/agent/sync` → persist the snapshot to SQLite → `EnforcementCoordinator.UpdateRules` →
+   acknowledge commands. SignalR only nudges `SyncTrigger`; periodic polling remains the fallback and
+   **enforcement never depends on the hub**.
+4. `SessionAgent` samples the foreground window every two seconds and sends it over the named pipe.
+   `EnforcementCoordinator.HandleSampleAsync` is the single place that counts time, evaluates
+   `RuleEvaluator`, queues notifications, and produces `EnforcementState`.
+
+### Fault reporting
+
+Once a PC is handed over it is normally unreachable, so **every fault has to reach the parent's
+panel by itself**. The pipeline is one-way and durable at each hop:
+
+1. `SessionAgent` installs `DispatcherUnhandledException`, `AppDomain.UnhandledException`, and
+   `TaskScheduler.UnobservedTaskException` handlers, calls `SetErrorMode` so a crash can never
+   leave a Windows error dialog on the child's screen, and writes each fault to a spool file in
+   `%LOCALAPPDATA%\KidTime\logs`. A dispatcher fault is marked handled and the agent keeps
+   running: while it is gone there are no notifications and no usage samples.
+2. The spool travels to `ControlService` on the next pipe exchange and is only deleted after the
+   service answers, so a fault survives a crash-restart loop.
+3. In `ControlService`, `DiagnosticReporter` also receives its own unhandled exceptions and every
+   `LogError`/`LogCritical` written through `JsonFileLoggerProvider`. Warnings stay local -
+   offline synchronization and IPC retries are expected operation, not defects. Reports are
+   appended to a bounded spool, moved into the SQLite queue, and uploaded during synchronization
+   before rules and usage, so a PC that fails at a later step still reports why.
+4. `POST api/agent/diagnostics` re-normalizes every field, collapses repeats onto one row by
+   fingerprint (digits are folded out, so counters and process ids do not fragment one bug),
+   ignores a retried upload by `LastReportId`, and caps the history per device.
+5. The panel's **Error log** page lists unresolved faults with device, component, severity, count,
+   agent version, and stack trace, and the devices page badges a PC that has reports waiting.
+
+Repeat suppression exists at both ends: the agent spools one report per fingerprint per five
+minutes, and the server counts occurrences instead of inserting rows. Setup runs before any device
+exists and therefore cannot report anywhere - it writes `%LOCALAPPDATA%\KidTime\logs\setup.ndjson`
+and shows the failure instead.
+
+### Rule precedence
+
+A PC or application is unavailable when any relevant rule denies it, in this order:
+
+1. active manual block;
+2. active-time daily total greater than or equal to the limit;
+3. current device-local time outside the weekly schedule.
+
+PC rules are evaluated before the interactive desktop is exposed. Application rules are evaluated at
+process discovery and again while the application is foreground, so reaching a limit closes an
+already-running application too. Overnight schedule windows are evaluated against both the current
+and the previous weekday.
+
+### Active time and the trusted clock
+
+`SessionAgent` samples the foreground window/process and `GetLastInputInfo` every two seconds.
+`ControlService` applies the configured idle threshold and counts only accepted foreground samples,
+so usage is always lower than elapsed login time.
+
+`EnforcementCoordinator` is the only writer of local usage, so it keeps the running totals in
+memory and writes them back at most every ten seconds, before a usage batch is cut, and while the
+service is stopping. Enforcement always reads the in-memory total, so a limit is still exact to the
+second; a hard crash can lose at most the seconds since the last flush. **Do not read usage
+straight from `LocalStore` in an evaluation path** - it will miss the buffered seconds.
+
+Durations come from `Stopwatch` monotonic elapsed milliseconds, never from subtracting wall-clock
+timestamps. A single sample delta is capped at 30 seconds so suspend/resume or a stalled client
+cannot create a large jump. Fractional seconds stay in memory until a full second can be persisted.
+
+The service anchors its working UTC clock to monotonic time, and every successful sync replaces that
+anchor with `ServerUtcNow`, so an ordinary wall-clock edit during the running service cannot shift
+schedules or reset a daily limit. Device-local dates and weekdays come from the configured Windows
+timezone. **Use `TrustedClock` in enforcement paths, not `DateTimeOffset.UtcNow`.** A LocalSystem
+service restart while completely offline necessarily begins from the machine clock; defending that
+boundary robustly would need a trusted external clock or stronger anti-tamper, and is documented
+rather than hidden.
+
+### Offline storage and synchronization
+
+SQLite uses WAL, `synchronous=FULL`, and transactions. `LocalStore` holds the last validated rule
+snapshot and revision, per-local-date PC and application totals, pending usage totals, discovered
+application descriptors and their sync state, and durable idempotent usage batches.
+
+**Offline never means allow.** The cached snapshot keeps being enforced when the server is
+unreachable, and the service never falls back to permitting everything. New usage accumulates
+locally; after reconnection the agent uploads discovered applications, uploads durable usage
+batches, refreshes rules, acknowledges commands, and resumes SignalR.
+
+**Usage accounting is idempotent.** Pending counters move into a batch and zero in the same
+transaction. The server records every batch ID (`ProcessedUsageBatch`) before acknowledging, so an
+uncertain retry cannot double-count, and the agent deletes a batch only after a successful response.
+Do not add a path that counts time outside this pipeline.
+
+### Application identity and the catalog
+
+`ApplicationIdentity.CreateKey` builds a stable key, preferring in order:
+
+1. MSIX package family identity;
+2. signature publisher plus product and executable name;
+3. signature publisher plus original filename when product metadata is absent;
+4. product plus original filename;
+5. normalized executable path and filename as a last resort.
+
+File version and SHA-256 may be recorded for diagnosis but do not participate in a signed
+application's stable key, so normal updates can move paths, change hashes, and change versions
+without losing the rule. **Changing this precedence breaks existing rules.** Matching also uses a
+weighted publisher/product/original-name score for diagnostics and migration.
+
+The management catalog includes interactive Win32 and MSIX applications such as browsers, Notepad,
+Xbox, Calculator, and Photos. When Windows places a packaged app inside `ApplicationFrameHost`,
+SessionAgent resolves the packaged child process before creating its identity.
+`ApplicationCatalogPolicy` excludes Windows operating-system processes, services, helper packages,
+compatibility components, runtimes, updaters, installers, and KidTime itself. Foreground PC time
+still counts when a non-manageable shell surface is active, but those components never get
+application cards or rules.
+
+### Secrets, enrollment, and removal
+
+- Parent passwords use ASP.NET Core's versioned `PasswordHasher` format.
+- Parent API tokens are signed with a random, installation-specific HMAC key and expire after 12
+  hours.
+- The browser never exposes the JWT to client JavaScript; Next.js stores it in an HTTP-only, strict
+  same-site cookie and proxies API calls.
+- Enrollment tokens are random, single-use, short-lived, and stored server-side only as SHA-256
+  digests. Device credentials are independent random values, also stored only as digests.
+- On Windows the raw device credential is DPAPI LocalMachine protected, and its file ACL permits
+  only LocalSystem and administrators.
+- ASP.NET Data Protection keys persist in a dedicated Docker volume, writable only by the non-root
+  application UID and encrypted with the mounted HTTPS certificate.
+- **Logs intentionally omit** passwords, JWTs, device tokens, enrollment tokens, and certificate
+  passwords.
+
+Enrollment is driven from the signed-in web panel. The code contains only the one-time enrollment
+token and the server certificate fingerprint, optionally wrapped with the public server URL as a
+single setup code; it carries no parent credential, no device credential, and no rule data, so an
+intercepted code can do nothing beyond enrolling one PC before it expires or is redeemed. The setup
+executable is downloadable only by an authenticated parent, is served with its published version,
+byte size, and SHA-256 digest, and embeds the same agent package the automatic updater verifies.
+Setup requires normal Windows administrator elevation, refuses to enroll a PC that already holds a
+device credential, and offers only enabled non-administrator local accounts. `ControlService` has a
+hidden `enroll` subcommand (`EnrollmentCommand`) that setup shells out to before the service starts.
+
+Removal has two independent paths. The web panel permanently deletes a device's rules, usage,
+application associations, enrollment record, and credentials — revoking agent API access, but
+deliberately not pretending to uninstall software on a possibly offline PC. Local removal starts in
+the controlled user's screen-time window, requires fresh parent email/password verification against
+the server, and uses the returned parent JWT only inside the LocalSystem service to delete the
+matching device; a protected LocalSystem helper then stops and deletes the service and removes the
+fixed `Program Files\KidTime` and `ProgramData\KidTime` directories. It is unavailable offline, and
+remains possible after web-only deletion because parent authentication is independent of the device
+credential and an already-absent server device is treated as removed.
+
+The self-signed certificate from `scripts/initialize-server.sh` is pinned by SHA-256 on the agent.
+The agent applies ordinary chain and hostname validation first and consults the pin only when that
+fails, which is what makes a direct LAN deployment trustworthy without a public CA. Publishing the
+agent API behind a reverse proxy with a publicly trusted certificate therefore survives ordinary
+renewals: the renewed certificate still validates by chain and the stale pin is never reached.
+Replacing the certificate on a deployment that actually depends on the pin does require re-enrolling
+or re-pinning. The private key lives only on the Docker host in the directory mounted read-only at
+`/https`; the file is world-readable so the non-root container can load it, and the PKCS#12 password
+is held in the untracked environment file.
+
+### PC blocking, notifications, and anti-tamper
+
+When a PC rule blocks access, the LocalSystem service queues a tagged native Windows final-warning
+notification stating the reason, usage where applicable, and the next available time. The first
+warning in a PC restriction episode lasts 60 seconds; signing in again while the same restriction is
+active gets 20 seconds. That grace state is persisted locally across service restarts. The service
+owns the monotonic deadline and then calls `WTSLogoffSession`; **notification delivery is never
+trusted for enforcement.** The notification has an explicit expiration and no custom topmost window
+exists to become stranded. If the parent dismisses the restriction during the countdown, a keyed
+dismissal hides the toast, removes it from Notification Center, and cancels sign-out. When the rule
+ends, a normal notification says the PC is available and repeats the prior reason.
+
+The tray window is a four-panel view - Today, Apps, Connection, About - switched by a button strip
+rather than a `TabControl`, because only the visible panel then stays in the visual tree. About
+carries the installed version, the privacy summary in the child's own words, and the removal flow.
+
+KidTime draws no custom notification, popup, or blocker windows. SessionAgent emits native Windows
+toasts marked with the supported urgent scenario, high priority, and explicit reminder audio — the
+Windows-supported way to break through Focus Assist without changing the user's global setting. Its
+tray dashboard composes maintained WPF UI 4.3.0 controls (FluentWindow, Card, ProgressRing, InfoBar,
+Badge, SymbolIcon, menu, tray), follows the Windows theme and accent, and receives status through
+the process-validated pipe. It cannot edit or bypass rules; its only privileged action is the
+separately parent-authenticated removal flow. Do not build a custom widget toolkit here.
+
+`UserNotification.IsUrgent` decides the toast scenario, and **only the final warning before a
+forced sign-out or close is urgent**: it stays on screen and overrides Focus Assist. Everything
+else - reminders, rule changes, availability, a completed update - is an ordinary toast with
+default priority. Urgent toasts carry two short lines and nothing else: the title states what is
+closing and how long is left, the body states the reason and to save work now. Detail belongs in
+the screen-time window; an interruption a child has seconds to read must not be a paragraph.
+
+PC time-limit and schedule revisions queue a normal notification regardless of the foreground app;
+application revisions queue one only if that application is currently open. The 15-, 5-, and
+2-minute reminders are normal notifications. The final forced-close warning is a tagged,
+long-duration notification with a deadline-based expiration: 60 seconds for the first blocked launch
+in a restriction episode, 20 seconds for later launches in the same episode, persisted across
+restarts. If the application exits before its countdown ends, a keyed dismissal hides the
+notification immediately.
+
+The LocalSystem service restarts SessionAgent every two seconds if it exits. The install directory
+is read/execute-only for ordinary users, service data is reachable only by LocalSystem and
+administrators, the service control ACL denies stop/configure rights to interactive users, service
+recovery is enabled, and the SessionAgent process DACL prevents a Standard User from terminating or
+injecting into it.
+
+### Automatic agent updates
+
+Releases are served only to enrolled device credentials over the same certificate-pinned HTTPS
+channel used for rules and usage. Each manifest carries version, exact byte size, and SHA-256; both
+server and agent verify the package before installation. `AgentUpdateWorker` checks periodically
+(five minutes by default), stages under `C:\ProgramData\KidTime\updates` outside the install
+directory, keeps a rollback copy, replaces only service binaries, and restarts `KidTimeControl`.
+The updater script records its outcome, so the first run after a restart reads that file and either
+queues one ordinary "KidTime updated" notification for the child or logs an error - which the
+parent then sees in the error log - when the update failed and was rolled back.
+Enrollment credentials, cached rules, usage, and logs stay in ProgramData. The API compares the
+heartbeat-reported assembly version with the published manifest and exposes current, outdated,
+downloading, installing, or failed state to the parent UI.
+
+### Cost on a slow PC
+
+The controlled PC is often the household's weakest machine, and everything here runs while the
+child is using it. Recurring work is kept off the hot path deliberately:
+
+- `SessionAgent` caches an executable's version metadata and Authenticode publisher and rebuilds
+  them only when the file on disk changes. Parsing a signature every two seconds was the single
+  most expensive thing the agent did.
+- The full status snapshot costs the service one rule evaluation per controlled application, so
+  the agent asks for it only while the screen-time window is open, plus once every thirty seconds
+  to keep the tray tooltip current (`SessionUsageSample.StatusRequested`).
+- The window skips rendering when nothing a person can see has changed and updates application
+  cards in place instead of replacing the item source.
+- The application descriptor is written to SQLite when the foreground application changes or every
+  ten minutes, not on every sample, and usage totals are buffered as described above.
+- `ProcessMonitor` sweeps every two seconds rather than every second. Blocked applications get a
+  20-60 second save period, so a slower sweep changes nothing a child can notice.
+
+**Prefer removing recurring work over making it faster**, and keep enforcement timing decisions -
+sign-out deadlines, close deadlines - on the monotonic clock in the service, where interval changes
+cannot move them.
+
+### Privacy boundary
+
+No component contains web filtering, browser hooks, DNS proxying, URL capture, HTTPS interception,
+packet inspection, keylogging, screen capture, camera/microphone access, message collection, or
+location tracking. Foreground window titles travel locally for diagnostics but are not persisted or
+uploaded by the current server contract. **Features that would cross this line are out of scope by
+design** — do not add them, and do not extend the contract to upload window titles.
+
+## Conventions
+
+- `Directory.Build.props` sets `TreatWarningsAsErrors=true` for every project and carries the single
+  `Version` used by the agent, its update manifest, and the update-comparison logic. A new agent
+  release means bumping that version before running `build-agent.ps1`.
+- The solution is `KidTime.slnx` (XML solution format), not a `.sln`.
+- Domain and server target `net10.0`; ControlService, SessionAgent, and Setup target
+  `net10.0-windows` and publish self-contained win-x64.
+- `.gitattributes` pins `*.sh` to LF and `*.ps1` to CRLF; keep new scripts on the same side.
+- The panel can be served under a path prefix. Anything building a same-origin URL by hand (fetch,
+  plain anchors, downloads) must go through `lib/paths.ts#appPath`; `next/link` and `next/navigation`
+  prepend it themselves. `NEXT_PUBLIC_BASE_PATH` is baked in at image build time, so changing the
+  prefix requires rebuilding the web image.
+- Commit messages are plain imperative sentences describing the change ("Match the documented Caddy
+  matcher to the deployed one"), with no conventional-commit prefixes.
+
+## Reverse-proxy deployment
+
+Initialize with the proxy settings so the containers publish on loopback only:
+
+```bash
+sudo ./scripts/initialize-server.sh --admin-email "parent@example.com" --bind 127.0.0.1 --web-port 3010 --base-path /kidtime --agent-url https://example.org/kidtime-api
+```
+
+Route two prefixes to the stack: the panel keeps its prefix, the agent API has its prefix stripped.
+
+```caddyfile
+@kidtime_api path /kidtime-api/*
+handle @kidtime_api {
+	uri strip_prefix /kidtime-api
+	reverse_proxy https://127.0.0.1:5081 {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
+
+# Next.js owns the whole prefix and already redirects /kidtime/ to /kidtime, so adding a
+# bare-path redirect to the trailing-slash form here would bounce against it forever.
+@kidtime path /kidtime /kidtime/*
+handle @kidtime {
+	reverse_proxy 127.0.0.1:3010
+}
+```
+
+The proxy hop stays on HTTPS so the server container keeps using its own certificate to encrypt the
+Data Protection keys; `tls_insecure_skip_verify` covers only that loopback hop. `--base-path` is
+compiled into the web bundle, so changing it later means rebuilding the web image.
+
+## Verification
+
+Automated tests cover daily limits, manual blocks, temporary-block expiry, schedules and overnight
+windows, timezone day changes, update-tolerant application identity, installer/runtime identity
+reconciliation, helper-process filtering, rule-change notifications, persisted first-block grace,
+automatic-update version comparison, controlled-account SID isolation, cached offline rules, durable
+pending usage, buffered usage that survives a restart, durable fault queueing and fingerprinting,
+idle exclusion, and cached app-limit evaluation.
+
+Integration checks on a VM should use a harmless executable such as Notepad before testing game
+rules:
+
+1. allow Notepad and observe foreground usage;
+2. block Notepad in the web panel and launch it again;
+3. set a one-minute Notepad limit and verify it closes at exhaustion;
+4. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
+5. reconnect and confirm pending statistics upload;
+6. manually block the PC, confirm the native final-warning notification appears with the 60-second
+   grace period, expires instead of leaving a topmost window behind, and confirm Windows signs the
+   session out;
+7. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
+8. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
+   enforcement remains independent;
+9. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
+   instead, with the device, component, and stack trace, and repeats raise the count rather than
+   adding rows.
+
+On a disposable PC, verify enrollment end to end (Connect stays disabled until server URL,
+enrollment code, and child account are all valid; an expired code is rejected; the panel switches to
+connected on its own) and both removal paths (the panel record disappears; then Remove KidTime in
+the screen-time window rejects invalid parent credentials, and with valid ones removes
+`KidTimeControl`, `C:\Program Files\KidTime`, and `C:\ProgramData\KidTime`).
+
+## Troubleshooting
+
+- **Setup cannot reach the API:** confirm the controlled PC can reach TCP 5081 on the server and that
+  the URL shown by Add device resolves there; check `sudo ufw status`. The one-time code carries the
+  certificate pin automatically.
+- **Setup says no standard account was found:** create or enable a Standard User, then select
+  Refresh. Administrator and disabled accounts are excluded on purpose.
+- **Add device says the setup file is unavailable:** run `build-agent.ps1`, upload
+  `artifacts/releases`, publish with `publish-agent-release.sh`. If the files are already in
+  `/opt/kidtime/releases`, confirm they are world-readable — the server container runs as non-root.
+- **Setup reports the PC is already connected:** remove KidTime from that PC first; a second
+  enrollment of the same PC is refused deliberately.
+- **Service starts but no UI agent appears:** confirm the signed-in profile is the selected Standard
+  User, and inspect service logs for `WTSQueryUserToken`/`CreateProcessAsUser` failures.
+- **A newly created child profile is not selectable:** wait up to a minute for the service to report
+  local accounts, refresh the device page, and confirm the account is enabled and not an
+  administrator.
+- **Rules show pending:** check `LastSeenUtc`, the service's HTTPS connectivity, and that the server
+  URL uses the host's LAN address rather than `localhost`.
+- **An app is not listed:** start it once. Only parent-manageable user applications are registered.
+- **Usage is lower than elapsed login time:** expected — only non-idle foreground time counts.
+- **The error log stays empty after a crash:** reports ride the next synchronization, so a PC that
+  is offline delivers them when it reconnects. Check `LastSeenUtc`, then
+  `%LOCALAPPDATA%\KidTime\logs\session-agent-faults.ndjson` (queued in the child's session) and
+  `C:\ProgramData\KidTime\logs\diagnostics.ndjson` (queued in the service).
+- **The same error keeps coming back after being marked handled:** marking handled is not a fix.
+  The next occurrence reopens the row and raises its count, which is the intended signal that the
+  fault is still happening.
+- **Changing the `.env` admin password has no effect:** those variables seed only the first parent
+  account. Do not delete PostgreSQL data merely to rotate a password.

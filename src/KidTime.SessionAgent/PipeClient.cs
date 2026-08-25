@@ -11,9 +11,14 @@ internal sealed class PipeClient
     private const int MaximumMessageBytes = 256 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task<EnforcementState?> ExchangeAsync(SessionUsageSample sample, CancellationToken cancellationToken)
+    public async Task<EnforcementState?> ExchangeAsync(
+        SessionUsageSample sample,
+        IReadOnlyList<DiagnosticReport>? diagnostics,
+        CancellationToken cancellationToken)
     {
-        var response = await ExchangeAsync(new SessionAgentRequest(UsageSample: sample), cancellationToken);
+        var response = await ExchangeAsync(
+            new SessionAgentRequest(UsageSample: sample, Diagnostics: diagnostics),
+            cancellationToken);
         return response.Enforcement;
     }
 

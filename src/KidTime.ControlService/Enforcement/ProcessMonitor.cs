@@ -17,7 +17,10 @@ public sealed class ProcessMonitor(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        // Enumerating every process is the most expensive recurring work the service does, and
+        // on a slow PC it is felt. Blocked applications get a 20-60 second save period before
+        // they are closed, so a two-second sweep is as timely as a one-second sweep in practice.
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             if (!WindowsSession.IsActiveUserControlled(coordinator.Rules))

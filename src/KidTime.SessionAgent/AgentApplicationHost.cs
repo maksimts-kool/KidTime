@@ -27,7 +27,6 @@ internal sealed class AgentApplicationHost : IDisposable
     private readonly StatusWindow _statusWindow;
     private readonly HwndSource _trayParentSource;
     private readonly int _taskbarCreatedMessage;
-    private SessionStatusSnapshot? _latestStatus;
     private long _sequence;
     private bool _busy;
     private bool _disposed;
@@ -105,43 +104,80 @@ internal sealed class AgentApplicationHost : IDisposable
         return IntPtr.Zero;
     }
 
+    /// <summary>
+    /// Registration talks to the shell and can fail while Explorer is restarting or still
+    /// starting up. It is retried on the next TaskbarCreated broadcast, so a failure here is
+    /// recorded rather than propagated out of a window procedure.
+    /// </summary>
     private void RegisterTrayIcon(string reason)
     {
-        _trayIcon.Register();
-        SessionLogger.Information(_trayIcon.IsRegistered
-            ? $"Tray icon registered ({reason})."
-            : $"Tray icon registration failed ({reason}).");
+        try
+        {
+            _trayIcon.Register();
+            SessionLogger.Information(_trayIcon.IsRegistered
+                ? $"Tray icon registered ({reason})."
+                : $"Tray icon registration failed ({reason}).");
+        }
+        catch (Exception exception)
+        {
+            SessionLogger.ReportFault(
+                DiagnosticSeverities.Warning,
+                $"The KidTime tray icon could not be registered ({reason}).",
+                exception);
+        }
     }
 
     private async Task SendSampleAsync()
     {
         if (_busy || _disposed) return;
         _busy = true;
+        var reports = SessionLogger.TakePendingReports();
+        var delivered = false;
         try
         {
             var foreground = ForegroundDetector.GetForeground();
             var idleSeconds = ForegroundDetector.GetIdleSeconds();
+            var sequence = Interlocked.Increment(ref _sequence);
             var sample = new SessionUsageSample(
-                Interlocked.Increment(ref _sequence),
+                sequence,
                 _stopwatch.ElapsedMilliseconds,
                 idleSeconds >= 300,
                 idleSeconds,
                 foreground.ProcessId,
                 foreground.WindowTitle,
-                foreground.Application);
+                foreground.Application,
+                ShouldRequestStatus(sequence));
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(4));
-            var state = await _client.ExchangeAsync(sample, timeout.Token);
+            var state = await _client.ExchangeAsync(sample, reports, timeout.Token);
+            delivered = true;
             if (state is not null) ApplyState(state);
         }
         catch (Exception exception) when (exception is IOException or TimeoutException or OperationCanceledException)
         {
             SessionLogger.Information("ControlService IPC unavailable; it will be retried.", exception);
         }
+        catch (Exception exception)
+        {
+            // Anything else is a defect. Sampling continues on the next tick and the parent
+            // sees the fault in the panel instead of the child seeing a crash.
+            SessionLogger.ReportFault(
+                DiagnosticSeverities.Error,
+                "A KidTime usage sample could not be processed.",
+                exception);
+        }
         finally
         {
+            if (!delivered && reports.Count > 0) SessionLogger.Requeue(reports);
             _busy = false;
         }
     }
+
+    /// <summary>
+    /// The full snapshot costs the service a rule evaluation per controlled application. The
+    /// window needs it live; the tray tooltip is happy with a refresh every thirty seconds.
+    /// </summary>
+    private bool ShouldRequestStatus(long sequence) =>
+        _statusWindow.IsVisible || sequence <= 1 || sequence % 15 == 0;
 
     private async Task<DeviceRemovalResult> RemoveKidTimeAsync(
         ParentRemovalRequest request,
@@ -178,7 +214,6 @@ internal sealed class AgentApplicationHost : IDisposable
     {
         if (state.Status is { } status)
         {
-            _latestStatus = status;
             UpdateTrayStatus(status);
             _statusWindow.UpdateStatus(status);
         }
@@ -199,7 +234,7 @@ internal sealed class AgentApplicationHost : IDisposable
         }
         else
         {
-            NativeWindowsNotification.Show(notification.Title, notification.Message);
+            NativeWindowsNotification.Show(notification.Title, notification.Message, notification.IsUrgent);
         }
     }
 
@@ -264,12 +299,19 @@ internal sealed class AgentApplicationHost : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _timer.Stop();
-        _timer.Tick -= TimerTick;
-        _trayParentSource.RemoveHook(TrayParentWindowProc);
-        _trayIcon.LeftClick -= _trayLeftClickHandler;
-        _trayIcon.Dispose();
-        _statusWindow.CloseForExit();
+        try
+        {
+            _timer.Stop();
+            _timer.Tick -= TimerTick;
+            _trayParentSource.RemoveHook(TrayParentWindowProc);
+            _trayIcon.LeftClick -= _trayLeftClickHandler;
+            _trayIcon.Dispose();
+            _statusWindow.CloseForExit();
+        }
+        catch (Exception exception)
+        {
+            SessionLogger.Information("The KidTime tray agent did not shut down cleanly.", exception);
+        }
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
