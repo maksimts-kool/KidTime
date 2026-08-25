@@ -108,7 +108,9 @@ handle @kidtime_api {
 	}
 }
 
-@kidtime path /kidtime/*
+# Next.js owns the whole prefix and already redirects /kidtime/ to /kidtime, so adding a
+# bare-path redirect to the trailing-slash form here would bounce against it forever.
+@kidtime path /kidtime /kidtime/*
 handle @kidtime {
 	reverse_proxy 127.0.0.1:3010
 }
