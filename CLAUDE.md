@@ -73,15 +73,25 @@ first account; they do not rotate an existing password.
 Windows agent release (Windows build machine only — WPF plus IExpress):
 
 ```powershell
-./scripts/build-agent.ps1
+./scripts/release-agent.ps1
 ```
 
-It publishes self-contained single-file binaries, writes `artifacts/releases/{latest.json,
-kidtime-agent-<version>.zip, KidTimeSetup.exe}`, and embeds the same ZIP into setup as a resource.
-`scripts/publish-agent-release.sh <dir>` installs that upload on the server, verifying size and
-SHA-256 before writing `latest.json` last, so the server never advertises a package that has not
-fully landed. `scripts/initialize-server.sh` generates all secrets, the self-signed certificate,
-and `.env`.
+That is the whole release. It bumps the patch version in `Directory.Build.props`, runs
+`build-agent.ps1`, uploads the result over SSH, and runs `publish-agent-release.sh` on the server —
+the four steps a release always needed, including the version bump, which is the one that fails
+silently when it is forgotten: the agent compares the published manifest with its own assembly
+version, so a release reusing the current number reaches nobody. The server is remembered in the
+untracked `artifacts/deploy-target.txt` after the first `-Server user@host`, and can also come from
+`KIDTIME_SERVER`. Useful flags: `-Bump major|minor|patch|none`, `-Version`, `-SkipPublish`,
+`-ReleaseDirectory`. Nothing is assumed to be checked out on the server — the publish script travels
+with the payload.
+
+The two halves still stand alone. `scripts/build-agent.ps1` publishes self-contained single-file
+binaries, writes `artifacts/releases/{latest.json, kidtime-agent-<version>.zip, KidTimeSetup.exe}`,
+and embeds the same ZIP into setup as a resource. `scripts/publish-agent-release.sh <dir>` installs
+that upload on the server, verifying size and SHA-256 before writing `latest.json` last, so the
+server never advertises a package that has not fully landed. `scripts/initialize-server.sh`
+generates all secrets, the self-signed certificate, and `.env`.
 
 ## Architecture
 
@@ -284,6 +294,33 @@ compatibility components, runtimes, updaters, installers, and KidTime itself. Fo
 still counts when a non-manageable shell surface is active, but those components never get
 application cards or rules.
 
+`ApplicationCatalogPolicy.ResolvePrincipal` runs first in both `IsUserManageable` and
+`NormalizeForCatalog`, so discovery, enforcement, and the parent's catalog cannot disagree about
+which application a process belongs to. It rewrites a **satellite that carries the application's
+own window** onto that application: Steam draws its window from `steamwebhelper.exe` in a nested
+CEF directory, so without this the child's Steam time lands on a helper nobody recognizes, or — once
+helpers are filtered — on nothing at all. Renaming it onto `steam.exe` produces the same identity
+key, which is also what makes blocking Steam close the window the child is looking at. **Only
+satellites with an interactive window belong there.** A crash handler or an updater is excluded
+outright, because it running is not the child using the application. Four filters carry most of
+that weight:
+
+- a role word ending the executable name, with or without a separator — `steamwebhelper` is one
+  word to Steam and a helper to everybody else — and a `(2)` copy marker stripped first, so a
+  repeat download is still the installer it is;
+- `crashhandler`, `crashreporter`, `crashpad`, and `errorreporter` anywhere in the name, which is
+  what `UnityCrashHandler64.exe` and Steam's reporters are;
+- `wextract.exe` as the original filename: an IExpress self-extractor keeps that version resource,
+  which is why KidTime's own `KidTimeSetup.exe` once announced itself to the parent as "Internet
+  Explorer";
+- a package family read back out of a `WindowsApps\Name_Version_Arch__PublisherId` path when the
+  process did not report one. A family only inferred this way still faces the executable checks;
+  a reported one identifies the application outright.
+
+Because the panel and the reconciler both filter through `IsUserManageable`, widening it also
+retires entries already in the database, and `ApplicationCatalogReconciler` merges a satellite's
+existing rules and usage into its principal on the next server start.
+
 ### Secrets, enrollment, and removal
 
 - Parent passwords use ASP.NET Core's versioned `PasswordHasher` format.
@@ -392,22 +429,38 @@ corner. It is not a blocker. The constraints are the design:
 message can wait, it is an ordinary toast; if it cannot, it is this card, with the urgent toast
 behind it for the case where the card cannot be drawn.
 
-`UserNotification.IsUrgent` decides the toast scenario for the fallback, and **only the final
-warning before a forced sign-out or close is urgent**: it stays on screen and overrides Focus
-Assist. Both urgent notifications also carry `CountdownSeconds` and a persistent key, so in
-ordinary operation they are drawn as cards and the urgent toast is never seen. Everything
-else - reminders, rule changes, availability, a completed update - is an ordinary toast with
-default priority. Urgent toasts carry two short lines and nothing else: the title states what is
-closing and how long is left, the body states the reason and to save work now. Detail belongs in
-the screen-time window; an interruption a child has seconds to read must not be a paragraph.
+`UserNotification.IsUrgent` decides the toast scenario: it stays on screen and overrides Focus
+Assist. Two things are urgent — **the final warning before a forced sign-out or close, and the
+15-, 5-, and 2-minute reminders**. The reminders earned it: a child absorbed in a game never sees
+an ordinary toast fade, and a limit warning nobody reads is the same as no warning. They stay
+toasts all the same, because nothing is closing yet: only `CountdownSeconds` selects the card, and
+a reminder has none. What a reminder does carry is one `PersistentNotificationKey` per restriction
+(`reminder:pc`, `reminder:app:<identity>`), so 5 minutes replaces 15 instead of stacking beside
+it — an urgent toast stays on screen until it is dismissed, and three of them in the corner is its
+own way of not being read. The final warning carries both a countdown and a key, so in ordinary
+operation it is drawn as a card and its urgent toast is never seen. Rule changes, availability, and
+a completed update are ordinary toasts with default priority. Urgent toasts carry two short lines
+and nothing else: the title states what is closing and how long is left, the body states the reason
+and to save work now. Detail belongs in the screen-time window; an interruption a child has seconds
+to read must not be a paragraph.
+
+**A queued warning states the time left when it reaches the child, not when it was queued.** The
+service hands the agent every waiting message on one exchange (`EnforcementState.Notifications`),
+and `DrainNotifications` rewrites each final warning — its `CountdownSeconds` *and* its title,
+which carries the same number — from the monotonic deadline the caller started. Handing out one
+message per two-second sample and keeping the seconds a warning was born with is how a child came
+to watch a card count five seconds down as the application closed: the card counted from when it
+appeared while the service counted from when it was queued. A warning whose deadline has already
+passed is dropped rather than drawn at zero, and logged. **When adding a notification that carries
+a deadline, queue it through `EnqueueCountdown` with a builder, never as a finished
+`UserNotification`** — a fixed string cannot be restated.
 
 PC time-limit and schedule revisions queue a normal notification regardless of the foreground app;
-application revisions queue one only if that application is currently open. The 15-, 5-, and
-2-minute reminders are normal notifications. The final forced-close warning is a tagged,
-long-duration notification with a deadline-based expiration: 60 seconds for the first blocked launch
-in a restriction episode, 20 seconds for later launches in the same episode, persisted across
-restarts. If the application exits before its countdown ends, a keyed dismissal hides the
-notification immediately.
+application revisions queue one only if that application is currently open. The final forced-close
+warning is a tagged, long-duration notification with a deadline-based expiration: 60 seconds for the
+first blocked launch in a restriction episode, 20 seconds for later launches in the same episode,
+persisted across restarts. If the application exits before its countdown ends, a keyed dismissal
+hides the notification immediately.
 
 The LocalSystem service restarts SessionAgent every two seconds if it exits. The install directory
 is read/execute-only for ordinary users, service data is reachable only by LocalSystem and
@@ -472,6 +525,11 @@ design** — do not add them, and do not extend the contract to upload window ti
   plain anchors, downloads) must go through `lib/paths.ts#appPath`; `next/link` and `next/navigation`
   prepend it themselves. `NEXT_PUBLIC_BASE_PATH` is baked in at image build time, so changing the
   prefix requires rebuilding the web image.
+- A toggle in the panel is a whole row, not a track beside a label: `SwitchField` (a settings row)
+  and `SwitchOption` (a compact labelled one) in `components/ui/switch.tsx` render the text *inside*
+  `Switch.Root`, so the control is the row and there is one click target rather than a 32×18 pixel
+  one. Reach for those instead of the bare `Switch`, and never wrap a switch in a `<label>` to widen
+  its target — the label and the control both handle the click and it toggles twice.
 - Every string the controlled user can read lives in `AgentStrings` and must be implemented in
   both `EnglishAgentStrings` and `RussianAgentStrings`. `AgentStringsTests` walks the catalog by
   reflection and fails on a member that returns blank in either language.
@@ -515,13 +573,16 @@ compiled into the web bundle, so changing it later means rebuilding the web imag
 
 Automated tests cover daily limits, manual blocks, temporary-block expiry, schedules and overnight
 windows, timezone day changes, update-tolerant application identity, installer/runtime identity
-reconciliation, helper-process filtering, rule-change notifications, persisted first-block grace,
-automatic-update version comparison, controlled-account SID isolation, cached offline rules, durable
-pending usage, buffered usage that survives a restart, durable fault queueing and fingerprinting,
-in-batch fault collapsing, spent application close leases that a relaunch cannot inherit, a sign-out
-that is warned about and retried when the session outlives it, complete English and Russian catalogs
-with Russian plural agreement, language-scoped rule messages, idle exclusion, and cached app-limit
-evaluation.
+reconciliation, helper-process filtering, satellite processes resolved onto their application,
+crash handlers and downloaded installers kept out of the catalog, packaged components filtered from
+an inferred family name, rule-change notifications, urgent running-out reminders, a delayed final
+warning restated in the seconds actually left, an expired final warning dropped rather than shown,
+persisted first-block grace, automatic-update version comparison, controlled-account SID isolation,
+cached offline rules, durable pending usage, buffered usage that survives a restart, durable fault
+queueing and fingerprinting, in-batch fault collapsing, spent application close leases that a
+relaunch cannot inherit, a sign-out that is warned about and retried when the session outlives it,
+complete English and Russian catalogs with Russian plural agreement, language-scoped rule messages,
+idle exclusion, and cached app-limit evaluation.
 
 Integration checks on a VM should use a harmless executable such as Notepad before testing game
 rules:
@@ -531,18 +592,25 @@ rules:
 3. set a one-minute Notepad limit and verify it closes at exhaustion;
 4. start Notepad again the instant the service closes it, and confirm the warning and the close
    repeat with the 20-second save period instead of the relaunch running on unrestricted;
-5. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
-6. reconnect and confirm pending statistics upload;
-7. manually block the PC, confirm the countdown card appears with the 60-second grace period and
-   no duplicate native toast beside it, expires instead of leaving a topmost window behind, and
-   confirm Windows signs the session out;
-8. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
-9. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
-   enforcement remains independent;
-10. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
+5. watch that countdown to zero and confirm Notepad closes as the card reaches 0:00, not while it
+   still shows seconds left, and that the card's title agrees with the number counting down;
+6. let a limit run past 15, 5, and 2 minutes remaining with a game in the foreground, and confirm
+   each reminder interrupts instead of fading behind it;
+7. start Steam and confirm one card named Steam appears in the panel — no `steamwebhelper`, no crash
+   handler, no `Internet Explorer` from a downloaded `KidTimeSetup.exe` — then block Steam and
+   confirm the window the child is looking at is what closes;
+8. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
+9. reconnect and confirm pending statistics upload;
+10. manually block the PC, confirm the countdown card appears with the 60-second grace period and
+    no duplicate native toast beside it, expires instead of leaving a topmost window behind, and
+    confirm Windows signs the session out;
+11. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
+12. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
+    enforcement remains independent;
+13. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
     instead, with the device, component, and stack trace, and repeats raise the count rather than
     adding rows;
-11. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
+14. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
     screen-time window, the next notification, and the countdown card all change without
     reinstalling or signing out, then block the PC and confirm the card counts down in the corner,
     never takes focus, and disappears on its own when the countdown ends or the parent lifts the
@@ -574,6 +642,12 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
 - **Rules show pending:** check `LastSeenUtc`, the service's HTTPS connectivity, and that the server
   URL uses the host's LAN address rather than `localhost`.
 - **An app is not listed:** start it once. Only parent-manageable user applications are registered.
+- **A card disappeared from the applications page:** the catalog filter is applied on read, so
+  widening it retires entries already in the database — a helper, crash handler, or downloaded
+  installer that used to have a card stops having one as soon as the server runs the new code. A
+  satellite that belongs to a real application (`steamwebhelper` to Steam) is not lost but merged:
+  `ApplicationCatalogReconciler` folds its rules and usage into the principal at server start, so
+  restart the server container once after deploying rather than re-creating the rule.
 - **Usage is lower than elapsed login time:** expected — only non-idle foreground time counts.
 - **The error log stays empty after a crash:** reports ride the next synchronization, so a PC that
   is offline delivers them when it reconnects. Check `LastSeenUtc`, then

@@ -5,7 +5,7 @@ import type { WeeklySchedule } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
+import { SwitchOption } from "@/components/ui/switch";
 
 const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
@@ -84,19 +84,17 @@ export function WeeklyScheduleEditor({ days, onChange }: { days: EditableDay[]; 
         <div key={item.day}>
           {dayIndex > 0 && <Separator />}
           <div className="grid gap-3 py-4 sm:grid-cols-[9rem_1fr]">
-            <label className="flex h-8 items-center gap-3 text-sm font-medium">
-              <Switch
-                checked={item.enabled}
-                onCheckedChange={checked => updateDay(dayIndex, {
-                  enabled: checked,
-                  windows: checked && item.windows.length === 0
-                    ? [{ id: `${item.day}-${Date.now()}-0`, start: "07:00", end: "22:00" }]
-                    : item.windows,
-                })}
-                aria-label={`Enable ${item.day}`}
-              />
-              {item.day}
-            </label>
+            <SwitchOption
+              label={item.day}
+              aria-label={`Enable ${item.day}`}
+              checked={item.enabled}
+              onCheckedChange={checked => updateDay(dayIndex, {
+                enabled: checked,
+                windows: checked && item.windows.length === 0
+                  ? [{ id: `${item.day}-${Date.now()}-0`, start: "07:00", end: "22:00" }]
+                  : item.windows,
+              })}
+            />
             <div className="grid gap-2">
               {item.windows.map((window, windowIndex) => {
                 const overlaps = overlappingIds.has(window.id);

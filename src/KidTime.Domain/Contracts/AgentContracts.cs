@@ -119,9 +119,15 @@ public sealed record SessionAgentResponse(
 
 /// <summary>
 /// A message for the controlled user. <paramref name="IsUrgent"/> selects the Windows "urgent"
-/// toast scenario, which stays on screen and breaks through Focus Assist; it is reserved for the
-/// final warning before Windows signs the session out or closes an application. Everything else
-/// - reminders, rule changes, availability, and completed updates - is an ordinary toast.
+/// toast scenario, which stays on screen and breaks through Focus Assist. It carries the final
+/// warning before Windows signs the session out or closes an application, and the running-out
+/// reminders - a child deep in a game does not see an ordinary toast fade, and a limit warning
+/// nobody read is the same as no warning. Rule changes, availability, and completed updates stay
+/// ordinary toasts.
+///
+/// <paramref name="CountdownSeconds"/> is whatever is left when the message is handed to the
+/// agent, not when the service decided to send it, so the seconds on the child's card are the
+/// seconds the service will actually act on.
 /// </summary>
 public sealed record UserNotification(
     string Title,
@@ -183,6 +189,11 @@ public sealed record SessionStatusSnapshot(
 /// The answer to one foreground sample. <paramref name="Language"/> rides on every exchange, not
 /// only on the ones carrying a full status snapshot, so the tray agent knows which language to
 /// paint its own chrome in from the very first reply.
+///
+/// <paramref name="Notifications"/> is everything the service has waiting, not one message per
+/// exchange. Handing them out one at a time put every message behind a two-second sample, which
+/// a final warning cannot afford: its countdown was drawn from the moment it arrived while the
+/// service was already counting down from the moment it was queued.
 /// </summary>
 public sealed record EnforcementState(
     bool IsPcBlocked,
@@ -191,6 +202,6 @@ public sealed record EnforcementState(
     int TodayActiveSeconds,
     int? DailyLimitSeconds,
     int RemainingSeconds,
-    UserNotification? Notification,
+    IReadOnlyList<UserNotification> Notifications,
     SessionStatusSnapshot? Status = null,
     AgentLanguage Language = AgentLanguage.English);

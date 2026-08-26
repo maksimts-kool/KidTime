@@ -223,7 +223,13 @@ internal sealed class AgentApplicationHost : IDisposable
             _statusWindow.UpdateStatus(status);
         }
 
-        if (state.Notification is not { } notification) return;
+        // Everything the service had waiting arrives together, so a final warning is never held
+        // behind an earlier reminder while its deadline runs down.
+        foreach (var notification in state.Notifications) Deliver(notification);
+    }
+
+    private void Deliver(UserNotification notification)
+    {
         if (notification.DismissPersistentNotification && notification.PersistentNotificationKey is { } dismissKey)
         {
             NativeWindowsNotification.DismissFinalWarning(dismissKey);
@@ -247,6 +253,12 @@ internal sealed class AgentApplicationHost : IDisposable
                     notification.Title,
                     notification.Message,
                     countdownSeconds);
+        }
+        else if (notification.IsUrgent && notification.PersistentNotificationKey is { } reminderKey)
+        {
+            // A running-out reminder: urgent, so it survives a full-screen game, but keyed so the
+            // next one takes its place rather than adding a banner beside it.
+            NativeWindowsNotification.ShowUrgentReminder(reminderKey, notification.Title, notification.Message);
         }
         else
         {

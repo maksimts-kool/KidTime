@@ -240,10 +240,10 @@ public sealed class LocalStoreTests : IDisposable
 
         var state = await coordinator.HandleSampleAsync(Sample(1, 0, 0, app), CancellationToken.None);
 
-        Assert.NotNull(state.Notification);
-        Assert.Equal("Test app time", state.Notification.Title);
-        Assert.Contains("left today", state.Notification.Message);
-        Assert.False(state.Notification.IsUrgent);
+        var notification = Assert.Single(state.Notifications);
+        Assert.Equal("Test app time", notification.Title);
+        Assert.Contains("left today", notification.Message);
+        Assert.False(notification.IsUrgent);
     }
 
     [Fact]
@@ -260,10 +260,10 @@ public sealed class LocalStoreTests : IDisposable
         coordinator.UpdateRules(new DeviceRuleSnapshot { DeviceId = deviceId, Revision = 2, TimeZoneId = "UTC", DailyLimitSeconds = 3600 });
         var state = await coordinator.HandleSampleAsync(Sample(2, 1_000, 0, Descriptor()), CancellationToken.None);
 
-        Assert.NotNull(state.Notification);
-        Assert.Equal("PC time limit changed", state.Notification.Title);
-        Assert.Contains("daily time is now 1h", state.Notification.Message);
-        Assert.False(state.Notification.IsUrgent);
+        var notification = Assert.Single(state.Notifications);
+        Assert.Equal("PC time limit changed", notification.Title);
+        Assert.Contains("daily time is now 1h", notification.Message);
+        Assert.False(notification.IsUrgent);
     }
 
     [Fact]
@@ -300,9 +300,9 @@ public sealed class LocalStoreTests : IDisposable
         });
         var state = await coordinator.HandleSampleAsync(Sample(2, 1_000, 0, app), CancellationToken.None);
 
-        Assert.NotNull(state.Notification);
-        Assert.Equal("Test app time limit changed", state.Notification.Title);
-        Assert.Contains("daily time is now 1h", state.Notification.Message);
+        var notification = Assert.Single(state.Notifications);
+        Assert.Equal("Test app time limit changed", notification.Title);
+        Assert.Contains("daily time is now 1h", notification.Message);
     }
 
     [Fact]
@@ -329,9 +329,9 @@ public sealed class LocalStoreTests : IDisposable
             CancellationToken.None);
         var returnedToApp = await coordinator.HandleSampleAsync(Sample(3, 2_000, 0, app), CancellationToken.None);
 
-        Assert.NotNull(opened.Notification);
-        Assert.Null(messageTookFocus.Notification);
-        Assert.Null(returnedToApp.Notification);
+        Assert.Single(opened.Notifications);
+        Assert.Empty(messageTookFocus.Notifications);
+        Assert.Empty(returnedToApp.Notifications);
     }
 
     [Fact]
@@ -355,12 +355,21 @@ public sealed class LocalStoreTests : IDisposable
         });
         var notifications = await AccrueAsync(coordinator, app, 800);
 
-        var titles = notifications.Select(item => item.Title).ToList();
+        var warnings = notifications.Where(item => item.Title.Contains("of Test app left")).ToList();
+        var titles = warnings.Select(item => item.Title).ToList();
         Assert.Contains("15 minutes of Test app left", titles);
         Assert.Contains("5 minutes of Test app left", titles);
         Assert.Contains("2 minutes of Test app left", titles);
         Assert.All(notifications, item => Assert.Null(item.CountdownSeconds));
-        Assert.All(notifications, item => Assert.False(item.IsUrgent));
+        // A reminder an absorbed child never notices is the same as no reminder, so these break
+        // through Focus Assist too - without a countdown, because nothing is closing yet.
+        Assert.All(warnings, item => Assert.True(item.IsUrgent));
+        // One key for the whole restriction, so 5 minutes replaces 15 instead of stacking beside it.
+        Assert.All(warnings, item => Assert.Equal($"reminder:app:{identity}", item.PersistentNotificationKey));
+        // The message shown when the application opens is not one of those; it interrupts nothing.
+        var opened = Assert.Single(notifications, item => item.Title == "Test app time");
+        Assert.False(opened.IsUrgent);
+        Assert.Null(opened.PersistentNotificationKey);
     }
 
     /// <summary>
@@ -379,7 +388,7 @@ public sealed class LocalStoreTests : IDisposable
         // The first sample establishes the monotonic baseline and counts nothing, exactly as the
         // first sample after a service start does.
         var first = await coordinator.HandleSampleAsync(Sample(sequence, elapsed, 0, app), CancellationToken.None);
-        if (first.Notification is { } opened) notifications.Add(opened);
+        notifications.AddRange(first.Notifications);
 
         var remaining = seconds;
         while (remaining > 0)
@@ -389,7 +398,7 @@ public sealed class LocalStoreTests : IDisposable
             sequence++;
             elapsed += step * 1_000;
             var state = await coordinator.HandleSampleAsync(Sample(sequence, elapsed, 0, app), CancellationToken.None);
-            if (state.Notification is { } notification) notifications.Add(notification);
+            notifications.AddRange(state.Notifications);
         }
         return notifications;
     }
@@ -412,7 +421,8 @@ public sealed class LocalStoreTests : IDisposable
         var warning = Assert.Single(notifications, item => item.Title == "15 minutes of PC time left");
         Assert.Contains("signs you out", warning.Message);
         Assert.Null(warning.CountdownSeconds);
-        Assert.False(warning.IsUrgent);
+        Assert.True(warning.IsUrgent);
+        Assert.Equal("reminder:pc", warning.PersistentNotificationKey);
     }
 
     [Fact]
@@ -435,20 +445,20 @@ public sealed class LocalStoreTests : IDisposable
             new SessionUsageSample(1, 0, false, 0, Environment.ProcessId, "Desktop", null),
             CancellationToken.None);
 
-        Assert.NotNull(appWarning.Notification);
-        Assert.True(appWarning.Notification.IsUrgent);
-        Assert.Equal(60, appWarning.Notification.CountdownSeconds);
-        Assert.Equal("application:test-app", appWarning.Notification.PersistentNotificationKey);
-        Assert.False(appWarning.Notification.DismissPersistentNotification);
+        var appNotification = Assert.Single(appWarning.Notifications);
+        Assert.True(appNotification.IsUrgent);
+        Assert.Equal(60, appNotification.CountdownSeconds);
+        Assert.Equal("application:test-app", appNotification.PersistentNotificationKey);
+        Assert.False(appNotification.DismissPersistentNotification);
 
         coordinator.DismissApplicationClosing("test-app");
         var dismissal = await coordinator.HandleSampleAsync(
             new SessionUsageSample(2, 1_000, false, 0, Environment.ProcessId, "Desktop", null),
             CancellationToken.None);
 
-        Assert.NotNull(dismissal.Notification);
-        Assert.True(dismissal.Notification.DismissPersistentNotification);
-        Assert.Equal("application:test-app", dismissal.Notification.PersistentNotificationKey);
+        var appDismissal = Assert.Single(dismissal.Notifications);
+        Assert.True(appDismissal.DismissPersistentNotification);
+        Assert.Equal("application:test-app", appDismissal.PersistentNotificationKey);
 
         coordinator.NotifyPcSignOut(
             new RuleDecision(false, BlockReason.DailyLimitReached, "The daily limit is reached."),
@@ -457,19 +467,70 @@ public sealed class LocalStoreTests : IDisposable
             new SessionUsageSample(3, 2_000, false, 0, Environment.ProcessId, "Desktop", null),
             CancellationToken.None);
 
-        Assert.NotNull(pcWarning.Notification);
-        Assert.True(pcWarning.Notification.IsUrgent);
-        Assert.Equal(60, pcWarning.Notification.CountdownSeconds);
-        Assert.Equal("pc-sign-out", pcWarning.Notification.PersistentNotificationKey);
+        var pcNotification = Assert.Single(pcWarning.Notifications);
+        Assert.True(pcNotification.IsUrgent);
+        Assert.Equal(60, pcNotification.CountdownSeconds);
+        Assert.Equal("pc-sign-out", pcNotification.PersistentNotificationKey);
 
         coordinator.DismissPcSignOut();
         var pcDismissal = await coordinator.HandleSampleAsync(
             new SessionUsageSample(4, 3_000, false, 0, Environment.ProcessId, "Desktop", null),
             CancellationToken.None);
 
-        Assert.NotNull(pcDismissal.Notification);
-        Assert.True(pcDismissal.Notification.DismissPersistentNotification);
-        Assert.Equal("pc-sign-out", pcDismissal.Notification.PersistentNotificationKey);
+        var pcDismissalNotification = Assert.Single(pcDismissal.Notifications);
+        Assert.True(pcDismissalNotification.DismissPersistentNotification);
+        Assert.Equal("pc-sign-out", pcDismissalNotification.PersistentNotificationKey);
+    }
+
+    [Fact]
+    public async Task A_delayed_final_warning_states_the_time_that_is_actually_left()
+    {
+        // The service starts counting down the moment it queues the warning, but the child only
+        // sees it on the next sample. Restating the seconds on the way out is what keeps the card
+        // and the sign-out talking about the same instant.
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), NullLogger<EnforcementCoordinator>.Instance);
+        coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 20, TimeZoneId = "UTC" });
+        coordinator.NotifyPcSignOut(
+            new RuleDecision(false, BlockReason.DailyLimitReached, "The daily limit is reached."),
+            60);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(1_200));
+        var state = await coordinator.HandleSampleAsync(
+            new SessionUsageSample(1, 0, false, 0, Environment.ProcessId, "Desktop", null),
+            CancellationToken.None);
+
+        var warning = Assert.Single(state.Notifications);
+        Assert.NotNull(warning.CountdownSeconds);
+        Assert.InRange(warning.CountdownSeconds.Value, 50, 59);
+        // The wording carries the countdown too, so both have to be rewritten together.
+        Assert.Contains($"{warning.CountdownSeconds} seconds", warning.Title);
+    }
+
+    [Fact]
+    public async Task A_final_warning_whose_deadline_has_passed_is_not_shown()
+    {
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), NullLogger<EnforcementCoordinator>.Instance);
+        coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 21, TimeZoneId = "UTC" });
+        coordinator.NotifyApplicationClosing(
+            "test-app",
+            "Test app",
+            new RuleDecision(false, BlockReason.ManualBlock, "Test app is blocked."),
+            1);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(1_200));
+        var state = await coordinator.HandleSampleAsync(
+            new SessionUsageSample(1, 0, false, 0, Environment.ProcessId, "Desktop", null),
+            CancellationToken.None);
+
+        // The application has already been closed by now; a card counting zero down would only
+        // describe something that already happened.
+        Assert.Empty(state.Notifications);
     }
 
     [Fact]

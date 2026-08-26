@@ -56,21 +56,26 @@ so the parent's browser never sees the self-signed certificate. The stack uses
 
 ## Publish the Windows agent
 
-On the Windows build machine:
+On the Windows build machine, once:
 
 ```powershell
-./scripts/build-agent.ps1
+./scripts/release-agent.ps1 -Server root@<server-address>
 ```
 
-Upload the result and publish it on the server:
+and from then on:
 
-```bash
-scp -r artifacts/releases <user>@<server-address>:~/kidtime-release
+```powershell
+./scripts/release-agent.ps1
 ```
 
-```bash
-./scripts/publish-agent-release.sh ~/kidtime-release
-```
+That bumps the patch version, builds, uploads over SSH, and publishes on the server. It needs the
+Windows OpenSSH client and a working SSH login; the server is remembered after the first run. Add
+`-Bump minor` or `-Version 2.0.0` for a different number, `-Bump none` to re-publish the current one,
+or `-SkipPublish` to build without releasing. Commit the version change in `Directory.Build.props`
+together with the work it ships.
+
+The two steps are still available separately — `./scripts/build-agent.ps1` on Windows, then
+`./scripts/publish-agent-release.sh <uploaded-directory>` on the server.
 
 This makes `KidTimeSetup.exe` and the automatic-update package available. Enrolled PCs pick up a new
 version on their next update check; nothing has to be deployed to them, and the server does not need

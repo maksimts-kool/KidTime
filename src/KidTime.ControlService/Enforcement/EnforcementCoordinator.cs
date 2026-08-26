@@ -36,7 +36,7 @@ public sealed class EnforcementCoordinator(
     private string? _foregroundIdentity;
     private string? _loggedForegroundIdentity;
     private bool _lastPcBlocked;
-    private readonly ConcurrentQueue<UserNotification> _notifications = new();
+    private readonly ConcurrentQueue<PendingNotification> _notifications = new();
     private readonly ConcurrentDictionary<string, UserNotification> _pendingApplicationLimitChanges = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _restrictionRemaining = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> _applicationOpenedNotifications = new(StringComparer.Ordinal);
@@ -57,6 +57,62 @@ public sealed class EnforcementCoordinator(
 
     /// <summary>Wording for the language the parent chose for this PC.</summary>
     private AgentStrings Text => AgentStrings.For(_rules.Language);
+
+    /// <summary>
+    /// A queued message. A final warning also carries the monotonic instant the service will act
+    /// on and the wording that goes with a number of seconds, because both the title and the
+    /// countdown have to state the time left when the message reaches the child, not when the
+    /// service decided to send it.
+    /// </summary>
+    private readonly record struct PendingNotification(
+        UserNotification Notification,
+        long? DeadlineTimestamp,
+        Func<int, UserNotification>? Rewrite);
+
+    private void Enqueue(UserNotification notification) =>
+        _notifications.Enqueue(new PendingNotification(notification, null, null));
+
+    /// <summary>
+    /// Queues a final warning against the deadline the caller has just started. The caller owns
+    /// that deadline; this is only what the child is told about it.
+    /// </summary>
+    private void EnqueueCountdown(Func<int, UserNotification> build, int countdownSeconds) =>
+        _notifications.Enqueue(new PendingNotification(
+            build(countdownSeconds),
+            Stopwatch.GetTimestamp() + (long)(countdownSeconds * (double)Stopwatch.Frequency),
+            build));
+
+    /// <summary>
+    /// Hands the agent everything that is waiting, restating each final warning in the seconds
+    /// that are actually left. A warning used to arrive carrying the number it was born with, so
+    /// the card counted that number down from whenever it appeared while the service counted from
+    /// when it was queued - which is how a child watched five seconds remaining as the application
+    /// closed. A warning whose deadline has already passed is dropped rather than drawn at zero;
+    /// enforcement never depended on it being delivered.
+    /// </summary>
+    private List<UserNotification> DrainNotifications()
+    {
+        var delivered = new List<UserNotification>();
+        while (_notifications.TryDequeue(out var pending))
+        {
+            if (pending.DeadlineTimestamp is not { } deadline || pending.Rewrite is not { } rewrite)
+            {
+                delivered.Add(pending.Notification);
+                continue;
+            }
+
+            var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
+            if (remaining <= TimeSpan.Zero)
+            {
+                logger.LogWarning("A final warning expired before it could be shown to the user.");
+                continue;
+            }
+
+            delivered.Add(rewrite((int)Math.Ceiling(remaining.TotalSeconds)));
+        }
+
+        return delivered;
+    }
 
     public string? ForegroundName => _foregroundName;
     public string? ForegroundIdentity => _foregroundIdentity;
@@ -173,7 +229,7 @@ public sealed class EnforcementCoordinator(
                         && (!_applicationOpenedNotifications.TryGetValue(identity, out var lastShown)
                             || utcNow - lastShown >= TimeSpan.FromMinutes(5)))
                     {
-                        _notifications.Enqueue(BuildApplicationOpenedNotification(Text, appRule.DisplayName, appRestriction));
+                        Enqueue(BuildApplicationOpenedNotification(Text, appRule.DisplayName, appRestriction));
                         _applicationOpenedNotifications[identity] = utcNow;
                         _restrictionRemaining[$"{scope}|{appRestriction.Key}"] = appRestriction.RemainingSeconds;
                     }
@@ -181,13 +237,12 @@ public sealed class EnforcementCoordinator(
                 }
                 if (appDecision.IsAllowed
                     && _pendingApplicationLimitChanges.TryRemove(identity, out var changedNotification))
-                    _notifications.Enqueue(changedNotification);
+                    Enqueue(changedNotification);
             }
 
-            _notifications.TryDequeue(out var notification);
             var remaining = rules.DailyLimitSeconds is int limit ? Math.Max(0, limit - pcUsage) : -1;
             return new EnforcementState(!pcDecision.IsAllowed, pcDecision, appDecision, pcUsage,
-                rules.DailyLimitSeconds, remaining, notification, Language: rules.Language);
+                rules.DailyLimitSeconds, remaining, DrainNotifications(), Language: rules.Language);
         }
         finally { _gate.Release(); }
     }
@@ -351,18 +406,20 @@ public sealed class EnforcementCoordinator(
     {
         var text = Text;
         _pendingApplicationLimitChanges.TryRemove(identityKey, out _);
-        _notifications.Enqueue(new UserNotification(
-            text.ApplicationClosingTitle(displayName, graceSeconds),
-            text.SaveYourWorkNow(ShortReason(text, decision)),
-            graceSeconds,
-            ApplicationWarningKey(identityKey),
-            IsUrgent: true));
+        EnqueueCountdown(
+            seconds => new UserNotification(
+                text.ApplicationClosingTitle(displayName, seconds),
+                text.SaveYourWorkNow(ShortReason(text, decision)),
+                seconds,
+                ApplicationWarningKey(identityKey),
+                IsUrgent: true),
+            graceSeconds);
         logger.LogWarning("Application {Application} is blocked for {Reason}; {GraceSeconds}-second save period started.",
             displayName, decision.Reason, graceSeconds);
     }
 
     public void DismissApplicationClosing(string identityKey) =>
-        _notifications.Enqueue(new UserNotification(
+        Enqueue(new UserNotification(
             string.Empty,
             string.Empty,
             PersistentNotificationKey: ApplicationWarningKey(identityKey),
@@ -371,16 +428,18 @@ public sealed class EnforcementCoordinator(
     public void NotifyPcSignOut(RuleDecision decision, int countdownSeconds)
     {
         var text = Text;
-        _notifications.Enqueue(new UserNotification(
-            text.SignOutCountdownTitle(countdownSeconds),
-            text.SaveYourWorkNow(ShortReason(text, decision)),
-            countdownSeconds,
-            "pc-sign-out",
-            IsUrgent: true));
+        EnqueueCountdown(
+            seconds => new UserNotification(
+                text.SignOutCountdownTitle(seconds),
+                text.SaveYourWorkNow(ShortReason(text, decision)),
+                seconds,
+                "pc-sign-out",
+                IsUrgent: true),
+            countdownSeconds);
     }
 
     public void DismissPcSignOut() =>
-        _notifications.Enqueue(new UserNotification(
+        Enqueue(new UserNotification(
             string.Empty,
             string.Empty,
             PersistentNotificationKey: "pc-sign-out",
@@ -389,7 +448,7 @@ public sealed class EnforcementCoordinator(
     public void NotifyPcAvailable(RuleDecision previousDecision)
     {
         var text = Text;
-        _notifications.Enqueue(new UserNotification(
+        Enqueue(new UserNotification(
             text.PcAvailableTitle,
             text.PcAvailableMessage(ShortReason(text, previousDecision))));
     }
@@ -398,7 +457,7 @@ public sealed class EnforcementCoordinator(
     public void NotifyServicesUpdated(string version)
     {
         var text = Text;
-        _notifications.Enqueue(new UserNotification(text.UpdatedTitle, text.UpdatedMessage(version)));
+        Enqueue(new UserNotification(text.UpdatedTitle, text.UpdatedMessage(version)));
     }
 
     private void QueueRuleChangeNotifications(DeviceRuleSnapshot previous, DeviceRuleSnapshot current)
@@ -408,7 +467,7 @@ public sealed class EnforcementCoordinator(
         var text = AgentStrings.For(current.Language);
         if (LimitsDiffer(previous.DailyLimitSeconds, previous.Schedule, current.DailyLimitSeconds, current.Schedule))
         {
-            _notifications.Enqueue(new UserNotification(
+            Enqueue(new UserNotification(
                 text.PcLimitChangedTitle,
                 BuildLimitChangeMessage(text, text.PcScopeName, previous.DailyLimitSeconds, previous.Schedule,
                     current.DailyLimitSeconds, current.Schedule)));
@@ -464,6 +523,9 @@ public sealed class EnforcementCoordinator(
 
     private static string ApplicationWarningKey(string identityKey) => $"application:{identityKey}";
 
+    /// <summary>One key per restriction, so its reminders replace one another instead of piling up.</summary>
+    private static string ReminderKey(string scope) => $"reminder:{scope}";
+
     private static string ShortReason(AgentStrings text, RuleDecision decision) => decision.Reason switch
     {
         BlockReason.ManualBlock => text.ShortReasonManualBlock,
@@ -485,13 +547,20 @@ public sealed class EnforcementCoordinator(
         foreach (var threshold in WarningThresholdSeconds)
         {
             if (previous <= threshold || restriction.RemainingSeconds > threshold) continue;
-            _notifications.Enqueue(new UserNotification(
+            // Urgent, because a reminder a child playing a game never notices is the same as no
+            // reminder: the urgent scenario keeps the toast on screen and gets it past Focus
+            // Assist. Still only a toast - no countdown, no card - because there is nothing to
+            // act on yet. The key is this restriction's own, so 5 minutes replaces 15 rather
+            // than stacking a second banner that stays until somebody dismisses it.
+            Enqueue(new UserNotification(
                 signsOut
                     ? text.PcTimeLeftTitle(threshold)
                     : text.ApplicationTimeLeftTitle(displayName, threshold),
                 signsOut
                     ? text.PcTimeLeftMessage
-                    : text.ApplicationTimeLeftMessage(displayName)));
+                    : text.ApplicationTimeLeftMessage(displayName),
+                PersistentNotificationKey: ReminderKey(scope),
+                IsUrgent: true));
             logger.LogInformation("{Scope} restriction warning queued with {Seconds} seconds remaining.",
                 displayName, threshold);
         }

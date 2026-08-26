@@ -119,4 +119,110 @@ public sealed class ApplicationCatalogPolicyTests
 
         Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
     }
+
+    [Fact]
+    public void Steam_web_helper_is_counted_as_steam()
+    {
+        // Steam draws its window from a CEF helper several directories below the install root,
+        // so a parent who blocks "Steam" has to reach that process through the same rule.
+        var helper = new ApplicationDescriptor
+        {
+            DisplayName = "Steam",
+            ProductName = "Steam",
+            ExecutableName = "steamwebhelper.exe",
+            OriginalFilename = "steamwebhelper.exe",
+            ExecutablePath = @"C:\Program Files (x86)\Steam\bin\cef\cef.win7x64\steamwebhelper.exe",
+            SignaturePublisher = "Valve Corp."
+        };
+        var steam = new ApplicationDescriptor
+        {
+            DisplayName = "Steam",
+            ProductName = "Steam",
+            ExecutableName = "steam.exe",
+            OriginalFilename = "steam.exe",
+            ExecutablePath = @"C:\Program Files (x86)\Steam\steam.exe",
+            SignaturePublisher = "Valve Corp."
+        };
+
+        Assert.True(ApplicationCatalogPolicy.IsUserManageable(helper));
+        Assert.Equal(
+            ApplicationIdentity.CreateKey(ApplicationCatalogPolicy.NormalizeForCatalog(steam)),
+            ApplicationIdentity.CreateKey(ApplicationCatalogPolicy.NormalizeForCatalog(helper)));
+        Assert.Equal("Steam", ApplicationCatalogPolicy.GetFriendlyDisplayName(helper));
+        Assert.Equal(
+            @"C:\Program Files (x86)\Steam\steam.exe",
+            ApplicationCatalogPolicy.NormalizeForCatalog(helper).ExecutablePath);
+    }
+
+    [Theory]
+    [InlineData("Steam", "gameoverlayui.exe")]
+    [InlineData("Steam", "steamerrorreporter.exe")]
+    [InlineData("Steam", "steamservice.exe")]
+    [InlineData("Steam", "steamcrashhandler.exe")]
+    [InlineData("Rail Route", "UnityCrashHandler64.exe")]
+    public void Crash_handlers_and_background_satellites_are_not_manageable(string name, string executable)
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = name,
+            ProductName = name,
+            ExecutableName = executable,
+            OriginalFilename = executable,
+            ExecutablePath = $@"C:\Program Files (x86)\{name}\{executable}",
+            SignaturePublisher = "Valve Corp."
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Theory]
+    [InlineData("KidTimeSetup.exe", "KidTimeSetup.exe")]
+    [InlineData("KidTimeSetup(8).exe", "wextract.exe")]
+    [InlineData("VendorSetup (2).exe", "vendor.exe")]
+    public void Downloaded_installers_are_not_manageable(string executable, string originalFilename)
+    {
+        // An IExpress package keeps wextract.exe's version resource, which is why KidTime's own
+        // setup arrived on the parent's panel calling itself Internet Explorer.
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = "Internet Explorer",
+            ProductName = "Internet Explorer",
+            ExecutableName = executable,
+            OriginalFilename = originalFilename,
+            ExecutablePath = $@"C:\Users\testChild\Downloads\{executable}",
+            Company = "Microsoft Corporation"
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Fact]
+    public void Packaged_windows_components_are_not_manageable_without_a_reported_family()
+    {
+        // The family name could not be read from this process, but the install directory still
+        // says exactly which package it is.
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = "Game Assist",
+            ProductName = "Microsoft Edge",
+            ExecutableName = "msedge.exe",
+            ExecutablePath = @"C:\Program Files\WindowsApps\Microsoft.Edge.GameAssist_1.0.4019.0_x64__8wekyb3d8bbwe\msedge.exe"
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Fact]
+    public void Packaged_applications_still_face_the_executable_checks_when_the_family_is_only_inferred()
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = "Example Game",
+            ProductName = "Example Game",
+            ExecutableName = "ExampleUpdater.exe",
+            ExecutablePath = @"C:\Program Files\WindowsApps\Example.Game_1.2.3.0_x64__abcdefghijklm\ExampleUpdater.exe"
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
 }

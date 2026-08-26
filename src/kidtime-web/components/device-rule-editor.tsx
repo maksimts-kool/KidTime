@@ -8,9 +8,9 @@ import { agentLanguages, type DeviceRule, type WindowsUserAccount } from "@/lib/
 import { editableToSchedule, scheduleToEditable, validateEditableSchedule, WeeklyScheduleEditor } from "./weekly-schedule-editor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
+import { SwitchField } from "@/components/ui/switch";
 
 export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: string; rule: DeviceRule; accounts: WindowsUserAccount[] }) {
   const router = useRouter();
@@ -108,10 +108,12 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
         <CardHeader><CardTitle>Daily PC limit</CardTitle><CardDescription>Only active, non-idle time counts toward this limit.</CardDescription></CardHeader>
         <CardContent>
           <FieldGroup>
-            <Field orientation="horizontal">
-              <FieldContent><FieldTitle>Use a daily limit</FieldTitle><FieldDescription>Windows signs the user out when active time is exhausted.</FieldDescription></FieldContent>
-              <Switch checked={limitEnabled} onCheckedChange={setLimitEnabled} aria-label="Use a daily PC limit" />
-            </Field>
+            <SwitchField
+              title="Use a daily limit"
+              description="Windows signs the user out when active time is exhausted."
+              checked={limitEnabled}
+              onCheckedChange={setLimitEnabled}
+            />
             <div className="grid max-w-sm grid-cols-2 gap-3">
               <Field><FieldLabel htmlFor="limitHours">Hours</FieldLabel><Input id="limitHours" name="limitHours" type="number" min="0" max="24" disabled={!limitEnabled} defaultValue={Math.floor((rule.dailyLimitSeconds ?? 18000) / 3600)} /></Field>
               <Field><FieldLabel htmlFor="limitMinutes">Minutes</FieldLabel><Input id="limitMinutes" name="limitMinutes" type="number" min="0" max="59" disabled={!limitEnabled} defaultValue={Math.floor(((rule.dailyLimitSeconds ?? 18000) % 3600) / 60)} /></Field>

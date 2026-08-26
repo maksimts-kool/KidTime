@@ -8,9 +8,9 @@ import type { WeeklySchedule } from "@/lib/types";
 import { editableToSchedule, scheduleToEditable, validateEditableSchedule, WeeklyScheduleEditor } from "./weekly-schedule-editor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
+import { SwitchField } from "@/components/ui/switch";
 
 export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSeconds, schedule }: { applicationId: string; blocked: boolean; dailyLimitSeconds: number | null; schedule: WeeklySchedule }) {
   const router = useRouter();
@@ -51,10 +51,12 @@ export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSecond
       <Card>
         <CardHeader><CardTitle>Application access</CardTitle><CardDescription>Manual blocks also work from cached rules while the PC is offline.</CardDescription></CardHeader>
         <CardContent>
-          <Field orientation="horizontal">
-            <FieldContent><FieldTitle>Block this application</FieldTitle><FieldDescription>Matching processes are closed and Windows explains why.</FieldDescription></FieldContent>
-            <Switch checked={isBlocked} onCheckedChange={setIsBlocked} aria-label="Block this application" />
-          </Field>
+          <SwitchField
+            title="Block this application"
+            description="Matching processes are closed and Windows explains why."
+            checked={isBlocked}
+            onCheckedChange={setIsBlocked}
+          />
         </CardContent>
       </Card>
 
@@ -62,10 +64,12 @@ export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSecond
         <CardHeader><CardTitle>Daily application limit</CardTitle><CardDescription>Only foreground active time is counted.</CardDescription></CardHeader>
         <CardContent>
           <FieldGroup>
-            <Field orientation="horizontal">
-              <FieldContent><FieldTitle>Use a daily limit</FieldTitle><FieldDescription>Notifications are shown when the app opens and at 15, 5, and 2 minutes remaining.</FieldDescription></FieldContent>
-              <Switch checked={limitEnabled} onCheckedChange={setLimitEnabled} aria-label="Use a daily application limit" />
-            </Field>
+            <SwitchField
+              title="Use a daily limit"
+              description="Notifications are shown when the app opens and at 15, 5, and 2 minutes remaining."
+              checked={limitEnabled}
+              onCheckedChange={setLimitEnabled}
+            />
             <div className="grid max-w-sm grid-cols-2 gap-3">
               <Field><FieldLabel htmlFor="hours">Hours</FieldLabel><Input id="hours" name="hours" type="number" min="0" max="24" disabled={!limitEnabled} defaultValue={Math.floor((dailyLimitSeconds ?? 7200) / 3600)} /></Field>
               <Field><FieldLabel htmlFor="minutes">Minutes</FieldLabel><Input id="minutes" name="minutes" type="number" min="0" max="59" disabled={!limitEnabled} defaultValue={Math.floor(((dailyLimitSeconds ?? 7200) % 3600) / 60)} /></Field>
