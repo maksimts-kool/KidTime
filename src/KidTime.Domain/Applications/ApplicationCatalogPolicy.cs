@@ -16,7 +16,7 @@ public static class ApplicationCatalogPolicy
         // to - "NVIDIA App", "Microsoft Office LTSC Professional Plus 2024" - which is exactly the
         // card a parent would mistake for the application itself.
         "nvcontainer.exe", "nvidia overlay.exe", "nvidia share.exe", "nvidia web helper.exe",
-        "oawrapper.exe", "officeclicktorun.exe", "officec2rclient.exe",
+        "officeclicktorun.exe", "officec2rclient.exe",
         // Steam runs a small fleet of satellites beside steam.exe. Only steamwebhelper.exe draws
         // a window a child actually uses, and that one is resolved onto steam.exe below; the rest
         // are background machinery and must never earn a card of their own.
@@ -148,7 +148,13 @@ public static class ApplicationCatalogPolicy
             return false;
 
         if (executablePath.Contains(@":\Windows\", StringComparison.OrdinalIgnoreCase)
-            || executablePath.Contains(@"\ProgramData\Package Cache\", StringComparison.OrdinalIgnoreCase))
+            || executablePath.Contains(@"\ProgramData\Package Cache\", StringComparison.OrdinalIgnoreCase)
+            // NVIDIA's backend directory, where its telemetry and cache processes live. They all
+            // report the product name of the component - "NVIDIA GeForce Experience Application
+            // Ontology" - and NVIDIA renames them between driver versions: OAWrapper.exe became
+            // NvOAWrapperCache.exe on one controlled PC inside a week. The directory is the stable
+            // fact, and nothing a child opens is in it.
+            || executablePath.Contains(@"\NvBackend\", StringComparison.OrdinalIgnoreCase))
             return false;
 
         // A runtime host or a background satellite is what it is whether or not the process

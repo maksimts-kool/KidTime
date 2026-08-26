@@ -323,6 +323,11 @@ that weight:
   process did not report one. A family only inferred this way still faces the executable checks;
   a reported one identifies the application outright.
 
+A path can be the stable fact where a name is not: `\NvBackend\` is NVIDIA's background
+directory, whose telemetry and cache processes all report the component's product name and get
+renamed between driver versions - `OAWrapper.exe` became `NvOAWrapperCache.exe` on one controlled
+PC inside a week. Nothing a child opens lives there.
+
 **The executable checks run ahead of that last short-circuit**, or a runtime host is taken at its
 word about the application it is hosting: WhatsApp draws itself through WebView2, so
 `msedgewebview2.exe` reports WhatsApp's package family and earned a card named "Microsoft Edge

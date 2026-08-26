@@ -224,7 +224,6 @@ public sealed class ApplicationCatalogPolicyTests
     [InlineData("Rockstar Games SDK", "uninstallRGSCRedistributable.exe")]
     [InlineData("Some Game", "unins000.exe")]
     [InlineData("FACEIT Anti-Cheat", "faceitclient.exe")]
-    [InlineData("NVIDIA GeForce Experience Application Ontology", "OAWrapper.exe")]
     public void Vendor_background_processes_are_not_manageable(string name, string executable)
     {
         var descriptor = new ApplicationDescriptor
@@ -235,6 +234,27 @@ public sealed class ApplicationCatalogPolicyTests
             OriginalFilename = executable,
             ExecutablePath = $@"C:\Program Files\Vendor\{executable}",
             SignaturePublisher = "Vendor Inc."
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Theory]
+    // NVIDIA renames these between driver versions - OAWrapper.exe became NvOAWrapperCache.exe on
+    // one controlled PC inside a week - and each arrives wearing the component's product name. The
+    // directory they live in is the fact that holds still.
+    [InlineData("OAWrapper.exe")]
+    [InlineData("NvOAWrapperCache.exe")]
+    public void The_nvidia_backend_directory_holds_no_applications(string executable)
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = "NVIDIA GeForce Experience Application Ontology",
+            ProductName = "NVIDIA GeForce Experience Application Ontology",
+            ExecutableName = executable,
+            OriginalFilename = executable,
+            ExecutablePath = $@"C:\Users\child\AppData\Local\NVIDIA Corporation\NVIDIA App\NvBackend\ApplicationOntology\{executable}",
+            SignaturePublisher = "NVIDIA Corporation"
         };
 
         Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
