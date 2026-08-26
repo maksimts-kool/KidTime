@@ -332,14 +332,16 @@ is held in the untracked environment file.
 
 ### PC blocking, notifications, and anti-tamper
 
-When a PC rule blocks access, the LocalSystem service queues a tagged native Windows final-warning
-notification stating the reason, usage where applicable, and the next available time. The first
+When a PC rule blocks access, the LocalSystem service queues a final warning stating the reason,
+usage where applicable, and the next available time - drawn as the countdown card, or as a tagged
+native Windows notification when the card cannot be drawn. The first
 warning in a PC restriction episode lasts 60 seconds; signing in again while the same restriction is
 active gets 20 seconds. That grace state is persisted locally across service restarts. The service
 owns the monotonic deadline and then calls `WTSLogoffSession`; **notification delivery is never
-trusted for enforcement.** The notification has an explicit expiration and no custom topmost window
-exists to become stranded. If the parent dismisses the restriction during the countdown, a keyed
-dismissal hides the toast, removes it from Notification Center, and cancels sign-out. When the rule
+trusted for enforcement.** The warning carries an explicit expiration, and the card cannot strand
+itself either - the constraints below are what guarantee that. If the parent dismisses the
+restriction during the countdown, a keyed dismissal closes the card, hides any toast, removes it
+from Notification Center, and cancels sign-out. When the rule
 ends, a normal notification says the PC is available and repeats the prior reason.
 
 The tray window is a four-panel view - Today, Apps, Connection, About - switched by a button strip
@@ -355,12 +357,20 @@ cannot edit or bypass rules; its only privileged action is the separately parent
 removal flow. Do not build a custom widget toolkit here.
 
 The one custom window is `CountdownCardWindow`, and it exists for the one thing a toast cannot do:
-show the seconds actually draining before a forced sign-out or close. It **accompanies** the urgent
-toast, never replaces it, and it is not a blocker. The constraints are the design:
+show the seconds actually draining before a forced sign-out or close. It **is** the final warning,
+and the urgent toast is its fallback: two warnings for one deadline only competed for the same
+corner. It is not a blocker. The constraints are the design:
 
 - It is drawn only for a notification that is both urgent and carries `CountdownSeconds`.
+- `CountdownCard.Show` reports whether a card is genuinely on screen, and the agent raises the
+  native urgent toast when it is not. **A card is best-effort; the warning is not.** Never make the
+  card the only path without keeping that fallback.
+- The card carries its own reminder sound, because it replaced a toast that had one and a silent
+  warning is easy to miss under headphones. Focus Assist silences notifications, not an
+  application's own audio. A machine set to No Sounds simply stays quiet - which is why the
+  countdown never depends on the sound either.
 - The service still owns the monotonic deadline and signs out or closes the application whether a
-  card was drawn or not. A card that fails to appear is reported as a warning and changes nothing.
+  card was drawn or not. A card that fails to appear is reported as a warning and falls back.
 - `WS_EX_NOACTIVATE` and `WS_EX_TOOLWINDOW` keep it out of the focus chain and out of Alt+Tab. A
   window that stole the keyboard while telling a child to save their work would be self-defeating.
 - It is a small corner card sized like a toast, cannot be resized, and dismissing it hides the
@@ -370,10 +380,13 @@ toast, never replaces it, and it is not a blocker. The constraints are the desig
   the service restarts within two seconds if it dies, so the card dies with it.
 
 **Do not grow this into a blocker, a full-screen overlay, or a second notification system.** If a
-message can wait, it is an ordinary toast; if it cannot, it is an urgent toast plus this card.
+message can wait, it is an ordinary toast; if it cannot, it is this card, with the urgent toast
+behind it for the case where the card cannot be drawn.
 
-`UserNotification.IsUrgent` decides the toast scenario, and **only the final warning before a
-forced sign-out or close is urgent**: it stays on screen and overrides Focus Assist. Everything
+`UserNotification.IsUrgent` decides the toast scenario for the fallback, and **only the final
+warning before a forced sign-out or close is urgent**: it stays on screen and overrides Focus
+Assist. Both urgent notifications also carry `CountdownSeconds` and a persistent key, so in
+ordinary operation they are drawn as cards and the urgent toast is never seen. Everything
 else - reminders, rule changes, availability, a completed update - is an ordinary toast with
 default priority. Urgent toasts carry two short lines and nothing else: the title states what is
 closing and how long is left, the body states the reason and to save work now. Detail belongs in
@@ -507,9 +520,9 @@ rules:
 3. set a one-minute Notepad limit and verify it closes at exhaustion;
 4. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
 5. reconnect and confirm pending statistics upload;
-6. manually block the PC, confirm the native final-warning notification appears with the 60-second
-   grace period, expires instead of leaving a topmost window behind, and confirm Windows signs the
-   session out;
+6. manually block the PC, confirm the countdown card appears with the 60-second grace period and
+   no duplicate native toast beside it, expires instead of leaving a topmost window behind, and
+   confirm Windows signs the session out;
 7. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
 8. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
    enforcement remains independent;

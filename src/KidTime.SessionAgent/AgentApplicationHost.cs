@@ -232,14 +232,21 @@ internal sealed class AgentApplicationHost : IDisposable
         else if (notification.CountdownSeconds is int countdownSeconds
                  && notification.PersistentNotificationKey is { } warningKey)
         {
-            NativeWindowsNotification.ShowFinalWarning(
+            // The card is the final warning, because it shows the one thing a toast cannot - the
+            // seconds actually draining away - and two warnings for one deadline only compete for
+            // the same corner. The toast remains the fallback: the card is best-effort by design,
+            // so a child must never be left with no warning because it failed to draw.
+            var shown = _countdownCard.Show(
                 warningKey,
                 notification.Title,
                 notification.Message,
                 countdownSeconds);
-            // Additive only: the toast is what enforcement never depends on anyway, and the card
-            // adds the one thing a toast cannot show - the seconds actually draining away.
-            _countdownCard.Show(warningKey, notification.Title, notification.Message, countdownSeconds);
+            if (!shown)
+                NativeWindowsNotification.ShowFinalWarning(
+                    warningKey,
+                    notification.Title,
+                    notification.Message,
+                    countdownSeconds);
         }
         else
         {

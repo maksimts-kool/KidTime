@@ -95,15 +95,23 @@
                     <ui:Card Padding="24">
                         <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="240" />
+                                <ColumnDefinition Width="256" />
                                 <ColumnDefinition Width="24" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
 
-                            <Grid Width="204" Height="204" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <!--
+                                The ring has to be this large because the label lives inside it.
+                                ProgressRing draws its stroke at an eighth of its width from each
+                                edge, so only three quarters of the diameter is usable, and the
+                                Russian labels ("23 ч 59 мин", "дневной лимит не задан") are half
+                                again as wide as their English counterparts. At the original 196
+                                they ran straight through the stroke.
+                            -->
+                            <Grid Width="252" Height="252" HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <ui:ProgressRing x:Name="DailyRing"
-                                                 Width="196"
-                                                 Height="196"
+                                                 Width="244"
+                                                 Height="244"
                                                  HorizontalAlignment="Center"
                                                  VerticalAlignment="Center"
                                                  CoverRingStroke="{ui:ThemeResource ControlStrokeColorDefaultBrush}"
@@ -111,7 +119,7 @@
                                                  Progress="0" />
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                                     <TextBlock x:Name="RemainingText"
-                                               MaxWidth="150"
+                                               MaxWidth="158"
                                                HorizontalAlignment="Center"
                                                FontFamily="Segoe UI Variable Display"
                                                FontSize="29"
@@ -120,12 +128,14 @@
                                                TextAlignment="Center"
                                                TextWrapping="Wrap" />
                                     <TextBlock x:Name="RemainingCaption"
+                                               MaxWidth="128"
                                                Margin="0,4,0,0"
                                                HorizontalAlignment="Center"
                                                Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
                                                FontSize="13"
                                                Text="loading time"
-                                               TextAlignment="Center" />
+                                               TextAlignment="Center"
+                                               TextWrapping="Wrap" />
                                 </StackPanel>
                             </Grid>
 
