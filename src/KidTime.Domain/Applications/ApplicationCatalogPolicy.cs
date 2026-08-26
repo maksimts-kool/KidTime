@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace KidTime.Domain.Applications;
 
 public static class ApplicationCatalogPolicy
@@ -9,6 +11,12 @@ public static class ApplicationCatalogPolicy
         "helper.exe", "pingsender.exe", "runtimebroker.exe", "searchindexer.exe", "searchprotocolhost.exe", "services.exe", "setup.exe",
         "sftp-server.exe", "sihost.exe", "smartscreen.exe", "sshd.exe", "svchost.exe",
         "taskhostw.exe", "wininit.exe", "winlogon.exe", "wmiprvse.exe", "werfault.exe", "wermgr.exe",
+        // Vendor background machinery that ships beside an application a child does use. Each of
+        // these was observed on a real controlled PC announcing itself as the product it belongs
+        // to - "NVIDIA App", "Microsoft Office LTSC Professional Plus 2024" - which is exactly the
+        // card a parent would mistake for the application itself.
+        "nvcontainer.exe", "nvidia overlay.exe", "nvidia share.exe", "nvidia web helper.exe",
+        "oawrapper.exe", "officeclicktorun.exe", "officec2rclient.exe",
         // Steam runs a small fleet of satellites beside steam.exe. Only steamwebhelper.exe draws
         // a window a child actually uses, and that one is resolved onto steam.exe below; the rest
         // are background machinery and must never earn a card of their own.
@@ -24,13 +32,26 @@ public static class ApplicationCatalogPolicy
         "microsoft.microsoftedge.stable", "microsoft.edge.gameassist", "microsoft.sechealthui", "microsoft.xbox.tcui",
         "microsoft.xboxidentityprovider", "microsoft.xboxspeechtotextoverlay", "mdodrmcpfilterpackage",
         "microsoft.directxruntime", "microsoft.gamingservices", "microsoft.gameinput", "gameinput",
-        "languageexperiencepack", "extension", "codec"
+        "languageexperiencepack", "extension", "codec",
+        // Windows ships a shelf of packages that exist only to serve the shell: handwriting
+        // dictionaries, the search box, the widget feed, the OneDrive sync engine. They are
+        // packaged applications by every mechanical test and none of them is a thing a child
+        // opens, so a parent should never be offered a rule for one.
+        "winappruntime", "microsoft.widgetsplatformruntime", "microsoft.startexperiencesapp",
+        "microsoft.ink.handwriting", "microsoft.gethelp", "microsoft.onedrivesync",
+        "microsoft.bingsearch", "microsoft.microsoftofficehub",
+        // Copilot is real, but this package is only the stub that registers it; the window the
+        // child actually looks at belongs to mscopilot.exe, which keeps its own card.
+        "microsoft.copilot"
     ];
 
     private static readonly string[] ProductInfrastructureTokens =
     [
         "redistributable", "runtime", " update", "updater", "bootstrapper", "servicing stack", "driver package",
-        "gameinput", "maintenance service", "webview2", "vmware tools", "vmware svga", "graphics driver"
+        "gameinput", "maintenance service", "webview2", "vmware tools", "vmware svga", "graphics driver",
+        // An anti-cheat starting is the game starting, but the card it would earn is not one a
+        // parent can act on: blocking it breaks the game without saying so.
+        "anti-cheat", "anticheat", "battleye"
     ];
 
     /// <summary>
@@ -53,6 +74,18 @@ public static class ApplicationCatalogPolicy
         };
 
     private sealed record PrincipalApplication(string ExecutableName, string ProductName, string RootDirectoryName);
+
+    /// <summary>
+    /// Executables that carry a background role word but are the application itself. Riot names
+    /// the window a child logs into and launches games from RiotClientServices.exe, so the rule
+    /// that a name ending in "service" is machinery gets this one wrong. The rule is still right
+    /// - it retires BlueStacksServices.exe, WidgetService.exe and steamservice.exe - which is why
+    /// the exception is a named list rather than a softer rule.
+    /// </summary>
+    private static readonly HashSet<string> InteractiveDespiteRoleName = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "riotclientservices.exe", "riotclientux.exe"
+    };
 
     /// <summary>
     /// Rewrites a satellite process onto the application it belongs to; everything else is
@@ -118,6 +151,17 @@ public static class ApplicationCatalogPolicy
             || executablePath.Contains(@"\ProgramData\Package Cache\", StringComparison.OrdinalIgnoreCase))
             return false;
 
+        // A runtime host or a background satellite is what it is whether or not the process
+        // reported a package family, so this runs ahead of the packaged short-circuit below.
+        // msedgewebview2.exe hosting WhatsApp reports WhatsApp's family and would otherwise be
+        // taken at its word - and "Microsoft Edge WebView2" is not an application a parent
+        // recognizes, let alone one blocking WhatsApp through would be honest about.
+        if (executableName.Length > 0
+            && !InteractiveDespiteRoleName.Contains(executableName)
+            && (InfrastructureExecutables.Contains(executableName)
+                || IsNonInteractiveExecutableName(executableName)))
+            return false;
+
         // A packaged application observed without its family name - the process was gone before it
         // could be read, or a stored catalog row predates the reading of it - still carries the
         // identity in its install directory. Reading it back here filters on what the application
@@ -137,15 +181,57 @@ public static class ApplicationCatalogPolicy
             if (packageFamily.Length > 0) return true;
         }
 
-        if (!executableName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-            || InfrastructureExecutables.Contains(executableName)
-            || IsNonInteractiveExecutableName(executableName))
-            return false;
+        if (!executableName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return false;
 
         var productText = $"{displayName}|{productName}";
         return !ProductInfrastructureTokens.Any(token =>
             productText.Contains(token, StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>
+    /// The name a Windows package answers to, for the packages whose own identity is not it.
+    /// Keyed on the package name - the part of the family before the publisher id.
+    ///
+    /// This is a shortlist, not a catalog. An agent that can read the package manifest sends the
+    /// real display name and never reaches here; these are the in-box applications whose identity
+    /// name is actively misleading, where <see cref="HumanizePackageName"/> would confidently
+    /// produce a wrong answer ("Zune Music" for Media Player, "Windows Alarms" for Clock) rather
+    /// than merely a plain one.
+    /// </summary>
+    private static readonly Dictionary<string, string> PackageDisplayNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Microsoft.GamingApp"] = "Xbox",
+        ["Microsoft.XboxApp"] = "Xbox",
+        ["Microsoft.XboxGamingOverlay"] = "Xbox Game Bar",
+        ["Microsoft.WindowsNotepad"] = "Notepad",
+        ["Microsoft.WindowsCalculator"] = "Calculator",
+        ["Microsoft.Windows.Photos"] = "Photos",
+        ["Microsoft.ScreenSketch"] = "Snipping Tool",
+        ["Microsoft.WindowsTerminal"] = "Terminal",
+        ["Microsoft.YourPhone"] = "Phone Link",
+        ["Microsoft.WindowsStore"] = "Microsoft Store",
+        ["Microsoft.ZuneMusic"] = "Media Player",
+        ["Microsoft.ZuneVideo"] = "Movies & TV",
+        ["Microsoft.WindowsAlarms"] = "Clock",
+        ["Microsoft.WindowsCamera"] = "Camera",
+        ["Microsoft.WindowsSoundRecorder"] = "Sound Recorder",
+        ["Microsoft.MicrosoftStickyNotes"] = "Sticky Notes",
+        ["Microsoft.MicrosoftSolitaireCollection"] = "Solitaire Collection",
+        ["Microsoft.WindowsFeedbackHub"] = "Feedback Hub",
+        ["Microsoft.OutlookForWindows"] = "Outlook",
+        ["Microsoft.Todos"] = "Microsoft To Do",
+        ["Microsoft.BingNews"] = "News",
+        ["Microsoft.BingWeather"] = "Weather",
+        ["Microsoft.Windows.DevHome"] = "Dev Home",
+        ["Microsoft.PowerAutomateDesktop"] = "Power Automate",
+        ["MicrosoftCorporationII.QuickAssist"] = "Quick Assist",
+        ["MSTeams"] = "Microsoft Teams",
+        ["Clipchamp.Clipchamp"] = "Clipchamp",
+        ["38833FF26BA1D.UnigramPreview"] = "Unigram",
+        ["5319275A.WhatsAppDesktop"] = "WhatsApp",
+        ["TelegramMessengerLLP.TelegramDesktop"] = "Telegram",
+        ["SpotifyAB.SpotifyMusic"] = "Spotify"
+    };
 
     public static string GetFriendlyDisplayName(ApplicationDescriptor application)
     {
@@ -153,18 +239,66 @@ public static class ApplicationCatalogPolicy
         if (application.ExecutableName.Equals("firefox.exe", StringComparison.OrdinalIgnoreCase)
             && ($"{application.Company}|{application.SignaturePublisher}".Contains("Mozilla", StringComparison.OrdinalIgnoreCase)))
             return "Firefox";
-        var package = application.PackageFamilyName ?? string.Empty;
-        if (package.StartsWith("Microsoft.GamingApp_", StringComparison.OrdinalIgnoreCase)
-            || package.StartsWith("Microsoft.XboxApp_", StringComparison.OrdinalIgnoreCase)) return "Xbox";
-        if (package.StartsWith("Microsoft.XboxGamingOverlay_", StringComparison.OrdinalIgnoreCase)) return "Xbox Game Bar";
-        if (package.StartsWith("Microsoft.WindowsNotepad_", StringComparison.OrdinalIgnoreCase)) return "Notepad";
-        if (package.StartsWith("Microsoft.WindowsCalculator_", StringComparison.OrdinalIgnoreCase)) return "Calculator";
-        if (package.StartsWith("Microsoft.Windows.Photos_", StringComparison.OrdinalIgnoreCase)) return "Photos";
-        if (package.StartsWith("Microsoft.ScreenSketch_", StringComparison.OrdinalIgnoreCase)) return "Snipping Tool";
-        if (package.StartsWith("Microsoft.WindowsTerminal_", StringComparison.OrdinalIgnoreCase)) return "Terminal";
-        if (package.StartsWith("Microsoft.YourPhone_", StringComparison.OrdinalIgnoreCase)) return "Phone Link";
-        if (package.StartsWith("Microsoft.WindowsStore_", StringComparison.OrdinalIgnoreCase)) return "Microsoft Store";
-        return application.DisplayName.Trim();
+        var displayName = application.DisplayName.Trim();
+        var packageName = ReadPackageName(application);
+        if (packageName.Length > 0 && PackageDisplayNames.TryGetValue(packageName, out var known)) return known;
+        return IsPackageIdentity(displayName, packageName) ? HumanizePackageName(displayName) : displayName;
+    }
+
+    /// <summary>
+    /// The package name a descriptor belongs to - the family without its publisher id - taken from
+    /// the reported family, or read back out of a WindowsApps install path when the process did
+    /// not report one.
+    /// </summary>
+    private static string ReadPackageName(ApplicationDescriptor application)
+    {
+        var family = application.PackageFamilyName?.Trim() ?? string.Empty;
+        if (family.Length == 0)
+            family = ReadWindowsAppsPackageFamily(application.ExecutablePath.Replace('/', '\\').Trim());
+        var separator = family.LastIndexOf('_');
+        return separator > 0 ? family[..separator] : family;
+    }
+
+    /// <summary>
+    /// Whether a display name is really a package identity wearing the label. An agent that could
+    /// not read the manifest sends the identity itself, which is how "38833FF26BA1D.UnigramPreview"
+    /// and "Microsoft.BingNews" came to sit on a parent's applications page. Anything a person
+    /// would have written - a name with a space in it, or one that is not this package's own
+    /// identity - is left exactly as it is.
+    /// </summary>
+    private static bool IsPackageIdentity(string displayName, string packageName)
+    {
+        if (packageName.Length == 0 || displayName.Length == 0) return false;
+        if (displayName.Contains(' ')) return false;
+        return displayName.Equals(packageName, StringComparison.OrdinalIgnoreCase)
+               || packageName.EndsWith($".{displayName}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Turns a package identity into something readable: the leaf of the dotted name, split where
+    /// its words run together. "Microsoft.BingNews" reads "Bing News" and
+    /// "NVIDIACorp.NVIDIAControlPanel" reads "NVIDIA Control Panel" - a run of capitals stays one
+    /// word until the last of them starts the next. It is the plain name rather than the marketed
+    /// one, which is the point: a parent can tell what it is.
+    /// </summary>
+    private static string HumanizePackageName(string packageName)
+    {
+        var leaf = packageName[(packageName.LastIndexOf('.') + 1)..];
+        if (leaf.Length == 0) return packageName;
+        var text = new StringBuilder(leaf.Length + 8);
+        for (var index = 0; index < leaf.Length; index++)
+        {
+            var current = leaf[index];
+            if (index > 0 && char.IsUpper(current))
+            {
+                var previous = leaf[index - 1];
+                var startsWord = !char.IsUpper(previous)
+                                 || (index + 1 < leaf.Length && char.IsLower(leaf[index + 1]));
+                if (startsWord && text.Length > 0 && text[^1] != ' ') text.Append(' ');
+            }
+            text.Append(current);
+        }
+        return text.ToString();
     }
 
     public static ApplicationDescriptor NormalizeForCatalog(ApplicationDescriptor application)
@@ -237,10 +371,24 @@ public static class ApplicationCatalogPolicy
         var stem = StripCopyMarker(Path.GetFileNameWithoutExtension(executableName).Trim().ToLowerInvariant());
         if (stem is "install" or "installer" or "setup" or "uninstall" or "uninstaller" or "update" or "updater")
             return true;
+        // A role word can lead the name as readily as it can end it: Rockstar's
+        // uninstallRGSCRedistributable.exe reached a real parent's panel as "Rockstar Games SDK",
+        // and unins000.exe is what every Inno Setup package leaves behind.
+        if (stem.StartsWith("uninstall", StringComparison.Ordinal)
+            || stem.StartsWith("unins0", StringComparison.Ordinal)
+            || stem.StartsWith("setup", StringComparison.Ordinal))
+            return true;
         return HasRoleSuffix(stem, "helper")
                || HasRoleSuffix(stem, "installer")
                || HasRoleSuffix(stem, "setup")
                || HasRoleSuffix(stem, "updater")
+               // A background agent or service is the half of a product that runs whether or not
+               // the child ever opens it: lghub_agent.exe beside Logitech G HUB,
+               // BlueStacksServices.exe beside BlueStacks, WidgetService.exe behind the widget
+               // board. Counting one as usage would charge a child for being logged in.
+               || HasRoleSuffix(stem, "agent")
+               || HasRoleSuffix(stem, "service")
+               || HasRoleSuffix(stem, "services")
                // A crash reporter starting is the opposite of a child using an application, yet it
                // is exactly what the foreground sample catches at that moment. Steam and Unity each
                // ship one, and neither belongs on the parent's panel.

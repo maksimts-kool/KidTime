@@ -212,6 +212,132 @@ public sealed class ApplicationCatalogPolicyTests
         Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
     }
 
+    [Theory]
+    // Every one of these reached a real parent's applications page, wearing the name of the
+    // product it belongs to rather than its own.
+    [InlineData("NVIDIA App", "NVIDIA Overlay.exe")]
+    [InlineData("nvcontainer", "nvcontainer.exe")]
+    [InlineData("Microsoft Office LTSC Professional Plus 2024 - en-us", "OfficeClickToRun.exe")]
+    [InlineData("BlueStacks Services", "BlueStacksServices.exe")]
+    [InlineData("LGHUB Agent", "lghub_agent.exe")]
+    [InlineData("Widgets Platform Runtime", "WidgetService.exe")]
+    [InlineData("Rockstar Games SDK", "uninstallRGSCRedistributable.exe")]
+    [InlineData("Some Game", "unins000.exe")]
+    [InlineData("FACEIT Anti-Cheat", "faceitclient.exe")]
+    [InlineData("NVIDIA GeForce Experience Application Ontology", "OAWrapper.exe")]
+    public void Vendor_background_processes_are_not_manageable(string name, string executable)
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = name,
+            ProductName = name,
+            ExecutableName = executable,
+            OriginalFilename = executable,
+            ExecutablePath = $@"C:\Program Files\Vendor\{executable}",
+            SignaturePublisher = "Vendor Inc."
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Fact]
+    public void A_launcher_named_like_a_service_is_still_manageable()
+    {
+        // Riot's client - the window a child signs in and launches games from - is
+        // RiotClientServices.exe. The rule that retires BlueStacksServices.exe must not take it.
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = "RiotClient",
+            ProductName = "RiotClient",
+            ExecutableName = "RiotClientServices.exe",
+            OriginalFilename = "RiotClientServices.exe",
+            ExecutablePath = @"C:\Riot Games\Riot Client\RiotClientServices.exe",
+            SignaturePublisher = "Riot Games, Inc."
+        };
+
+        Assert.True(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Fact]
+    public void A_runtime_host_is_not_manageable_even_when_it_reports_the_hosted_family()
+    {
+        // WhatsApp draws itself through WebView2, so the host process reports WhatsApp's package
+        // family. Taken at its word it earns a card called "Microsoft Edge WebView2" - which is
+        // neither an application a parent recognizes nor one that blocking WhatsApp goes through.
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = "Microsoft Edge WebView2",
+            ProductName = "Microsoft Edge WebView2",
+            ExecutableName = "msedgewebview2.exe",
+            OriginalFilename = "msedgewebview2.exe",
+            PackageFamilyName = "5319275A.WhatsAppDesktop_cv1g1gvanyjgm",
+            ExecutablePath = @"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\151.0.4129.107\msedgewebview2.exe",
+            Company = "Microsoft Corporation"
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Theory]
+    [InlineData("Microsoft.Ink.Handwriting.Main.en-US.1.0.1")]
+    [InlineData("MicrosoftCorporationII.WinAppRuntime.Main.1.8")]
+    [InlineData("Microsoft.GetHelp")]
+    [InlineData("Microsoft.OneDriveSync")]
+    [InlineData("Microsoft.BingSearch")]
+    [InlineData("Microsoft.MicrosoftOfficeHub")]
+    [InlineData("Microsoft.StartExperiencesApp")]
+    [InlineData("Microsoft.WidgetsPlatformRuntime")]
+    public void Packaged_windows_components_are_not_manageable(string packageName)
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = packageName,
+            ProductName = packageName,
+            PackageFamilyName = $"{packageName}_8wekyb3d8bbwe",
+            ExecutablePath = $@"C:\Program Files\WindowsApps\{packageName}_1.0.0.0_x64__8wekyb3d8bbwe"
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Theory]
+    // An agent that cannot read the package manifest sends the identity as the name. The panel
+    // makes it readable rather than printing a package id at a parent.
+    [InlineData("Microsoft.BingNews", "News")]
+    [InlineData("38833FF26BA1D.UnigramPreview", "Unigram")]
+    [InlineData("Microsoft.MicrosoftStickyNotes", "Sticky Notes")]
+    [InlineData("NVIDIACorp.NVIDIAControlPanel", "NVIDIA Control Panel")]
+    [InlineData("LGElectronics.LGMonitorApp", "LG Monitor App")]
+    [InlineData("SomeVendor.PuzzleQuestDeluxe", "Puzzle Quest Deluxe")]
+    public void Package_identities_are_shown_as_readable_names(string packageName, string expected)
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = packageName,
+            ProductName = packageName,
+            PackageFamilyName = $"{packageName}_8wekyb3d8bbwe",
+            ExecutablePath = $@"C:\Program Files\WindowsApps\{packageName}_1.0.0.0_x64__8wekyb3d8bbwe"
+        };
+
+        Assert.Equal(expected, ApplicationCatalogPolicy.GetFriendlyDisplayName(descriptor));
+    }
+
+    [Fact]
+    public void A_real_display_name_survives_the_package_identity_rewrite()
+    {
+        // An agent that did read the manifest already sent the name Windows shows, and the leaf of
+        // the package identity must not be allowed to overwrite it.
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = "Rail Route",
+            ProductName = "SomeStudio.RailRoute",
+            PackageFamilyName = "SomeStudio.RailRoute_8wekyb3d8bbwe",
+            ExecutablePath = @"C:\Program Files\WindowsApps\SomeStudio.RailRoute_1.0.0.0_x64__8wekyb3d8bbwe"
+        };
+
+        Assert.Equal("Rail Route", ApplicationCatalogPolicy.GetFriendlyDisplayName(descriptor));
+    }
+
     [Fact]
     public void Packaged_applications_still_face_the_executable_checks_when_the_family_is_only_inferred()
     {

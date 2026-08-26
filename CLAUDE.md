@@ -307,7 +307,13 @@ that weight:
 
 - a role word ending the executable name, with or without a separator — `steamwebhelper` is one
   word to Steam and a helper to everybody else — and a `(2)` copy marker stripped first, so a
-  repeat download is still the installer it is;
+  repeat download is still the installer it is. `agent`, `service`, and `services` are role words
+  too: `lghub_agent.exe` and `BlueStacksServices.exe` run whether or not a child ever opens
+  Logitech G HUB or BlueStacks. `InteractiveDespiteRoleName` is the narrow exception, and Riot is
+  why it exists — the window a child signs in and launches games from is `RiotClientServices.exe`;
+- a role word **leading** the name, for the same reason: Rockstar's
+  `uninstallRGSCRedistributable.exe` reached a parent's panel as "Rockstar Games SDK", and
+  `unins000.exe` is what every Inno Setup package leaves behind;
 - `crashhandler`, `crashreporter`, `crashpad`, and `errorreporter` anywhere in the name, which is
   what `UnityCrashHandler64.exe` and Steam's reporters are;
 - `wextract.exe` as the original filename: an IExpress self-extractor keeps that version resource,
@@ -317,9 +323,41 @@ that weight:
   process did not report one. A family only inferred this way still faces the executable checks;
   a reported one identifies the application outright.
 
+**The executable checks run ahead of that last short-circuit**, or a runtime host is taken at its
+word about the application it is hosting: WhatsApp draws itself through WebView2, so
+`msedgewebview2.exe` reports WhatsApp's package family and earned a card named "Microsoft Edge
+WebView2" — neither a name a parent recognizes nor a thing blocking WhatsApp goes through.
+
 Because the panel and the reconciler both filter through `IsUserManageable`, widening it also
 retires entries already in the database, and `ApplicationCatalogReconciler` merges a satellite's
 existing rules and usage into its principal on the next server start.
+
+#### Naming a packaged application
+
+`Get-AppxPackage` answers with the package identity, so the first real controlled PC filled its
+applications page with `Microsoft.BingNews` and `38833FF26BA1D.UnigramPreview`. The manifest
+carries the name Windows itself shows, and `MsixPackageReader` reads it: the display name is
+usually an indirect `ms-resource:` reference whose string lives in the package's compiled
+resources, resolved through `SHLoadIndirectString`. Several wrappings are tried in turn because
+none covers everything — the package's own `resources.pri` on disk, which is what can work from
+LocalSystem where none of these packages is registered to the caller, and the expanded
+`ms-resource://Name/Resources/Key` form, which is what Calculator, Terminal, and Photos need.
+
+The same manifest is what separates an application from a shell component. A packaged component is
+a packaged application by every mechanical test — same publisher, same install root, same shape of
+name — so no name filter tells the widget feed or the handwriting dictionary from Photos.
+`AppListEntry="none"`, or no `<Application>` at all, does: it is Windows' own statement that the
+package has no Start entry and is not something a person opens. On a real PC that keeps 18
+applications out of 111 packages. A manifest that cannot be read keeps its package, named as
+before; losing a real application because one file would not open is the worse failure.
+
+`ApplicationCatalogPolicy.GetFriendlyDisplayName` is the second line, and it runs on the server, so
+it repairs rows an older agent already uploaded. A display name that is the package's own identity
+is rewritten to the leaf of that identity with its words split — `Microsoft.BingNews` reads "Bing
+News", `NVIDIACorp.NVIDIAControlPanel` reads "NVIDIA Control Panel". `PackageDisplayNames` overrides
+the handful where that would be confidently wrong: Media Player is not "Zune Music" and Clock is not
+"Windows Alarms". A name with a space in it was written by a person or read from a manifest, and is
+never rewritten.
 
 ### Secrets, enrollment, and removal
 
@@ -575,7 +613,9 @@ Automated tests cover daily limits, manual blocks, temporary-block expiry, sched
 windows, timezone day changes, update-tolerant application identity, installer/runtime identity
 reconciliation, helper-process filtering, satellite processes resolved onto their application,
 crash handlers and downloaded installers kept out of the catalog, packaged components filtered from
-an inferred family name, rule-change notifications, urgent running-out reminders, a delayed final
+an inferred family name, vendor agents and services retired while a launcher named like one is
+kept, a runtime host filtered despite reporting the family it hosts, package identities shown as
+readable names, rule-change notifications, urgent running-out reminders, a delayed final
 warning restated in the seconds actually left, an expired final warning dropped rather than shown,
 persisted first-block grace, automatic-update version comparison, controlled-account SID isolation,
 cached offline rules, durable pending usage, buffered usage that survives a restart, durable fault
@@ -596,21 +636,23 @@ rules:
    still shows seconds left, and that the card's title agrees with the number counting down;
 6. let a limit run past 15, 5, and 2 minutes remaining with a game in the foreground, and confirm
    each reminder interrupts instead of fading behind it;
-7. start Steam and confirm one card named Steam appears in the panel — no `steamwebhelper`, no crash
+7. confirm the applications page reads as a list of applications: no `Microsoft.BingNews` or any
+   other package identity, no WebView2, and no vendor agent, service, or uninstaller;
+8. start Steam and confirm one card named Steam appears in the panel — no `steamwebhelper`, no crash
    handler, no `Internet Explorer` from a downloaded `KidTimeSetup.exe` — then block Steam and
    confirm the window the child is looking at is what closes;
-8. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
-9. reconnect and confirm pending statistics upload;
-10. manually block the PC, confirm the countdown card appears with the 60-second grace period and
+9. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
+10. reconnect and confirm pending statistics upload;
+11. manually block the PC, confirm the countdown card appears with the 60-second grace period and
     no duplicate native toast beside it, expires instead of leaving a topmost window behind, and
     confirm Windows signs the session out;
-11. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
-12. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
+12. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
+13. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
     enforcement remains independent;
-13. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
+14. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
     instead, with the device, component, and stack trace, and repeats raise the count rather than
     adding rows;
-14. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
+15. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
     screen-time window, the next notification, and the countdown card all change without
     reinstalling or signing out, then block the PC and confirm the card counts down in the corner,
     never takes focus, and disappears on its own when the countdown ends or the parent lifts the
