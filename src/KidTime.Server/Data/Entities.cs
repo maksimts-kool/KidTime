@@ -1,3 +1,5 @@
+using KidTime.Domain.Localization;
+
 namespace KidTime.Server.Data;
 
 public sealed class ParentUser
@@ -59,6 +61,13 @@ public sealed class DeviceRule
     public string? ControlledUserSid { get; set; }
     public string? ControlledUserName { get; set; }
     public int IdleThresholdSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// The language the controlled PC speaks to the child in. It rides with the rules, so a
+    /// change increments the revision and reaches the agent over the usual path.
+    /// </summary>
+    public AgentLanguage Language { get; set; } = AgentLanguage.English;
+
     public bool ManuallyBlocked { get; set; }
     public DateTimeOffset? ManualBlockUntilUtc { get; set; }
     public int? DailyLimitSeconds { get; set; } = 18_000;

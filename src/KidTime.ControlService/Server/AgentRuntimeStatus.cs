@@ -2,12 +2,16 @@ using KidTime.Domain.Contracts;
 
 namespace KidTime.ControlService.Server;
 
+/// <summary>
+/// What the sync loop currently knows about the server. It records states, never sentences: the
+/// wording belongs to the tray agent, which paints it in the language the parent chose.
+/// </summary>
 public sealed class AgentRuntimeStatus
 {
     private readonly object _gate = new();
     private ServerConnectionStatus _snapshot = new(
         false,
-        "Connecting to server",
+        ServerConnectionState.Connecting,
         null,
         null,
         null);
@@ -24,7 +28,7 @@ public sealed class AgentRuntimeStatus
             _snapshot = _snapshot with
             {
                 IsConnected = false,
-                ConnectionMessage = "Device is not enrolled"
+                State = ServerConnectionState.NotEnrolled
             };
         }
     }
@@ -36,7 +40,7 @@ public sealed class AgentRuntimeStatus
             _snapshot = _snapshot with
             {
                 IsConnected = true,
-                ConnectionMessage = "Connected",
+                State = ServerConnectionState.Connected,
                 LastSuccessfulContactUtc = DateTimeOffset.UtcNow
             };
         }
@@ -50,7 +54,7 @@ public sealed class AgentRuntimeStatus
             _snapshot = _snapshot with
             {
                 IsConnected = true,
-                ConnectionMessage = "Connected",
+                State = ServerConnectionState.Connected,
                 LastSuccessfulContactUtc = now,
                 LastSuccessfulSynchronizationUtc = now,
                 LastSynchronizationError = null
@@ -65,7 +69,7 @@ public sealed class AgentRuntimeStatus
             _snapshot = _snapshot with
             {
                 IsConnected = false,
-                ConnectionMessage = "Offline - cached rules active"
+                State = ServerConnectionState.Offline
             };
         }
     }
@@ -77,7 +81,7 @@ public sealed class AgentRuntimeStatus
             _snapshot = _snapshot with
             {
                 IsConnected = false,
-                ConnectionMessage = "Offline - cached rules active",
+                State = ServerConnectionState.Offline,
                 LastSynchronizationError = Shorten(error)
             };
         }

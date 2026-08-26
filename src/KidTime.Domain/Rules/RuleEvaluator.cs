@@ -1,3 +1,5 @@
+using KidTime.Domain.Localization;
+
 namespace KidTime.Domain.Rules;
 
 public static class RuleEvaluator
@@ -8,6 +10,7 @@ public static class RuleEvaluator
         int activeSecondsToday)
     {
         var timeZone = ResolveTimeZone(rule.TimeZoneId);
+        var text = AgentStrings.For(rule.Language);
 
         if (rule.ManuallyBlocked &&
             (rule.ManualBlockUntilUtc is null || rule.ManualBlockUntilUtc > utcNow))
@@ -16,8 +19,8 @@ public static class RuleEvaluator
                 false,
                 BlockReason.ManualBlock,
                 rule.ManualBlockUntilUtc is null
-                    ? "This PC was blocked by your parent."
-                    : "This PC is temporarily blocked.",
+                    ? text.DeviceBlockedByParent
+                    : text.DeviceTemporarilyBlocked,
                 rule.ManualBlockUntilUtc);
         }
 
@@ -26,7 +29,7 @@ public static class RuleEvaluator
             return new RuleDecision(
                 false,
                 BlockReason.DailyLimitReached,
-                "Today's PC time limit has been reached.",
+                text.DeviceDailyLimitReached,
                 StartOfNextLocalDayUtc(utcNow, timeZone));
         }
 
@@ -36,27 +39,29 @@ public static class RuleEvaluator
             return new RuleDecision(
                 false,
                 BlockReason.OutsideAllowedSchedule,
-                "PC use is not allowed at this time.",
+                text.DeviceOutsideSchedule,
                 FindNextAllowedUtc(rule.Schedule, utcNow, timeZone));
         }
 
-        return RuleDecision.Allowed;
+        return RuleDecision.AllowedIn(text);
     }
 
     public static RuleDecision EvaluateApplication(
         ApplicationRuleSnapshot rule,
         DateTimeOffset utcNow,
         string timeZoneId,
-        int activeSecondsToday)
+        int activeSecondsToday,
+        AgentLanguage language = AgentLanguage.English)
     {
         var timeZone = ResolveTimeZone(timeZoneId);
+        var text = AgentStrings.For(language);
 
         if (rule.ManuallyBlocked)
         {
             return new RuleDecision(
                 false,
                 BlockReason.ManualBlock,
-                $"{rule.DisplayName} is blocked by your parent.");
+                text.ApplicationBlockedByParent(rule.DisplayName));
         }
 
         if (rule.DailyLimitSeconds is int limit && activeSecondsToday >= limit)
@@ -64,7 +69,7 @@ public static class RuleEvaluator
             return new RuleDecision(
                 false,
                 BlockReason.DailyLimitReached,
-                $"{rule.DisplayName}'s daily time limit has been reached.",
+                text.ApplicationDailyLimitReached(rule.DisplayName),
                 StartOfNextLocalDayUtc(utcNow, timeZone));
         }
 
@@ -74,11 +79,11 @@ public static class RuleEvaluator
             return new RuleDecision(
                 false,
                 BlockReason.OutsideAllowedSchedule,
-                $"{rule.DisplayName} is not available at this time.",
+                text.ApplicationOutsideSchedule(rule.DisplayName),
                 FindNextAllowedUtc(rule.Schedule, utcNow, timeZone));
         }
 
-        return RuleDecision.Allowed;
+        return RuleDecision.AllowedIn(text);
     }
 
     public static DateOnly GetLocalDate(DateTimeOffset utcNow, string timeZoneId)

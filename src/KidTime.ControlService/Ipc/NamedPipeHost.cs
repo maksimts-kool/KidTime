@@ -8,6 +8,7 @@ using KidTime.ControlService.Removal;
 using KidTime.ControlService.Server;
 using KidTime.ControlService.Sessions;
 using KidTime.Domain.Contracts;
+using KidTime.Domain.Localization;
 
 namespace KidTime.ControlService.Ipc;
 
@@ -68,7 +69,10 @@ public sealed class NamedPipeHost(
 
         if (request is { UsageSample: null, RemovalRequest: { } removal })
         {
-            var result = await removalService.AuthorizeAndScheduleAsync(removal, cancellationToken);
+            var result = await removalService.AuthorizeAndScheduleAsync(
+                removal,
+                cancellationToken,
+                AgentStrings.For(coordinator.Rules.Language));
             return new SessionAgentResponse(Removal: result);
         }
 

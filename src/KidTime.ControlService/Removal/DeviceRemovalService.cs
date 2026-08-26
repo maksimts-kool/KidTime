@@ -1,4 +1,5 @@
 using KidTime.Domain.Contracts;
+using KidTime.Domain.Localization;
 
 namespace KidTime.ControlService.Removal;
 
@@ -18,44 +19,48 @@ public sealed class DeviceRemovalService(
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _removalScheduled;
 
+    /// <summary>
+    /// Verifies the parent login and, on success, schedules removal. Every answer is phrased in
+    /// <paramref name="text"/>, because the person reading it is standing at the child's PC.
+    /// </summary>
     public async Task<DeviceRemovalResult> AuthorizeAndScheduleAsync(
         ParentRemovalRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AgentStrings? text = null)
     {
+        text ??= AgentStrings.English;
         var email = request.Email.Trim();
         if (email.Length is 0 or > 320 || request.Password.Length is 0 or > 1024)
-            return Rejected("Enter the parent email address and password.");
+            return Rejected(text.RemovalEnterCredentials);
         if (!await _gate.WaitAsync(0, cancellationToken))
-            return Rejected("KidTime is already checking a removal request.");
+            return Rejected(text.RemovalAlreadyChecking);
 
         try
         {
             if (_removalScheduled)
-                return new DeviceRemovalResult(true, "KidTime removal is already in progress.");
+                return new DeviceRemovalResult(true, text.RemovalAlreadyInProgress);
 
             var authorized = await apiClient.RemoveDeviceWithParentCredentialsAsync(
                 email,
                 request.Password,
                 cancellationToken);
             if (!authorized)
-                return Rejected("The parent email address or password is incorrect.");
+                return Rejected(text.RemovalCredentialsIncorrect);
 
             await uninstaller.ScheduleAsync(cancellationToken);
             _removalScheduled = true;
             logger.LogInformation("Parent-authorized KidTime removal was scheduled.");
-            return new DeviceRemovalResult(
-                true,
-                "Parent account verified. KidTime is being removed from this PC.");
+            return new DeviceRemovalResult(true, text.RemovalAccepted);
         }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or InvalidDataException)
         {
             logger.LogWarning(exception, "Parent-authorized KidTime removal could not contact the server.");
-            return Rejected("KidTime could not verify the parent login with the server. Check the connection and try again.");
+            return Rejected(text.RemovalServerUnreachable);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             logger.LogError(exception, "Windows could not schedule parent-authorized KidTime removal.");
-            return Rejected("The parent login was accepted, but Windows could not start KidTime removal. Try again.");
+            return Rejected(text.RemovalWindowsFailed);
         }
         finally
         {

@@ -1,0 +1,286 @@
+using System.Globalization;
+
+namespace KidTime.Domain.Localization;
+
+/// <summary>
+/// Every string the controlled user can read, in one place. Both halves of the agent depend on
+/// it: ControlService composes notifications and rule messages, SessionAgent paints the tray
+/// dashboard and the countdown card. Making it an abstract class rather than a resource
+/// dictionary is deliberate - a new message cannot be added in one language only, because the
+/// other language then fails to compile.
+/// </summary>
+public abstract class AgentStrings
+{
+    public static AgentStrings English { get; } = new EnglishAgentStrings();
+    public static AgentStrings Russian { get; } = new RussianAgentStrings();
+
+    public static AgentStrings For(AgentLanguage language) => language switch
+    {
+        AgentLanguage.Russian => Russian,
+        _ => English
+    };
+
+    /// <summary>Culture used for clock times, weekday names, and numbers.</summary>
+    public abstract CultureInfo Culture { get; }
+
+    public abstract AgentLanguage Language { get; }
+
+    // ---------------------------------------------------------------- units and durations
+
+    /// <summary>"2h" - a whole number of hours.</summary>
+    protected abstract string HoursOnly(int hours);
+    /// <summary>"1h 20m" - hours with the leading-zero minutes the panels line up on.</summary>
+    protected abstract string HoursAndMinutes(int hours, int minutes);
+    /// <summary>"45 min" - under an hour, abbreviated.</summary>
+    protected abstract string MinutesOnly(int minutes);
+    protected abstract string MinuteWord(int count);
+    protected abstract string SecondWord(int count);
+
+    /// <summary>Compact duration for badges, rings, and tooltips: "1h 20m" or "45 min".</summary>
+    public string DurationLabel(int seconds)
+    {
+        var minutes = Math.Max(0, (int)Math.Ceiling(seconds / 60d));
+        return minutes >= 60 ? HoursAndMinutes(minutes / 60, minutes % 60) : MinutesOnly(minutes);
+    }
+
+    /// <summary>Spelled-out duration for sentences: "1h 20m" or "45 minutes".</summary>
+    public string DurationWords(int seconds)
+    {
+        var minutes = Math.Max(1, (int)Math.Ceiling(seconds / 60d));
+        return minutes >= 60
+            ? HoursAndMinutes(minutes / 60, minutes % 60)
+            : $"{minutes} {MinuteWord(minutes)}";
+    }
+
+    /// <summary>How long is left before something closes: "2 minutes" or "45 seconds".</summary>
+    public string Countdown(int seconds)
+    {
+        if (seconds < 60) return $"{seconds} {SecondWord(seconds)}";
+        var minutes = (int)Math.Ceiling(seconds / 60d);
+        return $"{minutes} {MinuteWord(minutes)}";
+    }
+
+    /// <summary>A configured daily allowance, or the words for having none.</summary>
+    public string LimitText(int? seconds) => seconds is not int value
+        ? NoLimit
+        : value % 3600 == 0
+            ? HoursOnly(value / 3600)
+            : HoursAndMinutes(value / 3600, (value % 3600) / 60);
+
+    /// <summary>A wall-clock deadline: "today at 20:00" or "Fri at 20:00".</summary>
+    public string Deadline(DateTimeOffset deadline)
+    {
+        var local = deadline.ToLocalTime();
+        return local.Date == DateTimeOffset.Now.Date
+            ? TodayAt(local.ToString("HH:mm", Culture))
+            : WeekdayAt(local.ToString("ddd", Culture), local.ToString("HH:mm", Culture));
+    }
+
+    /// <summary>How long ago something last happened, for the connection panel.</summary>
+    public string Relative(DateTimeOffset? time)
+    {
+        if (time is null) return NotYet;
+        var elapsed = DateTimeOffset.UtcNow - time.Value;
+        if (elapsed < TimeSpan.FromMinutes(1)) return JustNow;
+        if (elapsed < TimeSpan.FromHours(1)) return MinutesAgo(Math.Max(1, (int)elapsed.TotalMinutes));
+        if (elapsed < TimeSpan.FromDays(1)) return HoursAgo(Math.Max(1, (int)elapsed.TotalHours));
+        return time.Value.ToLocalTime().ToString("ddd HH:mm", Culture);
+    }
+
+    protected abstract string TodayAt(string time);
+    protected abstract string WeekdayAt(string weekday, string time);
+    public abstract string NotYet { get; }
+    public abstract string JustNow { get; }
+    protected abstract string MinutesAgo(int minutes);
+    protected abstract string HoursAgo(int hours);
+
+    // ---------------------------------------------------------------- rule decisions
+
+    public abstract string Allowed { get; }
+    public abstract string PcScopeName { get; }
+    public abstract string NoLimit { get; }
+
+    public abstract string DeviceBlockedByParent { get; }
+    public abstract string DeviceTemporarilyBlocked { get; }
+    public abstract string DeviceDailyLimitReached { get; }
+    public abstract string DeviceOutsideSchedule { get; }
+
+    public abstract string ApplicationBlockedByParent(string application);
+    public abstract string ApplicationDailyLimitReached(string application);
+    public abstract string ApplicationOutsideSchedule(string application);
+
+    /// <summary>The clause an urgent toast leads with; it must survive being read in one glance.</summary>
+    public abstract string ShortReasonManualBlock { get; }
+    public abstract string ShortReasonDailyLimit { get; }
+    public abstract string ShortReasonOutsideSchedule { get; }
+    public abstract string ShortReasonUnavailable { get; }
+
+    // ---------------------------------------------------------------- notifications
+
+    public abstract string SignOutCountdownTitle(int seconds);
+    public abstract string ApplicationClosingTitle(string application, int seconds);
+    public abstract string SaveYourWorkNow(string shortReason);
+
+    public abstract string PcAvailableTitle { get; }
+    public abstract string PcAvailableMessage(string previousShortReason);
+
+    public abstract string UpdatedTitle { get; }
+    public abstract string UpdatedMessage(string version);
+
+    public abstract string PcLimitChangedTitle { get; }
+    public abstract string ApplicationLimitChangedTitle(string application);
+    protected abstract string LimitChangeDailyClause(string limitText);
+    protected abstract string LimitChangeScheduleClause { get; }
+    protected abstract string LimitChangeSentence(string scope, string clauses);
+
+    /// <summary>"PC: daily time is now 2h, the schedule changed."</summary>
+    public string LimitChangeMessage(string scope, int? newDailyLimitSeconds, bool dailyChanged, bool scheduleChanged)
+    {
+        var clauses = new List<string>(2);
+        if (dailyChanged) clauses.Add(LimitChangeDailyClause(LimitText(newDailyLimitSeconds)));
+        if (scheduleChanged) clauses.Add(LimitChangeScheduleClause);
+        return LimitChangeSentence(scope, string.Join(", ", clauses));
+    }
+
+    public abstract string PcTimeLeftTitle(int thresholdSeconds);
+    public abstract string ApplicationTimeLeftTitle(string application, int thresholdSeconds);
+    public abstract string PcTimeLeftMessage { get; }
+    public abstract string ApplicationTimeLeftMessage(string application);
+
+    public abstract string ApplicationTimeTitle(string application);
+    public abstract string ApplicationRemainingUntil(string remaining, string deadline);
+    public abstract string ApplicationRemainingToday(string remaining);
+    public abstract string ApplicationAvailableUntil(string deadline);
+    public abstract string ApplicationTimeLimited { get; }
+
+    // ---------------------------------------------------------------- connection
+
+    public abstract string ConnectingToServer { get; }
+    public abstract string DeviceNotEnrolled { get; }
+    public abstract string Connected { get; }
+    public abstract string OfflineCachedRules { get; }
+
+    // ---------------------------------------------------------------- removal
+
+    public abstract string RemovalEnterCredentials { get; }
+    public abstract string RemovalAlreadyChecking { get; }
+    public abstract string RemovalAlreadyInProgress { get; }
+    public abstract string RemovalCredentialsIncorrect { get; }
+    public abstract string RemovalAccepted { get; }
+    public abstract string RemovalServerUnreachable { get; }
+    public abstract string RemovalWindowsFailed { get; }
+    public abstract string RemovalServiceSilent { get; }
+    public abstract string RemovalDialogFailed { get; }
+
+    // ---------------------------------------------------------------- tray
+
+    public abstract string TrayOpen { get; }
+    public abstract string TrayServerLabel { get; }
+    public abstract string TraySyncLabel { get; }
+    public abstract string TrayProfileLabel { get; }
+    public abstract string TrayConnectingToService { get; }
+    public abstract string TrayWaitingForService { get; }
+    public abstract string TrayLoading { get; }
+    public abstract string TraySyncFailed(string lastSuccess);
+    public abstract string TrayTooltipConnecting { get; }
+    public abstract string TrayTooltipRemaining(string duration);
+    public abstract string TrayTooltipAvailable { get; }
+    public abstract string TrayTooltipUnavailable { get; }
+
+    /// <summary>One tray menu row, label and value separated the same way in every language.</summary>
+    public string TrayRow(string label, string value) => $"{label}  ·  {value}";
+
+    // ---------------------------------------------------------------- screen-time window
+
+    public abstract string HeadlineToday { get; }
+    public abstract string HeadlineConnecting { get; }
+    public abstract string HeadlineSignedInAs(string profile);
+    public abstract string HeadlineLiveView { get; }
+    public abstract string BadgeConnecting { get; }
+    public abstract string BadgeAvailableNow { get; }
+    public abstract string BadgeUnavailable { get; }
+
+    public abstract string TabToday { get; }
+    public abstract string TabApps { get; }
+    public abstract string TabConnection { get; }
+    public abstract string TabAbout { get; }
+
+    public abstract string DailyScreenTime { get; }
+    public abstract string WaitingForService { get; }
+    public abstract string LoadingTime { get; }
+    public abstract string LeftToday { get; }
+    public abstract string Unlimited { get; }
+    public abstract string NoDailyLimitCaption { get; }
+    public abstract string UsedOf(string used, string total);
+    public abstract string UsedToday(string used);
+
+    public abstract string WeeklyScheduleCaption { get; }
+    public abstract string LoadingSchedule { get; }
+    public abstract string SchedulePlaceholder { get; }
+    public abstract string ScreenTimeUnavailableTitle { get; }
+
+    public abstract string NoAppLimitsTitle { get; }
+    public abstract string NoAppLimitsDetail { get; }
+
+    public abstract string ServerCaption { get; }
+    public abstract string SyncCaption { get; }
+    public abstract string ProfileCaption { get; }
+    public abstract string Offline { get; }
+    public abstract string NoContactYet { get; }
+    public abstract string ContactRelative(string relative);
+    public abstract string CachedRulesActive { get; }
+    public abstract string SyncNeedsAttention { get; }
+    public abstract string Waiting { get; }
+    public abstract string NoSuccessfulSyncYet { get; }
+    public abstract string RulesSynchronized { get; }
+    public abstract string NotSelected { get; }
+    public abstract string RuleRevisionPlaceholder { get; }
+    public abstract string CachedRuleRevision(long revision);
+    public abstract string WaitingForLiveStatus { get; }
+    public abstract string LiveStatusUpdated(string time);
+
+    public abstract string VersionCaption { get; }
+    public abstract string VersionWithNumber(string version);
+    public abstract string UpdatesInBackground { get; }
+    public abstract string WhatKidTimeSees { get; }
+    public abstract string WhatKidTimeSeesDetail { get; }
+    public abstract string WhatKidTimeNeverSees { get; }
+    public abstract string WhatKidTimeNeverSeesDetail { get; }
+
+    public abstract string RemoveCardTitle { get; }
+    public abstract string RemoveCardDetail { get; }
+    public abstract string RemoveButton { get; }
+    public abstract string RemoveDialogTitle { get; }
+    public abstract string RemoveDialogIntro { get; }
+    public abstract string ParentEmail { get; }
+    public abstract string ParentPassword { get; }
+    public abstract string VerifyAndRemove { get; }
+    public abstract string Cancel { get; }
+    public abstract string CheckingParentAccount { get; }
+    public abstract string CheckingParentAccountDetail { get; }
+    public abstract string RemovalStarted { get; }
+    public abstract string RemovalNotDone { get; }
+
+    public abstract string AppStatusBlocked { get; }
+    public abstract string AppStatusLimitReached { get; }
+    public abstract string AppStatusOutsideSchedule { get; }
+    public abstract string AppStatusAvailable { get; }
+    public abstract string AppDailySummary(string remaining, string limit);
+    public abstract string AppNoDailyLimit { get; }
+
+    public abstract string ScheduleAlwaysAvailable { get; }
+    public abstract string ScheduleAvailableUntil(string deadline);
+    public abstract string ScheduleAvailableNow { get; }
+    public abstract string ScheduleAvailableAgain(string deadline);
+    public abstract string ScheduleNoneThisWeek { get; }
+    public abstract string ScheduleNoRestriction { get; }
+    public abstract string ScheduleRemainsInWindow(string duration);
+    public abstract string ScheduleNextWindowBegins(string deadline);
+    public abstract string ScheduleCurrentAllows { get; }
+    public abstract string ScheduleNoWindowFound { get; }
+
+    // ---------------------------------------------------------------- countdown card
+
+    public abstract string CountdownCardTimeLeft { get; }
+    public abstract string CountdownCardDismiss { get; }
+}

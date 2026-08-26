@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
 using KidTime.Domain.Contracts;
+using KidTime.Domain.Localization;
 using KidTime.Domain.Rules;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
@@ -18,14 +19,64 @@ public partial class StatusWindow : FluentWindow
     private bool _allowClose;
     private bool _removalDialogOpen;
 
+    private static AgentStrings Text => AgentUi.Text;
+
     public StatusWindow(Func<ParentRemovalRequest, CancellationToken, Task<DeviceRemovalResult>> removeKidTime)
     {
         _removeKidTime = removeKidTime;
         InitializeComponent();
         ApplicationsItems.ItemsSource = _applications;
-        VersionText.Text = $"Version {SessionLogger.Version}";
         SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, updateAccents: true);
+        ApplyLanguage();
         Closing += WindowClosing;
+    }
+
+    /// <summary>
+    /// Writes every fixed label in the current language. The XAML still declares the English
+    /// wording so the designer shows something real; this runs at construction and again whenever
+    /// the parent switches the language, and the next status render repaints the live values.
+    /// </summary>
+    public void ApplyLanguage()
+    {
+        var text = Text;
+        HeadlineTitle.Text = text.HeadlineToday;
+        TodayTabText.Text = text.TabToday;
+        AppsTabText.Text = text.TabApps;
+        StatusTabText.Text = text.TabConnection;
+        AboutTabText.Text = text.TabAbout;
+        DailyScreenTimeTitle.Text = text.DailyScreenTime;
+        WeeklyScheduleCaption.Text = text.WeeklyScheduleCaption;
+        RestrictionInfo.Title = text.ScreenTimeUnavailableTitle;
+        EmptyAppsTitle.Text = text.NoAppLimitsTitle;
+        EmptyAppsDetail.Text = text.NoAppLimitsDetail;
+        ServerCaptionText.Text = text.ServerCaption;
+        SyncCaptionText.Text = text.SyncCaption;
+        ProfileCaptionText.Text = text.ProfileCaption;
+        VersionText.Text = text.VersionWithNumber(SessionLogger.Version);
+        UpdateChannelText.Text = text.UpdatesInBackground;
+        PrivacySeesTitle.Text = text.WhatKidTimeSees;
+        PrivacySeesDetail.Text = text.WhatKidTimeSeesDetail;
+        PrivacyNeverSeesTitle.Text = text.WhatKidTimeNeverSees;
+        PrivacyNeverSeesDetail.Text = text.WhatKidTimeNeverSeesDetail;
+        RemoveCardTitle.Text = text.RemoveCardTitle;
+        RemoveCardDetail.Text = text.RemoveCardDetail;
+        RemoveKidTimeButton.Content = text.RemoveButton;
+
+        if (_lastRenderedSignature is not null) return;
+        // Nothing has been rendered yet, so the placeholders are still on screen.
+        HeadlineSubtitle.Text = text.HeadlineConnecting;
+        OverallBadge.Content = text.BadgeConnecting;
+        RemainingCaption.Text = text.LoadingTime;
+        DailyUsageText.Text = text.WaitingForService;
+        ScheduleHeadline.Text = text.LoadingSchedule;
+        ScheduleDetail.Text = text.SchedulePlaceholder;
+        ServerStatusText.Text = text.BadgeConnecting;
+        ServerDetailText.Text = text.NoContactYet;
+        SyncStatusText.Text = text.Waiting;
+        SyncDetailText.Text = text.CachedRulesActive;
+        ProfileStatusText.Text = text.TrayLoading;
+        ProfileDetailText.Text = text.RuleRevisionPlaceholder;
+        UpdatedText.Text = text.WaitingForLiveStatus;
     }
 
     private void TabButton_Click(object sender, RoutedEventArgs e)
@@ -64,7 +115,7 @@ public partial class StatusWindow : FluentWindow
                 DiagnosticSeverities.Error,
                 "The KidTime removal dialog failed.",
                 exception);
-            ShowRemovalResult(new DeviceRemovalResult(false, "Something went wrong. Try again in a moment."));
+            ShowRemovalResult(new DeviceRemovalResult(false, Text.RemovalDialogFailed));
             RemoveKidTimeButton.IsEnabled = true;
         }
         finally
@@ -75,6 +126,7 @@ public partial class StatusWindow : FluentWindow
 
     private async Task RequestRemovalAsync()
     {
+        var text = Text;
         RemovalInfo.IsOpen = false;
         var emailBox = new System.Windows.Controls.TextBox
         {
@@ -82,40 +134,40 @@ public partial class StatusWindow : FluentWindow
             MinWidth = 380,
             Margin = new Thickness(0, 5, 0, 14)
         };
-        System.Windows.Automation.AutomationProperties.SetName(emailBox, "Parent email address");
+        System.Windows.Automation.AutomationProperties.SetName(emailBox, text.ParentEmail);
         var passwordBox = new System.Windows.Controls.PasswordBox
         {
             MaxLength = 1024,
             MinWidth = 380,
             Margin = new Thickness(0, 5, 0, 8)
         };
-        System.Windows.Automation.AutomationProperties.SetName(passwordBox, "Parent password");
+        System.Windows.Automation.AutomationProperties.SetName(passwordBox, text.ParentPassword);
         var content = new System.Windows.Controls.StackPanel();
         content.Children.Add(new System.Windows.Controls.TextBlock
         {
-            Text = "This permanently removes KidTime services and local data. The server must be reachable to verify the parent account.",
+            Text = text.RemoveDialogIntro,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 16)
         });
         content.Children.Add(new System.Windows.Controls.TextBlock
         {
-            Text = "Parent email address",
+            Text = text.ParentEmail,
             FontWeight = FontWeights.SemiBold
         });
         content.Children.Add(emailBox);
         content.Children.Add(new System.Windows.Controls.TextBlock
         {
-            Text = "Parent password",
+            Text = text.ParentPassword,
             FontWeight = FontWeights.SemiBold
         });
         content.Children.Add(passwordBox);
 
         var dialog = new ContentDialog(RootContentDialogHost)
         {
-            Title = "Remove KidTime from this PC?",
+            Title = text.RemoveDialogTitle,
             Content = content,
-            PrimaryButtonText = "Verify and remove",
-            CloseButtonText = "Cancel",
+            PrimaryButtonText = text.VerifyAndRemove,
+            CloseButtonText = text.Cancel,
             PrimaryButtonAppearance = ControlAppearance.Danger,
             DefaultButton = ContentDialogButton.Primary,
             DialogWidth = 500
@@ -128,15 +180,15 @@ public partial class StatusWindow : FluentWindow
         passwordBox.Clear();
         if (string.IsNullOrWhiteSpace(email) || string.IsNullOrEmpty(password))
         {
-            ShowRemovalResult(new DeviceRemovalResult(false, "Enter the parent email address and password."));
+            ShowRemovalResult(new DeviceRemovalResult(false, text.RemovalEnterCredentials));
             return;
         }
 
         RemoveKidTimeButton.IsEnabled = false;
         RemovalInfo.IsOpen = true;
         RemovalInfo.Severity = InfoBarSeverity.Informational;
-        RemovalInfo.Title = "Checking parent account";
-        RemovalInfo.Message = "KidTime is securely verifying the login with the server.";
+        RemovalInfo.Title = text.CheckingParentAccount;
+        RemovalInfo.Message = text.CheckingParentAccountDetail;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
         var result = await _removeKidTime(new ParentRemovalRequest(email, password), timeout.Token);
         ShowRemovalResult(result);
@@ -147,7 +199,7 @@ public partial class StatusWindow : FluentWindow
     {
         RemovalInfo.IsOpen = true;
         RemovalInfo.Severity = result.Accepted ? InfoBarSeverity.Success : InfoBarSeverity.Error;
-        RemovalInfo.Title = result.Accepted ? "Removal started" : "KidTime was not removed";
+        RemovalInfo.Title = result.Accepted ? Text.RemovalStarted : Text.RemovalNotDone;
         RemovalInfo.Message = result.Message;
     }
 
@@ -158,16 +210,18 @@ public partial class StatusWindow : FluentWindow
     /// </summary>
     public void UpdateStatus(SessionStatusSnapshot status)
     {
+        var text = Text;
         var cards = status.Applications
             .OrderBy(item => item.Allowance.IsAllowed)
             .ThenBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase)
-            .Select(BuildApplicationCard)
+            .Select(item => BuildApplicationCard(text, item))
             .ToList();
 
         // The timestamp is one text change and is the only thing that proves the window is live.
-        UpdatedText.Text = $"Live status updated {status.GeneratedAtUtc.ToLocalTime():HH:mm:ss}";
+        UpdatedText.Text = text.LiveStatusUpdated(
+            status.GeneratedAtUtc.ToLocalTime().ToString("HH:mm:ss", text.Culture));
 
-        var signature = BuildSignature(status, cards);
+        var signature = BuildSignature(text, status, cards);
         if (signature == _lastRenderedSignature) return;
         _lastRenderedSignature = signature;
 
@@ -177,58 +231,60 @@ public partial class StatusWindow : FluentWindow
         {
             var remaining = screenTime.DailyRemainingSeconds ?? 0;
             DailyRing.Progress = dailyLimit <= 0 ? 0 : Math.Clamp(remaining * 100d / dailyLimit, 0, 100);
-            RemainingText.Text = FormatDuration(remaining);
-            RemainingCaption.Text = "left today";
-            DailyUsageText.Text = $"{FormatDuration(screenTime.TodayActiveSeconds)} used of {FormatDuration(dailyLimit)}";
+            RemainingText.Text = text.DurationLabel(remaining);
+            RemainingCaption.Text = text.LeftToday;
+            DailyUsageText.Text = text.UsedOf(
+                text.DurationLabel(screenTime.TodayActiveSeconds),
+                text.DurationLabel(dailyLimit));
         }
         else
         {
             DailyRing.Progress = 100;
-            RemainingText.Text = "Unlimited";
-            RemainingCaption.Text = "no daily limit";
-            DailyUsageText.Text = $"{FormatDuration(screenTime.TodayActiveSeconds)} used today";
+            RemainingText.Text = text.Unlimited;
+            RemainingCaption.Text = text.NoDailyLimitCaption;
+            DailyUsageText.Text = text.UsedToday(text.DurationLabel(screenTime.TodayActiveSeconds));
         }
 
-        OverallBadge.Content = screenTime.IsAllowed ? "Available now" : "Unavailable";
+        OverallBadge.Content = screenTime.IsAllowed ? text.BadgeAvailableNow : text.BadgeUnavailable;
         OverallBadge.Appearance = screenTime.IsAllowed ? ControlAppearance.Success : ControlAppearance.Danger;
         HeadlineSubtitle.Text = status.ControlledUserName is { Length: > 0 } profile
-            ? $"Signed in as {profile}"
-            : "A live view of screen time, schedules, and controlled apps.";
+            ? text.HeadlineSignedInAs(profile)
+            : text.HeadlineLiveView;
         RemainingText.Opacity = screenTime.IsAllowed ? 1 : 0.72;
         RestrictionInfo.IsOpen = !screenTime.IsAllowed;
         RestrictionInfo.Message = screenTime.Message;
         RestrictionInfo.Severity = InfoBarSeverity.Warning;
 
-        ScheduleHeadline.Text = FormatScheduleHeadline(screenTime);
-        ScheduleDetail.Text = FormatScheduleDetail(screenTime);
+        ScheduleHeadline.Text = FormatScheduleHeadline(text, screenTime);
+        ScheduleDetail.Text = FormatScheduleDetail(text, screenTime);
         UpdateScheduleProgress(screenTime, status.GeneratedAtUtc);
 
-        ServerStatusText.Text = status.Server.IsConnected ? "Connected" : "Offline";
+        ServerStatusText.Text = status.Server.IsConnected ? text.Connected : text.Offline;
         ServerDetailText.Text = status.Server.IsConnected
             ? status.Server.LastSuccessfulContactUtc is { } contact
-                ? $"Contact {FormatRelative(contact)}"
-                : status.Server.ConnectionMessage
-            : status.Server.ConnectionMessage;
+                ? text.ContactRelative(text.Relative(contact))
+                : ConnectionMessage(text, status.Server.State)
+            : ConnectionMessage(text, status.Server.State);
         ServerIcon.Symbol = status.Server.IsConnected ? SymbolRegular.CloudCheckmark24 : SymbolRegular.CloudDismiss24;
 
         var syncFailed = status.Server.LastSynchronizationError is { Length: > 0 };
         SyncStatusText.Text = syncFailed
-            ? "Sync needs attention"
+            ? text.SyncNeedsAttention
             : status.Server.LastSuccessfulSynchronizationUtc is null
-                ? "Waiting"
-                : FormatRelative(status.Server.LastSuccessfulSynchronizationUtc);
+                ? text.Waiting
+                : text.Relative(status.Server.LastSuccessfulSynchronizationUtc);
         SyncDetailText.Text = syncFailed
             ? status.Server.LastSynchronizationError!
             : status.Server.LastSuccessfulSynchronizationUtc is null
-                ? "No successful synchronization yet"
-                : "Rules and usage are synchronized";
+                ? text.NoSuccessfulSyncYet
+                : text.RulesSynchronized;
         SyncIcon.Symbol = syncFailed ? SymbolRegular.ArrowSyncDismiss24 : SymbolRegular.ArrowSyncCheckmark24;
 
-        ProfileStatusText.Text = status.ControlledUserName ?? "Not selected";
-        ProfileDetailText.Text = $"Cached rule revision {status.RuleRevision}";
+        ProfileStatusText.Text = status.ControlledUserName ?? text.NotSelected;
+        ProfileDetailText.Text = text.CachedRuleRevision(status.RuleRevision);
 
         MergeApplications(cards);
-        AppsCountBadge.Content = cards.Count.ToString();
+        AppsCountBadge.Content = cards.Count.ToString(text.Culture);
         EmptyAppsCard.Visibility = cards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ApplicationsItems.Visibility = cards.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
@@ -261,25 +317,29 @@ public partial class StatusWindow : FluentWindow
         }
     }
 
-    private static string BuildSignature(SessionStatusSnapshot status, IReadOnlyList<ApplicationCardViewModel> cards)
+    private static string BuildSignature(
+        AgentStrings text,
+        SessionStatusSnapshot status,
+        IReadOnlyList<ApplicationCardViewModel> cards)
     {
         var builder = new StringBuilder();
         var screenTime = status.ScreenTime;
-        builder.Append(screenTime.IsAllowed).Append('|')
+        builder.Append(text.Language).Append('|')
+            .Append(screenTime.IsAllowed).Append('|')
             .Append(screenTime.Message).Append('|')
-            .Append(FormatDuration(screenTime.TodayActiveSeconds)).Append('|')
+            .Append(text.DurationLabel(screenTime.TodayActiveSeconds)).Append('|')
             .Append(screenTime.DailyLimitSeconds).Append('|')
-            .Append(FormatDuration(screenTime.DailyRemainingSeconds ?? 0)).Append('|')
-            .Append(FormatScheduleHeadline(screenTime)).Append('|')
-            .Append(FormatScheduleDetail(screenTime)).Append('|')
+            .Append(text.DurationLabel(screenTime.DailyRemainingSeconds ?? 0)).Append('|')
+            .Append(FormatScheduleHeadline(text, screenTime)).Append('|')
+            .Append(FormatScheduleDetail(text, screenTime)).Append('|')
             .Append((int)ScheduleProgressValue(screenTime, status.GeneratedAtUtc)).Append('|')
             .Append(status.ControlledUserName).Append('|')
             .Append(status.RuleRevision).Append('|')
             .Append(status.Server.IsConnected).Append('|')
-            .Append(status.Server.ConnectionMessage).Append('|')
+            .Append(status.Server.State).Append('|')
             .Append(status.Server.LastSynchronizationError).Append('|')
-            .Append(FormatRelative(status.Server.LastSuccessfulSynchronizationUtc)).Append('|')
-            .Append(FormatRelative(status.Server.LastSuccessfulContactUtc)).Append('|');
+            .Append(text.Relative(status.Server.LastSuccessfulSynchronizationUtc)).Append('|')
+            .Append(text.Relative(status.Server.LastSuccessfulContactUtc)).Append('|');
         foreach (var card in cards)
         {
             builder.Append(card.IdentityKey).Append(':')
@@ -322,21 +382,31 @@ public partial class StatusWindow : FluentWindow
             ? Math.Clamp((end - now).TotalSeconds * 100 / (end - start).TotalSeconds, 0, 100)
             : -1;
 
-    private static ApplicationCardViewModel BuildApplicationCard(ApplicationTimeStatus application)
+    private static string ConnectionMessage(AgentStrings text, ServerConnectionState state) => state switch
+    {
+        ServerConnectionState.NotEnrolled => text.DeviceNotEnrolled,
+        ServerConnectionState.Connected => text.Connected,
+        ServerConnectionState.Offline => text.OfflineCachedRules,
+        _ => text.ConnectingToServer
+    };
+
+    private static ApplicationCardViewModel BuildApplicationCard(AgentStrings text, ApplicationTimeStatus application)
     {
         var allowance = application.Allowance;
         var status = application.IsManuallyBlocked
-            ? "Blocked"
+            ? text.AppStatusBlocked
             : allowance.Reason switch
             {
-                BlockReason.DailyLimitReached => "Limit reached",
-                BlockReason.OutsideAllowedSchedule => "Outside schedule",
-                _ => "Available"
+                BlockReason.DailyLimitReached => text.AppStatusLimitReached,
+                BlockReason.OutsideAllowedSchedule => text.AppStatusOutsideSchedule,
+                _ => text.AppStatusAvailable
             };
         var appearance = allowance.IsAllowed ? ControlAppearance.Success : ControlAppearance.Danger;
         var dailySummary = allowance.DailyLimitSeconds is int limit
-            ? $"{FormatDuration(allowance.DailyRemainingSeconds ?? 0)} left of {FormatDuration(limit)} daily"
-            : "No daily limit";
+            ? text.AppDailySummary(
+                text.DurationLabel(allowance.DailyRemainingSeconds ?? 0),
+                text.DurationLabel(limit))
+            : text.AppNoDailyLimit;
         var dailyPercent = allowance.DailyLimitSeconds is int dailyLimit && dailyLimit > 0
             ? Math.Clamp((allowance.DailyRemainingSeconds ?? 0) * 100d / dailyLimit, 0, 100)
             : 0;
@@ -346,61 +416,35 @@ public partial class StatusWindow : FluentWindow
             StatusText = status,
             StatusAppearance = appearance,
             DailySummary = dailySummary,
-            ScheduleSummary = FormatScheduleHeadline(allowance),
+            ScheduleSummary = FormatScheduleHeadline(text, allowance),
             DailyRemainingPercent = dailyPercent,
             DailyProgressVisibility = allowance.DailyLimitSeconds is null ? Visibility.Collapsed : Visibility.Visible
         };
     }
 
-    private static string FormatScheduleHeadline(TimeAllowanceStatus allowance)
+    private static string FormatScheduleHeadline(AgentStrings text, TimeAllowanceStatus allowance)
     {
-        if (!allowance.HasWeeklySchedule) return "Available at any time";
+        if (!allowance.HasWeeklySchedule) return text.ScheduleAlwaysAvailable;
         if (allowance.IsWithinSchedule)
         {
             return allowance.ScheduleAvailableUntilUtc is { } until
-                ? $"Available until {FormatDeadline(until)}"
-                : "Available now";
+                ? text.ScheduleAvailableUntil(text.Deadline(until))
+                : text.ScheduleAvailableNow;
         }
         return allowance.ScheduleAvailableAgainUtc is { } available
-            ? $"Available again {FormatDeadline(available)}"
-            : "Not available this week";
+            ? text.ScheduleAvailableAgain(text.Deadline(available))
+            : text.ScheduleNoneThisWeek;
     }
 
-    private static string FormatScheduleDetail(TimeAllowanceStatus allowance)
+    private static string FormatScheduleDetail(AgentStrings text, TimeAllowanceStatus allowance)
     {
-        if (!allowance.HasWeeklySchedule) return "No weekly schedule restricts screen time.";
+        if (!allowance.HasWeeklySchedule) return text.ScheduleNoRestriction;
         if (allowance.IsWithinSchedule && allowance.ScheduleAvailableUntilUtc is { } until)
-            return $"{FormatDurationUntil(until)} remains in the current schedule window.";
+            return text.ScheduleRemainsInWindow(text.DurationLabel(
+                Math.Max(0, (int)Math.Ceiling((until - DateTimeOffset.UtcNow).TotalSeconds))));
         if (!allowance.IsWithinSchedule && allowance.ScheduleAvailableAgainUtc is { } available)
-            return $"The next allowed schedule window begins {FormatDeadline(available)}.";
-        return allowance.IsWithinSchedule
-            ? "The current schedule allows screen time."
-            : "No allowed schedule window was found for this week.";
-    }
-
-    private static string FormatDuration(int seconds)
-    {
-        var minutes = Math.Max(0, (int)Math.Ceiling(seconds / 60d));
-        return minutes >= 60 ? $"{minutes / 60}h {minutes % 60:00}m" : $"{minutes} min";
-    }
-
-    private static string FormatDurationUntil(DateTimeOffset deadline) =>
-        FormatDuration(Math.Max(0, (int)Math.Ceiling((deadline - DateTimeOffset.UtcNow).TotalSeconds)));
-
-    private static string FormatDeadline(DateTimeOffset deadline)
-    {
-        var local = deadline.ToLocalTime();
-        return local.Date == DateTimeOffset.Now.Date ? $"today at {local:HH:mm}" : local.ToString("ddd at HH:mm");
-    }
-
-    private static string FormatRelative(DateTimeOffset? time)
-    {
-        if (time is null) return "Not yet";
-        var elapsed = DateTimeOffset.UtcNow - time.Value;
-        if (elapsed < TimeSpan.FromMinutes(1)) return "Just now";
-        if (elapsed < TimeSpan.FromHours(1)) return $"{Math.Max(1, (int)elapsed.TotalMinutes)} min ago";
-        if (elapsed < TimeSpan.FromDays(1)) return $"{Math.Max(1, (int)elapsed.TotalHours)} h ago";
-        return time.Value.ToLocalTime().ToString("ddd HH:mm");
+            return text.ScheduleNextWindowBegins(text.Deadline(available));
+        return allowance.IsWithinSchedule ? text.ScheduleCurrentAllows : text.ScheduleNoWindowFound;
     }
 
     private sealed class ApplicationCardViewModel(string identityKey) : INotifyPropertyChanged

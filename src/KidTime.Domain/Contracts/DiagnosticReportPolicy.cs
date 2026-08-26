@@ -8,6 +8,17 @@ namespace KidTime.Domain.Contracts;
 /// unelevated process over the named pipe and from an agent over the network, so both the
 /// service and the server sanitize them with the same rules before storing or displaying them.
 /// </summary>
+/// <summary>
+/// Every occurrence of one fault inside a single uploaded batch, folded into one entry.
+/// <paramref name="Occurrences"/> is how much the stored count has to advance.
+/// </summary>
+public sealed record CollapsedDiagnosticReport(
+    DiagnosticReport Report,
+    string Fingerprint,
+    int Occurrences,
+    DateTimeOffset FirstOccurredAtUtc,
+    DateTimeOffset LastOccurredAtUtc);
+
 public static class DiagnosticReportPolicy
 {
     public const int MaximumReportsPerBatch = 25;
@@ -48,6 +59,51 @@ public static class DiagnosticReportPolicy
             FoldNumbers(report.Message),
             FirstLine(report.Detail));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..32].ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Folds one uploaded batch onto one entry per fingerprint. The agent's durable queue is
+    /// keyed by report id and its in-memory repeat suppression does not survive a service
+    /// restart, so a single batch legitimately carries the same fault several times. Whatever
+    /// stores these has one row per (device, fingerprint), and inserting a fingerprint twice in
+    /// one transaction fails the entire upload - and with it every other fault in the batch.
+    /// </summary>
+    public static IReadOnlyList<CollapsedDiagnosticReport> CollapseBatch(IEnumerable<DiagnosticReport> reports)
+    {
+        var order = new List<string>();
+        var groups = new Dictionary<string, List<DiagnosticReport>>(StringComparer.Ordinal);
+        foreach (var submitted in reports.Take(MaximumReportsPerBatch))
+        {
+            var report = Normalize(submitted);
+            var fingerprint = CreateFingerprint(report);
+            if (!groups.TryGetValue(fingerprint, out var group))
+            {
+                group = [];
+                groups[fingerprint] = group;
+                order.Add(fingerprint);
+            }
+
+            // The same report id twice is one occurrence being retried, not two faults.
+            if (group.Any(item => item.ReportId == report.ReportId)) continue;
+            group.Add(report);
+        }
+
+        var collapsed = new List<CollapsedDiagnosticReport>(order.Count);
+        foreach (var fingerprint in order)
+        {
+            var group = groups[fingerprint];
+            // The newest occurrence supplies the message, detail, and agent version, so a row
+            // that has been open for a while describes how the fault looks now.
+            var newest = group.MaxBy(item => item.OccurredAtUtc)!;
+            collapsed.Add(new CollapsedDiagnosticReport(
+                newest,
+                fingerprint,
+                group.Count,
+                group.Min(item => item.OccurredAtUtc),
+                group.Max(item => item.OccurredAtUtc)));
+        }
+
+        return collapsed;
     }
 
     private static string FirstLine(string? detail)

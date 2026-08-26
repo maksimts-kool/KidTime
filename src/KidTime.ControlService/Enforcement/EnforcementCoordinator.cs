@@ -3,6 +3,7 @@ using System.Diagnostics;
 using KidTime.ControlService.Infrastructure;
 using KidTime.Domain.Applications;
 using KidTime.Domain.Contracts;
+using KidTime.Domain.Localization;
 using KidTime.Domain.Rules;
 
 namespace KidTime.ControlService.Enforcement;
@@ -53,6 +54,10 @@ public sealed class EnforcementCoordinator(
     private long _lastUsageFlushTimestamp = Stopwatch.GetTimestamp();
 
     public DeviceRuleSnapshot Rules => _rules;
+
+    /// <summary>Wording for the language the parent chose for this PC.</summary>
+    private AgentStrings Text => AgentStrings.For(_rules.Language);
+
     public string? ForegroundName => _foregroundName;
     public string? ForegroundIdentity => _foregroundIdentity;
 
@@ -151,13 +156,15 @@ public sealed class EnforcementCoordinator(
             if (pcDecision.IsAllowed && BuildRestriction(
                     rules.DailyLimitSeconds, pcUsage, rules.Schedule, utcNow, rules.TimeZoneId, localDate) is { } pcRestriction)
             {
+                // The display name reaches only the application wording and the log line, so the
+                // PC path keeps the stable English label.
                 QueueThresholdWarnings("pc", "PC", pcRestriction, signsOut: true);
             }
             RuleDecision? appDecision = null;
             if (identity is not null && rules.Applications.FirstOrDefault(x => x.IdentityKey == identity) is { } appRule)
             {
                 var appUsage = await ReadUsageAsync(localDate, identity, cancellationToken);
-                appDecision = RuleEvaluator.EvaluateApplication(appRule, utcNow, rules.TimeZoneId, appUsage);
+                appDecision = RuleEvaluator.EvaluateApplication(appRule, utcNow, rules.TimeZoneId, appUsage, rules.Language);
                 if (appDecision.IsAllowed && BuildRestriction(
                              appRule.DailyLimitSeconds, appUsage, appRule.Schedule, utcNow, rules.TimeZoneId, localDate) is { } appRestriction)
                 {
@@ -166,7 +173,7 @@ public sealed class EnforcementCoordinator(
                         && (!_applicationOpenedNotifications.TryGetValue(identity, out var lastShown)
                             || utcNow - lastShown >= TimeSpan.FromMinutes(5)))
                     {
-                        _notifications.Enqueue(BuildApplicationOpenedNotification(appRule.DisplayName, appRestriction));
+                        _notifications.Enqueue(BuildApplicationOpenedNotification(Text, appRule.DisplayName, appRestriction));
                         _applicationOpenedNotifications[identity] = utcNow;
                         _restrictionRemaining[$"{scope}|{appRestriction.Key}"] = appRestriction.RemainingSeconds;
                     }
@@ -180,7 +187,7 @@ public sealed class EnforcementCoordinator(
             _notifications.TryDequeue(out var notification);
             var remaining = rules.DailyLimitSeconds is int limit ? Math.Max(0, limit - pcUsage) : -1;
             return new EnforcementState(!pcDecision.IsAllowed, pcDecision, appDecision, pcUsage,
-                rules.DailyLimitSeconds, remaining, notification);
+                rules.DailyLimitSeconds, remaining, notification, Language: rules.Language);
         }
         finally { _gate.Release(); }
     }
@@ -230,7 +237,7 @@ public sealed class EnforcementCoordinator(
                          .OrderBy(item => item.DisplayName, StringComparer.CurrentCultureIgnoreCase))
             {
                 var usage = await ReadUsageAsync(localDate, rule.IdentityKey, cancellationToken);
-                var decision = RuleEvaluator.EvaluateApplication(rule, now, rules.TimeZoneId, usage);
+                var decision = RuleEvaluator.EvaluateApplication(rule, now, rules.TimeZoneId, usage, rules.Language);
                 applications.Add(new ApplicationTimeStatus(
                     rule.IdentityKey,
                     rule.DisplayName,
@@ -324,7 +331,7 @@ public sealed class EnforcementCoordinator(
             var now = clock.GetUtcNow();
             var date = RuleEvaluator.GetLocalDate(now, rules.TimeZoneId);
             var usage = await ReadUsageAsync(date, identityKey, cancellationToken);
-            var decision = RuleEvaluator.EvaluateApplication(appRule, now, rules.TimeZoneId, usage);
+            var decision = RuleEvaluator.EvaluateApplication(appRule, now, rules.TimeZoneId, usage, rules.Language);
             var episodeKey = $"{appRule.UpdatedAtUtc.UtcTicks}|{date:yyyy-MM-dd}|{decision.Reason}|{decision.AvailableAtUtc?.UtcTicks}";
             return new ApplicationEnforcementStatus(identityKey, appRule.DisplayName, decision, episodeKey);
         }
@@ -342,10 +349,11 @@ public sealed class EnforcementCoordinator(
         RuleDecision decision,
         int graceSeconds)
     {
+        var text = Text;
         _pendingApplicationLimitChanges.TryRemove(identityKey, out _);
         _notifications.Enqueue(new UserNotification(
-            $"{displayName} closes in {FormatCountdown(graceSeconds)}",
-            $"{ShortReason(decision)}. Save your work now.",
+            text.ApplicationClosingTitle(displayName, graceSeconds),
+            text.SaveYourWorkNow(ShortReason(text, decision)),
             graceSeconds,
             ApplicationWarningKey(identityKey),
             IsUrgent: true));
@@ -360,13 +368,16 @@ public sealed class EnforcementCoordinator(
             PersistentNotificationKey: ApplicationWarningKey(identityKey),
             DismissPersistentNotification: true));
 
-    public void NotifyPcSignOut(RuleDecision decision, int countdownSeconds) =>
+    public void NotifyPcSignOut(RuleDecision decision, int countdownSeconds)
+    {
+        var text = Text;
         _notifications.Enqueue(new UserNotification(
-            $"Signing out in {FormatCountdown(countdownSeconds)}",
-            $"{ShortReason(decision)}. Save your work now.",
+            text.SignOutCountdownTitle(countdownSeconds),
+            text.SaveYourWorkNow(ShortReason(text, decision)),
             countdownSeconds,
             "pc-sign-out",
             IsUrgent: true));
+    }
 
     public void DismissPcSignOut() =>
         _notifications.Enqueue(new UserNotification(
@@ -377,24 +388,29 @@ public sealed class EnforcementCoordinator(
 
     public void NotifyPcAvailable(RuleDecision previousDecision)
     {
+        var text = Text;
         _notifications.Enqueue(new UserNotification(
-            "PC available",
-            $"You can use this PC again. Earlier: {ShortReason(previousDecision).ToLowerInvariant()}."));
+            text.PcAvailableTitle,
+            text.PcAvailableMessage(ShortReason(text, previousDecision))));
     }
 
     /// <summary>Announces a completed background update. Informational, never urgent.</summary>
-    public void NotifyServicesUpdated(string version) =>
-        _notifications.Enqueue(new UserNotification(
-            "KidTime updated",
-            $"KidTime is now version {version}. Nothing changes for you."));
+    public void NotifyServicesUpdated(string version)
+    {
+        var text = Text;
+        _notifications.Enqueue(new UserNotification(text.UpdatedTitle, text.UpdatedMessage(version)));
+    }
 
     private void QueueRuleChangeNotifications(DeviceRuleSnapshot previous, DeviceRuleSnapshot current)
     {
+        // The change is described with the language the new rules carry, so switching language and
+        // limits in one save still announces itself in the language the parent just chose.
+        var text = AgentStrings.For(current.Language);
         if (LimitsDiffer(previous.DailyLimitSeconds, previous.Schedule, current.DailyLimitSeconds, current.Schedule))
         {
             _notifications.Enqueue(new UserNotification(
-                "PC time limit changed",
-                BuildLimitChangeMessage("PC", previous.DailyLimitSeconds, previous.Schedule,
+                text.PcLimitChangedTitle,
+                BuildLimitChangeMessage(text, text.PcScopeName, previous.DailyLimitSeconds, previous.Schedule,
                     current.DailyLimitSeconds, current.Schedule)));
         }
 
@@ -406,8 +422,8 @@ public sealed class EnforcementCoordinator(
             || !LimitsDiffer(oldApp.DailyLimitSeconds, oldApp.Schedule, newApp.DailyLimitSeconds, newApp.Schedule))
             return;
         _pendingApplicationLimitChanges[foregroundIdentity] = new UserNotification(
-            $"{newApp.DisplayName} time limit changed",
-            BuildLimitChangeMessage(newApp.DisplayName, oldApp.DailyLimitSeconds, oldApp.Schedule,
+            text.ApplicationLimitChangedTitle(newApp.DisplayName),
+            BuildLimitChangeMessage(text, newApp.DisplayName, oldApp.DailyLimitSeconds, oldApp.Schedule,
                 newApp.DailyLimitSeconds, newApp.Schedule));
     }
 
@@ -434,36 +450,26 @@ public sealed class EnforcementCoordinator(
     }
 
     private static string BuildLimitChangeMessage(
+        AgentStrings text,
         string scope,
         int? oldDailyLimit,
         WeeklySchedule oldSchedule,
         int? newDailyLimit,
-        WeeklySchedule newSchedule)
-    {
-        var parts = new List<string>();
-        if (oldDailyLimit != newDailyLimit) parts.Add($"daily time is now {FormatLimit(newDailyLimit)}");
-        if (!SchedulesEqual(oldSchedule, newSchedule)) parts.Add("the schedule changed");
-        return $"{scope}: {string.Join(", ", parts)}.";
-    }
-
-    private static string FormatLimit(int? seconds) => seconds is null
-        ? "no limit"
-        : seconds.Value % 3600 == 0
-            ? $"{seconds.Value / 3600}h"
-            : $"{seconds.Value / 3600}h {(seconds.Value % 3600) / 60:00}m";
-
-    private static string FormatCountdown(int seconds) => seconds >= 60
-        ? $"{(int)Math.Ceiling(seconds / 60d)} minute{(seconds > 60 ? "s" : string.Empty)}"
-        : $"{seconds} seconds";
+        WeeklySchedule newSchedule) =>
+        text.LimitChangeMessage(
+            scope,
+            newDailyLimit,
+            oldDailyLimit != newDailyLimit,
+            !SchedulesEqual(oldSchedule, newSchedule));
 
     private static string ApplicationWarningKey(string identityKey) => $"application:{identityKey}";
 
-    private static string ShortReason(RuleDecision decision) => decision.Reason switch
+    private static string ShortReason(AgentStrings text, RuleDecision decision) => decision.Reason switch
     {
-        BlockReason.ManualBlock => "Your parent blocked it",
-        BlockReason.DailyLimitReached => "Daily time is used up",
-        BlockReason.OutsideAllowedSchedule => "Outside allowed hours",
-        _ => "Not available right now"
+        BlockReason.ManualBlock => text.ShortReasonManualBlock,
+        BlockReason.DailyLimitReached => text.ShortReasonDailyLimit,
+        BlockReason.OutsideAllowedSchedule => text.ShortReasonOutsideSchedule,
+        _ => text.ShortReasonUnavailable
     };
 
     private void QueueThresholdWarnings(string scope, string displayName, TimeRestriction restriction, bool signsOut)
@@ -475,13 +481,17 @@ public sealed class EnforcementCoordinator(
             return;
         }
 
+        var text = Text;
         foreach (var threshold in WarningThresholdSeconds)
         {
             if (previous <= threshold || restriction.RemainingSeconds > threshold) continue;
-            var label = threshold >= 60 ? $"{threshold / 60} minutes" : $"{threshold} seconds";
             _notifications.Enqueue(new UserNotification(
-                signsOut ? $"{label} of PC time left" : $"{label} of {displayName} left",
-                signsOut ? "Windows signs you out when it runs out." : $"{displayName} closes when it runs out."));
+                signsOut
+                    ? text.PcTimeLeftTitle(threshold)
+                    : text.ApplicationTimeLeftTitle(displayName, threshold),
+                signsOut
+                    ? text.PcTimeLeftMessage
+                    : text.ApplicationTimeLeftMessage(displayName)));
             logger.LogInformation("{Scope} restriction warning queued with {Seconds} seconds remaining.",
                 displayName, threshold);
         }
@@ -489,16 +499,20 @@ public sealed class EnforcementCoordinator(
         _restrictionRemaining[key] = restriction.RemainingSeconds;
     }
 
-    private static UserNotification BuildApplicationOpenedNotification(string displayName, TimeRestriction restriction)
+    private static UserNotification BuildApplicationOpenedNotification(
+        AgentStrings text,
+        string displayName,
+        TimeRestriction restriction)
     {
         var message = (restriction.ActiveSecondsRemaining, restriction.ScheduleEndUtc) switch
         {
-            (int remaining, { } scheduleEnd) => $"{FormatRemaining(remaining)} left, until {FormatDeadline(scheduleEnd)}.",
-            (int remaining, null) => $"{FormatRemaining(remaining)} left today.",
-            (null, { } scheduleEnd) => $"Available until {FormatDeadline(scheduleEnd)}.",
-            _ => "Time limited."
+            (int remaining, { } scheduleEnd) =>
+                text.ApplicationRemainingUntil(text.DurationWords(remaining), text.Deadline(scheduleEnd)),
+            (int remaining, null) => text.ApplicationRemainingToday(text.DurationWords(remaining)),
+            (null, { } scheduleEnd) => text.ApplicationAvailableUntil(text.Deadline(scheduleEnd)),
+            _ => text.ApplicationTimeLimited
         };
-        return new UserNotification($"{displayName} time", message);
+        return new UserNotification(text.ApplicationTimeTitle(displayName), message);
     }
 
     private static TimeRestriction? BuildRestriction(
@@ -554,19 +568,6 @@ public sealed class EnforcementCoordinator(
                 ? RuleEvaluator.FindNextAllowanceStartUtc(schedule, utcNow, timeZoneId)
                 : null);
     }
-
-    private static string FormatRemaining(int seconds)
-    {
-        var minutes = Math.Max(1, (int)Math.Ceiling(seconds / 60d));
-        return minutes >= 60
-            ? $"{minutes / 60}h {minutes % 60:00}m"
-            : $"{minutes} minutes";
-    }
-
-    private static string FormatDeadline(DateTimeOffset deadline) =>
-        deadline.ToLocalTime().Date == DateTimeOffset.Now.Date
-            ? $"today at {deadline.ToLocalTime():HH:mm}"
-            : deadline.ToLocalTime().ToString("ddd at HH:mm");
 
     private sealed record TimeRestriction(
         int RemainingSeconds,

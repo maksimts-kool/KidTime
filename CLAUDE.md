@@ -17,7 +17,8 @@ repo:
   (LocalSystem worker service — the enforcement boundary), `src/KidTime.SessionAgent` (WPF tray UI
   in the child's session), `src/KidTime.Setup` (WPF installer, `KidTimeSetup.exe`).
 - `src/KidTime.Domain` is shared by both halves: rule models and evaluator, wire contracts,
-  application identity and catalog policy. Anything both sides must agree on belongs here.
+  application identity and catalog policy, and the localized string catalog the controlled PC
+  speaks from. Anything both sides must agree on belongs here.
 
 ## Commands
 
@@ -162,7 +163,13 @@ panel by itself**. The pipeline is one-way and durable at each hop:
    before rules and usage, so a PC that fails at a later step still reports why.
 4. `POST api/agent/diagnostics` re-normalizes every field, collapses repeats onto one row by
    fingerprint (digits are folded out, so counters and process ids do not fragment one bug),
-   ignores a retried upload by `LastReportId`, and caps the history per device.
+   ignores a retried upload by `LastReportId`, and caps the history per device. **One batch can
+   carry the same fingerprint several times** - the agent's queue is keyed by report id and its
+   repeat suppression is in memory, so a service restart re-spools a fault that is already
+   queued. `DiagnosticReportPolicy.CollapseBatch` folds a batch onto one entry per fingerprint
+   before anything is written, because a second insert for the same `(DeviceId, Fingerprint)`
+   violates the unique index and fails the whole transaction - and the agent then retries the
+   same poisoned batch forever, so no fault from that PC ever reaches the parent again.
 5. The panel's **Error log** page lists unresolved faults with device, component, severity, count,
    agent version, and stack trace, and the devices page badges a PC that has reports waiting.
 
@@ -170,6 +177,36 @@ Repeat suppression exists at both ends: the agent spools one report per fingerpr
 minutes, and the server counts occurrences instead of inserting rows. Setup runs before any device
 exists and therefore cannot report anywhere - it writes `%LOCALAPPDATA%\KidTime\logs\setup.ndjson`
 and shows the failure instead.
+
+### Language on the controlled PC
+
+Everything the child reads is localized: Windows notifications, the countdown card, the tray menu
+and tooltip, the screen-time window, rule messages, and the removal flow. The parent's panel stays
+in English - it is the parent's tool, and mixing the two audiences in one dictionary was not worth
+the cost.
+
+`AgentLanguage` (English, Russian) lives on `DeviceRule` and travels inside `DeviceRuleSnapshot`,
+so changing it bumps the rule revision and reaches the PC over the ordinary SignalR-nudged sync
+path with no separate channel. `EnforcementState.Language` rides on every pipe reply as well, so
+the tray agent can paint its own chrome before any status snapshot arrives.
+
+`KidTime.Domain.Localization.AgentStrings` is the single catalog. It is an **abstract class with
+one sealed implementation per language**, not a resource dictionary, so a message added in one
+language fails to compile in the other instead of silently rendering blank on a child's screen.
+Two consequences to respect:
+
+- **Never put a user-visible literal in ControlService or SessionAgent.** Add a member to
+  `AgentStrings` and implement it in `EnglishAgentStrings` and `RussianAgentStrings`.
+- Composition happens in the language implementation, not at the call site. Russian selects one
+  of three plural forms by count and changes case after a preposition, so
+  `SignOutCountdownTitle(60)` builds the whole phrase ("через 1 минуту") rather than gluing a
+  shared number-and-noun fragment into an English sentence shape. Sentences that embed a duration
+  or a deadline are written label-and-value in Russian ("Осталось времени: 15 минут") for the same
+  reason.
+
+Strings that are not authored by KidTime stay as they are: `LastSynchronizationError` carries a raw
+exception message, and application display names come from the application itself. Connection state
+crosses the pipe as `ServerConnectionState`, a code, so the unelevated agent phrases it.
 
 ### Rule precedence
 
@@ -309,13 +346,31 @@ The tray window is a four-panel view - Today, Apps, Connection, About - switched
 rather than a `TabControl`, because only the visible panel then stays in the visual tree. About
 carries the installed version, the privacy summary in the child's own words, and the removal flow.
 
-KidTime draws no custom notification, popup, or blocker windows. SessionAgent emits native Windows
-toasts marked with the supported urgent scenario, high priority, and explicit reminder audio — the
-Windows-supported way to break through Focus Assist without changing the user's global setting. Its
-tray dashboard composes maintained WPF UI 4.3.0 controls (FluentWindow, Card, ProgressRing, InfoBar,
-Badge, SymbolIcon, menu, tray), follows the Windows theme and accent, and receives status through
-the process-validated pipe. It cannot edit or bypass rules; its only privileged action is the
-separately parent-authenticated removal flow. Do not build a custom widget toolkit here.
+Notifications are native Windows toasts. SessionAgent emits them marked with the supported urgent
+scenario, high priority, and explicit reminder audio — the Windows-supported way to break through
+Focus Assist without changing the user's global setting. Its tray dashboard composes maintained WPF
+UI 4.3.0 controls (FluentWindow, Card, ProgressRing, InfoBar, Badge, SymbolIcon, menu, tray),
+follows the Windows theme and accent, and receives status through the process-validated pipe. It
+cannot edit or bypass rules; its only privileged action is the separately parent-authenticated
+removal flow. Do not build a custom widget toolkit here.
+
+The one custom window is `CountdownCardWindow`, and it exists for the one thing a toast cannot do:
+show the seconds actually draining before a forced sign-out or close. It **accompanies** the urgent
+toast, never replaces it, and it is not a blocker. The constraints are the design:
+
+- It is drawn only for a notification that is both urgent and carries `CountdownSeconds`.
+- The service still owns the monotonic deadline and signs out or closes the application whether a
+  card was drawn or not. A card that fails to appear is reported as a warning and changes nothing.
+- `WS_EX_NOACTIVATE` and `WS_EX_TOOLWINDOW` keep it out of the focus chain and out of Alt+Tab. A
+  window that stole the keyboard while telling a child to save their work would be self-defeating.
+- It is a small corner card sized like a toast, cannot be resized, and dismissing it hides the
+  card only.
+- It cannot strand itself. One shared one-second timer closes any card past its deadline and stops
+  when the last card goes; and the window belongs to the supervised SessionAgent process, which
+  the service restarts within two seconds if it dies, so the card dies with it.
+
+**Do not grow this into a blocker, a full-screen overlay, or a second notification system.** If a
+message can wait, it is an ordinary toast; if it cannot, it is an urgent toast plus this card.
 
 `UserNotification.IsUrgent` decides the toast scenario, and **only the final warning before a
 forced sign-out or close is urgent**: it stays on screen and overrides Focus Assist. Everything
@@ -395,6 +450,9 @@ design** — do not add them, and do not extend the contract to upload window ti
   plain anchors, downloads) must go through `lib/paths.ts#appPath`; `next/link` and `next/navigation`
   prepend it themselves. `NEXT_PUBLIC_BASE_PATH` is baked in at image build time, so changing the
   prefix requires rebuilding the web image.
+- Every string the controlled user can read lives in `AgentStrings` and must be implemented in
+  both `EnglishAgentStrings` and `RussianAgentStrings`. `AgentStringsTests` walks the catalog by
+  reflection and fails on a member that returns blank in either language.
 - Commit messages are plain imperative sentences describing the change ("Match the documented Caddy
   matcher to the deployed one"), with no conventional-commit prefixes.
 
@@ -438,7 +496,8 @@ windows, timezone day changes, update-tolerant application identity, installer/r
 reconciliation, helper-process filtering, rule-change notifications, persisted first-block grace,
 automatic-update version comparison, controlled-account SID isolation, cached offline rules, durable
 pending usage, buffered usage that survives a restart, durable fault queueing and fingerprinting,
-idle exclusion, and cached app-limit evaluation.
+in-batch fault collapsing, complete English and Russian catalogs with Russian plural agreement,
+language-scoped rule messages, idle exclusion, and cached app-limit evaluation.
 
 Integration checks on a VM should use a harmless executable such as Notepad before testing game
 rules:
@@ -456,7 +515,12 @@ rules:
    enforcement remains independent;
 9. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
    instead, with the device, component, and stack trace, and repeats raise the count rather than
-   adding rows.
+   adding rows;
+10. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
+    screen-time window, the next notification, and the countdown card all change without
+    reinstalling or signing out, then block the PC and confirm the card counts down in the corner,
+    never takes focus, and disappears on its own when the countdown ends or the parent lifts the
+    block.
 
 On a disposable PC, verify enrollment end to end (Connect stays disabled until server URL,
 enrollment code, and child account are all valid; an expired code is rejected; the panel switches to
@@ -492,5 +556,8 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
 - **The same error keeps coming back after being marked handled:** marking handled is not a fix.
   The next occurrence reopens the row and raises its count, which is the intended signal that the
   fault is still happening.
+- **The PC is still speaking English after switching the language:** the language is part of the
+  rules, so it lands with the next sync. Check `LastSeenUtc` and that the rule revision on the
+  device page has caught up.
 - **Changing the `.env` admin password has no effect:** those variables seed only the first parent
   account. Do not delete PostgreSQL data merely to rotate a password.

@@ -248,50 +248,66 @@ public sealed class AgentController(
     {
         if (batch.Reports.Count == 0) return NoContent();
         var now = timeProvider.GetUtcNow();
-        foreach (var submitted in batch.Reports.Take(DiagnosticReportPolicy.MaximumReportsPerBatch))
+
+        // One batch legitimately carries the same fault several times, so it is folded onto one
+        // entry per fingerprint before anything is saved. Inserting a fingerprint twice would
+        // violate the unique index, and since the batch is one transaction that failed the whole
+        // upload - permanently, because the agent then retried the same batch forever and the
+        // parent stopped seeing any fault from that PC at all.
+        var collapsed = DiagnosticReportPolicy.CollapseBatch(batch.Reports);
+        if (collapsed.Count == 0) return NoContent();
+
+        var fingerprints = collapsed.Select(item => item.Fingerprint).ToList();
+        var stored = await dbContext.DeviceDiagnosticEvents
+            .Where(item => item.DeviceId == DeviceId && fingerprints.Contains(item.Fingerprint))
+            .ToDictionaryAsync(item => item.Fingerprint, cancellationToken);
+
+        foreach (var item in collapsed)
         {
-            var report = DiagnosticReportPolicy.Normalize(submitted);
-            var fingerprint = DiagnosticReportPolicy.CreateFingerprint(report);
-            var occurredAtUtc = report.OccurredAtUtc > now ? now : report.OccurredAtUtc;
-            var existing = await dbContext.DeviceDiagnosticEvents.SingleOrDefaultAsync(
-                item => item.DeviceId == DeviceId && item.Fingerprint == fingerprint,
-                cancellationToken);
-            if (existing is null)
+            var report = item.Report;
+            // A client clock running ahead must not park a fault in the future, where the trim
+            // ordering would keep it forever.
+            var firstOccurredAtUtc = item.FirstOccurredAtUtc > now ? now : item.FirstOccurredAtUtc;
+            var lastOccurredAtUtc = item.LastOccurredAtUtc > now ? now : item.LastOccurredAtUtc;
+            if (!stored.TryGetValue(item.Fingerprint, out var existing))
             {
                 dbContext.DeviceDiagnosticEvents.Add(new DeviceDiagnosticEvent
                 {
                     DeviceId = DeviceId,
                     LastReportId = report.ReportId,
-                    Fingerprint = fingerprint,
+                    Fingerprint = item.Fingerprint,
                     Component = report.Component,
                     Severity = report.Severity,
                     Message = report.Message,
                     ExceptionType = report.ExceptionType,
                     Detail = report.Detail,
                     AgentVersion = report.AgentVersion,
-                    FirstOccurredAtUtc = occurredAtUtc,
-                    LastOccurredAtUtc = occurredAtUtc,
+                    OccurrenceCount = item.Occurrences,
+                    FirstOccurredAtUtc = firstOccurredAtUtc,
+                    LastOccurredAtUtc = lastOccurredAtUtc,
                     ReceivedAtUtc = now
                 });
                 continue;
             }
 
+            // An upload retried after an uncertain response must not raise the count again.
             if (existing.LastReportId == report.ReportId) continue;
             existing.LastReportId = report.ReportId;
-            existing.OccurrenceCount++;
+            existing.OccurrenceCount += item.Occurrences;
             existing.Severity = report.Severity;
             existing.Message = report.Message;
             existing.ExceptionType = report.ExceptionType;
             existing.Detail = report.Detail;
             existing.AgentVersion = report.AgentVersion;
-            existing.LastOccurredAtUtc = occurredAtUtc;
+            if (firstOccurredAtUtc < existing.FirstOccurredAtUtc) existing.FirstOccurredAtUtc = firstOccurredAtUtc;
+            if (lastOccurredAtUtc > existing.LastOccurredAtUtc) existing.LastOccurredAtUtc = lastOccurredAtUtc;
             existing.ReceivedAtUtc = now;
             existing.ResolvedAtUtc = null;
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
         await TrimDiagnosticsAsync(cancellationToken);
-        logger.LogInformation("Stored {Count} diagnostic report(s) from {DeviceId}.", batch.Reports.Count, DeviceId);
+        logger.LogInformation("Stored {Count} distinct diagnostic fault(s) from {DeviceId}.", collapsed.Count, DeviceId);
         return NoContent();
     }
 

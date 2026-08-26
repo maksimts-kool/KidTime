@@ -1,5 +1,6 @@
 using KidTime.Domain.Rules;
 using KidTime.Domain.Contracts;
+using KidTime.Domain.Localization;
 using KidTime.Server.Data;
 using KidTime.Server.Hubs;
 using KidTime.Server.Services;
@@ -26,7 +27,8 @@ public sealed class DevicesController(
         int? DailyLimitSeconds,
         int IdleThresholdSeconds,
         WeeklySchedule Schedule,
-        string? ControlledUserSid);
+        string? ControlledUserSid,
+        AgentLanguage? Language = null);
 
     public sealed record BlockDeviceRequest(int? Minutes, DateTimeOffset? UntilUtc);
 
@@ -60,6 +62,7 @@ public sealed class DevicesController(
                 device.LoggedInUser,
                 device.ForegroundApplication,
                 controlledUserName = device.Rule.ControlledUserName,
+                language = device.Rule.Language,
                 device.AgentVersion,
                 latestAgentVersion,
                 device.AgentUpdateStatus,
@@ -175,8 +178,12 @@ public sealed class DevicesController(
         if (selectedUser is { IsAdministrator: true })
             return BadRequest("Choose a Standard User account, not an administrator.");
 
+        if (request.Language is { } language && !Enum.IsDefined(language))
+            return BadRequest("Choose a supported interface language.");
+
         rule.DailyLimitSeconds = request.DailyLimitSeconds;
         rule.IdleThresholdSeconds = Math.Clamp(request.IdleThresholdSeconds, 30, 3_600);
+        rule.Language = request.Language ?? rule.Language;
         rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(request.Schedule);
         rule.ControlledUserSid = selectedUser?.Sid;
         rule.ControlledUserName = selectedUser?.AccountName;

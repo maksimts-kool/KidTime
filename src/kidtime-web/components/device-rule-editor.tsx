@@ -4,7 +4,7 @@ import { appPath } from "@/lib/paths";
 import { FormEvent, useState } from "react";
 import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
-import type { DeviceRule, WindowsUserAccount } from "@/lib/types";
+import { agentLanguages, type DeviceRule, type WindowsUserAccount } from "@/lib/types";
 import { editableToSchedule, scheduleToEditable, validateEditableSchedule, WeeklyScheduleEditor } from "./weekly-schedule-editor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,6 +37,7 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           controlledUserSid: data.get("controlledUserSid") || null,
+          language: data.get("language"),
           dailyLimitSeconds: limitEnabled ? hours * 3600 + minutes * 60 : null,
           idleThresholdSeconds: Number(data.get("idleMinutes")) * 60,
           schedule: editableToSchedule(days),
@@ -79,6 +80,26 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
               ))}
             </select>
             <FieldDescription>Create the child as a Standard User in Windows, wait up to one minute for it to appear here, then select it. Administrator and other profiles remain unaffected.</FieldDescription>
+          </Field>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Language on the PC</CardTitle><CardDescription>Notifications, the countdown card, and the child&apos;s screen-time window all use this language.</CardDescription></CardHeader>
+        <CardContent>
+          <Field className="max-w-xs">
+            <FieldLabel htmlFor="language">Interface language</FieldLabel>
+            <select
+              id="language"
+              name="language"
+              defaultValue={rule.language ?? "English"}
+              className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              {agentLanguages.map(language => (
+                <option key={language.value} value={language.value}>{language.label}</option>
+              ))}
+            </select>
+            <FieldDescription>The panel you are looking at stays in English; this only changes what the child sees.</FieldDescription>
           </Field>
         </CardContent>
       </Card>

@@ -34,7 +34,8 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel>
-                <TextBlock FontFamily="Segoe UI Variable Display"
+                <TextBlock x:Name="HeadlineTitle"
+                           FontFamily="Segoe UI Variable Display"
                            FontSize="28"
                            FontWeight="SemiBold"
                            Text="Your time today" />
@@ -59,26 +60,26 @@
             <ui:Button x:Name="TodayTabButton" Margin="0,0,8,0" Padding="14,7" Appearance="Primary" Click="TabButton_Click" Tag="Today">
                 <StackPanel Orientation="Horizontal">
                     <ui:SymbolIcon Margin="0,0,8,0" Symbol="Timer24" FontSize="17" />
-                    <TextBlock Text="Today" />
+                    <TextBlock x:Name="TodayTabText" Text="Today" />
                 </StackPanel>
             </ui:Button>
             <ui:Button x:Name="AppsTabButton" Margin="0,0,8,0" Padding="14,7" Appearance="Secondary" Click="TabButton_Click" Tag="Apps">
                 <StackPanel Orientation="Horizontal">
                     <ui:SymbolIcon Margin="0,0,8,0" Symbol="AppsList24" FontSize="17" />
-                    <TextBlock Text="Apps" />
+                    <TextBlock x:Name="AppsTabText" Text="Apps" />
                     <ui:Badge x:Name="AppsCountBadge" Margin="8,0,0,0" Padding="7,1" Appearance="Secondary" Content="0" />
                 </StackPanel>
             </ui:Button>
             <ui:Button x:Name="StatusTabButton" Margin="0,0,8,0" Padding="14,7" Appearance="Secondary" Click="TabButton_Click" Tag="Status">
                 <StackPanel Orientation="Horizontal">
                     <ui:SymbolIcon Margin="0,0,8,0" Symbol="PlugConnected24" FontSize="17" />
-                    <TextBlock Text="Connection" />
+                    <TextBlock x:Name="StatusTabText" Text="Connection" />
                 </StackPanel>
             </ui:Button>
             <ui:Button x:Name="AboutTabButton" Padding="14,7" Appearance="Secondary" Click="TabButton_Click" Tag="About">
                 <StackPanel Orientation="Horizontal">
                     <ui:SymbolIcon Margin="0,0,8,0" Symbol="Info24" FontSize="17" />
-                    <TextBlock Text="About" />
+                    <TextBlock x:Name="AboutTabText" Text="About" />
                 </StackPanel>
             </ui:Button>
         </StackPanel>
@@ -129,7 +130,8 @@
                             </Grid>
 
                             <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                                <TextBlock FontFamily="Segoe UI Variable Display"
+                                <TextBlock x:Name="DailyScreenTimeTitle"
+                                           FontFamily="Segoe UI Variable Display"
                                            FontSize="21"
                                            FontWeight="SemiBold"
                                            Text="Daily screen time" />
@@ -155,7 +157,8 @@
                                             </Grid.ColumnDefinitions>
                                             <ui:SymbolIcon Symbol="CalendarClock24" FontSize="22" />
                                             <StackPanel Grid.Column="1">
-                                                <TextBlock FontSize="12"
+                                                <TextBlock x:Name="WeeklyScheduleCaption"
+                                                           FontSize="12"
                                                            FontWeight="SemiBold"
                                                            Text="WEEKLY SCHEDULE" />
                                                 <TextBlock x:Name="ScheduleHeadline"
@@ -196,8 +199,8 @@
                     <ui:Card x:Name="EmptyAppsCard" Padding="24">
                         <StackPanel HorizontalAlignment="Center">
                             <ui:SymbolIcon HorizontalAlignment="Center" Symbol="CheckmarkCircle24" FontSize="32" />
-                            <TextBlock Margin="0,10,0,0" HorizontalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="No app limits or blocks" />
-                            <TextBlock Margin="0,4,0,0" HorizontalAlignment="Center" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="Only apps your parent limits appear in this list." />
+                            <TextBlock x:Name="EmptyAppsTitle" Margin="0,10,0,0" HorizontalAlignment="Center" FontSize="16" FontWeight="SemiBold" Text="No app limits or blocks" />
+                            <TextBlock x:Name="EmptyAppsDetail" Margin="0,4,0,0" HorizontalAlignment="Center" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" Text="Only apps your parent limits appear in this list." />
                         </StackPanel>
                     </ui:Card>
 
@@ -280,7 +283,7 @@
                                     <ui:SymbolIcon x:Name="ServerIcon" Symbol="CloudCheckmark24" FontSize="22" />
                                 </Border>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock FontSize="12" FontWeight="SemiBold" Text="SERVER" />
+                                    <TextBlock x:Name="ServerCaptionText" FontSize="12" FontWeight="SemiBold" Text="SERVER" />
                                     <TextBlock x:Name="ServerStatusText" Margin="0,3,0,0" FontSize="15" FontWeight="SemiBold" Text="Connecting" />
                                     <TextBlock x:Name="ServerDetailText" Margin="0,3,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="No contact yet" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
@@ -299,7 +302,7 @@
                                     <ui:SymbolIcon x:Name="SyncIcon" Symbol="ArrowSync24" FontSize="22" />
                                 </Border>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock FontSize="12" FontWeight="SemiBold" Text="SYNCHRONIZATION" />
+                                    <TextBlock x:Name="SyncCaptionText" FontSize="12" FontWeight="SemiBold" Text="SYNCHRONIZATION" />
                                     <TextBlock x:Name="SyncStatusText" Margin="0,3,0,0" FontSize="15" FontWeight="SemiBold" Text="Waiting" />
                                     <TextBlock x:Name="SyncDetailText" Margin="0,3,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="Cached rules active" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
@@ -318,7 +321,7 @@
                                     <ui:SymbolIcon Symbol="Person24" FontSize="22" />
                                 </Border>
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock FontSize="12" FontWeight="SemiBold" Text="CONTROLLED PROFILE" />
+                                    <TextBlock x:Name="ProfileCaptionText" FontSize="12" FontWeight="SemiBold" Text="CONTROLLED PROFILE" />
                                     <TextBlock x:Name="ProfileStatusText" Margin="0,3,0,0" FontSize="15" FontWeight="SemiBold" Text="Loading" TextTrimming="CharacterEllipsis" />
                                     <TextBlock x:Name="ProfileDetailText" Margin="0,3,0,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" Text="Rule revision --" />
                                 </StackPanel>
@@ -364,13 +367,15 @@
 
                     <ui:Card Margin="0,12,0,0" Padding="22">
                         <StackPanel>
-                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="What KidTime sees" />
-                            <TextBlock Margin="0,6,0,0"
+                            <TextBlock x:Name="PrivacySeesTitle" FontSize="16" FontWeight="SemiBold" Text="What KidTime sees" />
+                            <TextBlock x:Name="PrivacySeesDetail"
+                                       Margin="0,6,0,0"
                                        Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
                                        Text="Active time on this PC and which app is in front. That is all."
                                        TextWrapping="Wrap" />
-                            <TextBlock Margin="0,10,0,0" FontSize="16" FontWeight="SemiBold" Text="What KidTime never sees" />
-                            <TextBlock Margin="0,6,0,0"
+                            <TextBlock x:Name="PrivacyNeverSeesTitle" Margin="0,10,0,0" FontSize="16" FontWeight="SemiBold" Text="What KidTime never sees" />
+                            <TextBlock x:Name="PrivacyNeverSeesDetail"
+                                       Margin="0,6,0,0"
                                        Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
                                        Text="Websites, searches, messages, keystrokes, your screen, your camera, or your microphone."
                                        TextWrapping="Wrap" />
@@ -384,8 +389,9 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
-                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="Remove KidTime from this PC" />
-                                <TextBlock Margin="0,4,0,0"
+                                <TextBlock x:Name="RemoveCardTitle" FontSize="16" FontWeight="SemiBold" Text="Remove KidTime from this PC" />
+                                <TextBlock x:Name="RemoveCardDetail"
+                                           Margin="0,4,0,0"
                                            Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
                                            Text="A parent must sign in online before the Windows service, local rules, usage data, and program files can be removed."
                                            TextWrapping="Wrap" />

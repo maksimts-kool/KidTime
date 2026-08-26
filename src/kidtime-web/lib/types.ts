@@ -1,3 +1,11 @@
+/** The language the controlled PC shows notifications and its tray dashboard in. */
+export type AgentLanguage = "English" | "Russian";
+
+export const agentLanguages: { value: AgentLanguage; label: string }[] = [
+  { value: "English", label: "English" },
+  { value: "Russian", label: "Russian (Русский)" },
+];
+
 export type DeviceSummary = {
   id: string;
   name: string;
@@ -8,6 +16,7 @@ export type DeviceSummary = {
   loggedInUser: string | null;
   foregroundApplication: string | null;
   controlledUserName: string | null;
+  language: AgentLanguage;
   agentVersion: string | null;
   latestAgentVersion: string | null;
   agentUpdateStatus: string | null;
@@ -48,6 +57,7 @@ export type DeviceRule = {
   deviceId: string;
   revision: number;
   timeZoneId: string;
+  language: AgentLanguage;
   controlledUserSid: string | null;
   controlledUserName: string | null;
   idleThresholdSeconds: number;

@@ -110,6 +110,11 @@ server on the next synchronization, and the panel's **Error log** page shows eac
 device, component, severity, how often it recurred, the agent version, and its stack trace. That is
 the place to look once a PC has been handed over and is no longer convenient to sit at.
 
+Everything the controlled PC shows the child is available in **English or Russian**, chosen per
+device under **Devices → device settings → Language on the PC**. It covers notifications, the
+countdown card, the tray menu, and the screen-time window, and takes effect on the next
+synchronization with no reinstall. The parent panel itself stays in English.
+
 The controlled user's tray icon opens a read-only screen-time window with four tabs: today's
 allowance, the apps that have limits, connection state, and an About tab showing the installed
 version and what KidTime does and does not see. Its **Remove KidTime** button uninstalls the

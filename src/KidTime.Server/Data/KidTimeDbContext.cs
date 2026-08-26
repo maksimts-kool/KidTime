@@ -66,6 +66,9 @@ public sealed class KidTimeDbContext(DbContextOptions<KidTimeDbContext> options)
             entity.Property(x => x.ControlledUserSid).HasMaxLength(184);
             entity.Property(x => x.ControlledUserName).HasMaxLength(255);
             entity.Property(x => x.ScheduleJson).HasColumnType("jsonb");
+            // Stored by name so the column stays readable and a reordered enum cannot silently
+            // switch every device to a different language.
+            entity.Property(x => x.Language).HasConversion<string>().HasMaxLength(32);
         });
 
         modelBuilder.Entity<Application>(entity =>

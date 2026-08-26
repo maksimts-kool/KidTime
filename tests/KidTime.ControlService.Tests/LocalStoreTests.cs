@@ -527,7 +527,7 @@ public sealed class LocalStoreTests : IDisposable
         });
         var server = new ServerConnectionStatus(
             true,
-            "Connected",
+            ServerConnectionState.Connected,
             DateTimeOffset.UtcNow,
             DateTimeOffset.UtcNow,
             null);

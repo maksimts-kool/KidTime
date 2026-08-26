@@ -1,3 +1,5 @@
+using KidTime.Domain.Localization;
+
 namespace KidTime.Domain.Rules;
 
 public sealed record TimeWindow(TimeOnly Start, TimeOnly End)
@@ -63,6 +65,13 @@ public sealed class DeviceRuleSnapshot
     public Guid DeviceId { get; init; }
     public long Revision { get; init; }
     public string TimeZoneId { get; init; } = "UTC";
+
+    /// <summary>
+    /// The language every message on the controlled PC is written in. It travels with the rules
+    /// so that changing it bumps the revision and reaches the agent over the same path.
+    /// </summary>
+    public AgentLanguage Language { get; init; } = AgentLanguage.English;
+
     public string? ControlledUserSid { get; init; }
     public string? ControlledUserName { get; init; }
     public int IdleThresholdSeconds { get; init; } = 300;
@@ -87,5 +96,8 @@ public sealed record RuleDecision(
     string Message,
     DateTimeOffset? AvailableAtUtc = null)
 {
-    public static RuleDecision Allowed { get; } = new(true, BlockReason.None, "Allowed");
+    public static RuleDecision Allowed { get; } = new(true, BlockReason.None, AgentStrings.English.Allowed);
+
+    public static RuleDecision AllowedIn(AgentStrings text) =>
+        new(true, BlockReason.None, text.Allowed);
 }

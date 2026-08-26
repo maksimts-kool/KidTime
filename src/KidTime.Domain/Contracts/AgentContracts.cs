@@ -1,4 +1,5 @@
 using KidTime.Domain.Applications;
+using KidTime.Domain.Localization;
 using KidTime.Domain.Rules;
 
 namespace KidTime.Domain.Contracts;
@@ -104,6 +105,7 @@ public static class DiagnosticSeverities
 
 public sealed record ParentRemovalRequest(string Email, string Password);
 
+/// <summary>The outcome of a removal request; <paramref name="Message"/> is already localized.</summary>
 public sealed record DeviceRemovalResult(bool Accepted, string Message);
 
 public sealed record SessionAgentRequest(
@@ -129,9 +131,23 @@ public sealed record UserNotification(
     bool DismissPersistentNotification = false,
     bool IsUrgent = false);
 
+/// <summary>Why the agent is or is not talking to the server, as a code the UI renders itself.</summary>
+public enum ServerConnectionState
+{
+    Connecting,
+    NotEnrolled,
+    Connected,
+    Offline
+}
+
+/// <summary>
+/// Connection state for the child's window. <paramref name="State"/> is a code rather than a
+/// sentence so the unelevated agent can phrase it in the configured language;
+/// <paramref name="LastSynchronizationError"/> stays raw because it is a technical detail.
+/// </summary>
 public sealed record ServerConnectionStatus(
     bool IsConnected,
-    string ConnectionMessage,
+    ServerConnectionState State,
     DateTimeOffset? LastSuccessfulContactUtc,
     DateTimeOffset? LastSuccessfulSynchronizationUtc,
     string? LastSynchronizationError);
@@ -163,6 +179,11 @@ public sealed record SessionStatusSnapshot(
     TimeAllowanceStatus ScreenTime,
     IReadOnlyList<ApplicationTimeStatus> Applications);
 
+/// <summary>
+/// The answer to one foreground sample. <paramref name="Language"/> rides on every exchange, not
+/// only on the ones carrying a full status snapshot, so the tray agent knows which language to
+/// paint its own chrome in from the very first reply.
+/// </summary>
 public sealed record EnforcementState(
     bool IsPcBlocked,
     RuleDecision PcDecision,
@@ -171,4 +192,5 @@ public sealed record EnforcementState(
     int? DailyLimitSeconds,
     int RemainingSeconds,
     UserNotification? Notification,
-    SessionStatusSnapshot? Status = null);
+    SessionStatusSnapshot? Status = null,
+    AgentLanguage Language = AgentLanguage.English);

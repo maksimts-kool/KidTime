@@ -7,6 +7,7 @@ using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using KidTime.Domain.Contracts;
+using KidTime.Domain.Localization;
 using Wpf.Ui.Controls;
 using Wpf.Ui.Tray;
 using Wpf.Ui.Tray.Controls;
@@ -25,6 +26,8 @@ internal sealed class AgentApplicationHost : IDisposable
     private readonly NotifyIcon _trayIcon;
     private readonly RoutedNotifyIconEvent _trayLeftClickHandler;
     private readonly StatusWindow _statusWindow;
+    private readonly WpfMenuItem _openMenuItem;
+    private readonly CountdownCard _countdownCard = new();
     private readonly HwndSource _trayParentSource;
     private readonly int _taskbarCreatedMessage;
     private long _sequence;
@@ -57,13 +60,13 @@ internal sealed class AgentApplicationHost : IDisposable
         trayMenu.Items.Add(_syncMenuItem);
         trayMenu.Items.Add(_profileMenuItem);
         trayMenu.Items.Add(new System.Windows.Controls.Separator());
-        var openItem = new WpfMenuItem
+        _openMenuItem = new WpfMenuItem
         {
-            Header = "Open KidTime",
+            Header = AgentUi.Text.TrayOpen,
             Icon = new SymbolIcon(SymbolRegular.Open28)
         };
-        openItem.Click += (_, _) => OpenStatusWindow();
-        trayMenu.Items.Add(openItem);
+        _openMenuItem.Click += (_, _) => OpenStatusWindow();
+        trayMenu.Items.Add(_openMenuItem);
 
         _trayIcon = new NotifyIcon
         {
@@ -71,7 +74,7 @@ internal sealed class AgentApplicationHost : IDisposable
             Icon = CreateTrayIcon(),
             Menu = trayMenu,
             MenuOnRightClick = true,
-            TooltipText = "KidTime - connecting to service"
+            TooltipText = AgentUi.Text.TrayTooltipConnecting
         };
         // WPF-UI.Tray 4.3.0 exposes inconsistent nullable metadata for this delegate.
 #pragma warning disable CS8622
@@ -201,7 +204,7 @@ internal sealed class AgentApplicationHost : IDisposable
         catch (Exception exception) when (exception is IOException or TimeoutException or OperationCanceledException)
         {
             SessionLogger.Information("Parent-authorized removal IPC failed.", exception);
-            return new DeviceRemovalResult(false, "The KidTime service did not answer. Wait a moment and try again.");
+            return new DeviceRemovalResult(false, AgentUi.Text.RemovalServiceSilent);
         }
         finally
         {
@@ -212,6 +215,8 @@ internal sealed class AgentApplicationHost : IDisposable
 
     private void ApplyState(EnforcementState state)
     {
+        if (AgentUi.TrySetLanguage(state.Language)) ApplyLanguage();
+
         if (state.Status is { } status)
         {
             UpdateTrayStatus(status);
@@ -222,6 +227,7 @@ internal sealed class AgentApplicationHost : IDisposable
         if (notification.DismissPersistentNotification && notification.PersistentNotificationKey is { } dismissKey)
         {
             NativeWindowsNotification.DismissFinalWarning(dismissKey);
+            _countdownCard.Dismiss(dismissKey);
         }
         else if (notification.CountdownSeconds is int countdownSeconds
                  && notification.PersistentNotificationKey is { } warningKey)
@@ -231,11 +237,22 @@ internal sealed class AgentApplicationHost : IDisposable
                 notification.Title,
                 notification.Message,
                 countdownSeconds);
+            // Additive only: the toast is what enforcement never depends on anyway, and the card
+            // adds the one thing a toast cannot show - the seconds actually draining away.
+            _countdownCard.Show(warningKey, notification.Title, notification.Message, countdownSeconds);
         }
         else
         {
             NativeWindowsNotification.Show(notification.Title, notification.Message, notification.IsUrgent);
         }
+    }
+
+    /// <summary>Repaints the parts of the tray chrome that carry fixed wording.</summary>
+    private void ApplyLanguage()
+    {
+        _openMenuItem.Header = AgentUi.Text.TrayOpen;
+        _statusWindow.ApplyLanguage();
+        UpdateTrayStatus(null);
     }
 
     private void OpenStatusWindow()
@@ -248,26 +265,40 @@ internal sealed class AgentApplicationHost : IDisposable
 
     private void UpdateTrayStatus(SessionStatusSnapshot? status)
     {
+        var text = AgentUi.Text;
         if (status is null)
         {
-            _serverMenuItem.Header = "Server  ·  Connecting to service";
-            _syncMenuItem.Header = "Synchronization  ·  Waiting for service";
-            _profileMenuItem.Header = "Controlled profile  ·  Loading";
+            _serverMenuItem.Header = text.TrayRow(text.TrayServerLabel, text.TrayConnectingToService);
+            _syncMenuItem.Header = text.TrayRow(text.TraySyncLabel, text.TrayWaitingForService);
+            _profileMenuItem.Header = text.TrayRow(text.TrayProfileLabel, text.TrayLoading);
+            _trayIcon.TooltipText = text.TrayTooltipConnecting;
             return;
         }
 
-        _serverMenuItem.Header = $"Server  ·  {status.Server.ConnectionMessage}";
-        _syncMenuItem.Header = status.Server.LastSynchronizationError is { Length: > 0 }
-            ? $"Synchronization  ·  Failed (last success {FormatRelative(status.Server.LastSuccessfulSynchronizationUtc)})"
-            : $"Synchronization  ·  {FormatRelative(status.Server.LastSuccessfulSynchronizationUtc)}";
-        _profileMenuItem.Header = $"Controlled profile  ·  {status.ControlledUserName ?? "Not selected"}";
+        _serverMenuItem.Header = text.TrayRow(text.TrayServerLabel, ConnectionMessage(text, status.Server.State));
+        _syncMenuItem.Header = text.TrayRow(
+            text.TraySyncLabel,
+            status.Server.LastSynchronizationError is { Length: > 0 }
+                ? text.TraySyncFailed(text.Relative(status.Server.LastSuccessfulSynchronizationUtc))
+                : text.Relative(status.Server.LastSuccessfulSynchronizationUtc));
+        _profileMenuItem.Header = text.TrayRow(
+            text.TrayProfileLabel,
+            status.ControlledUserName ?? text.NotSelected);
         var allowance = status.ScreenTime;
         _trayIcon.TooltipText = allowance.IsAllowed && allowance.DailyRemainingSeconds is int remaining
-            ? $"KidTime - {FormatDuration(remaining)} left today"
+            ? text.TrayTooltipRemaining(text.DurationLabel(remaining))
             : allowance.IsAllowed
-                ? "KidTime - screen time available"
-                : "KidTime - screen time unavailable";
+                ? text.TrayTooltipAvailable
+                : text.TrayTooltipUnavailable;
     }
+
+    private static string ConnectionMessage(AgentStrings text, ServerConnectionState state) => state switch
+    {
+        ServerConnectionState.NotEnrolled => text.DeviceNotEnrolled,
+        ServerConnectionState.Connected => text.Connected,
+        ServerConnectionState.Offline => text.OfflineCachedRules,
+        _ => text.ConnectingToServer
+    };
 
     private static BitmapSource CreateTrayIcon()
     {
@@ -277,22 +308,6 @@ internal sealed class AgentApplicationHost : IDisposable
             BitmapSizeOptions.FromWidthAndHeight(32, 32));
         source.Freeze();
         return source;
-    }
-
-    private static string FormatRelative(DateTimeOffset? time)
-    {
-        if (time is null) return "Not yet";
-        var elapsed = DateTimeOffset.UtcNow - time.Value;
-        if (elapsed < TimeSpan.FromMinutes(1)) return "Just now";
-        if (elapsed < TimeSpan.FromHours(1)) return $"{Math.Max(1, (int)elapsed.TotalMinutes)} min ago";
-        if (elapsed < TimeSpan.FromDays(1)) return $"{Math.Max(1, (int)elapsed.TotalHours)} h ago";
-        return time.Value.ToLocalTime().ToString("ddd HH:mm");
-    }
-
-    private static string FormatDuration(int seconds)
-    {
-        var minutes = Math.Max(0, (int)Math.Ceiling(seconds / 60d));
-        return minutes >= 60 ? $"{minutes / 60}h {minutes % 60:00}m" : $"{minutes}m";
     }
 
     public void Dispose()
@@ -306,6 +321,7 @@ internal sealed class AgentApplicationHost : IDisposable
             _trayParentSource.RemoveHook(TrayParentWindowProc);
             _trayIcon.LeftClick -= _trayLeftClickHandler;
             _trayIcon.Dispose();
+            _countdownCard.Dispose();
             _statusWindow.CloseForExit();
         }
         catch (Exception exception)
