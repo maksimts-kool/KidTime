@@ -13,7 +13,7 @@ public sealed class ProcessMonitor(
 {
     private readonly Dictionary<int, TrackedApplication> _tracked = [];
     private readonly HashSet<int> _ignored = [];
-    private readonly Dictionary<string, BlockLease> _blockLeases = new(StringComparer.Ordinal);
+    private readonly ApplicationBlockLeases _blockLeases = new();
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -74,9 +74,9 @@ public sealed class ProcessMonitor(
             foreach (var processId in _tracked.Keys.Where(processId => !current.Contains(processId)).ToList())
                 _tracked.Remove(processId);
             _ignored.RemoveWhere(processId => !current.Contains(processId));
-            foreach (var identity in _blockLeases.Keys.Where(identity => !runningApplications.ContainsKey(identity)).ToList())
+            foreach (var identity in _blockLeases.IdentitiesNoLongerRunning(runningApplications.Keys))
             {
-                _blockLeases.Remove(identity);
+                _blockLeases.Release(identity);
                 coordinator.DismissApplicationClosing(identity);
             }
 
@@ -87,37 +87,36 @@ public sealed class ProcessMonitor(
                     var status = await coordinator.EvaluateApplicationStatusAsync(identity, stoppingToken);
                     if (status is null || status.Decision.IsAllowed)
                     {
-                        if (_blockLeases.Remove(identity)) coordinator.DismissApplicationClosing(identity);
+                        if (_blockLeases.Release(identity)) coordinator.DismissApplicationClosing(identity);
                         continue;
                     }
 
-                    if (!_blockLeases.TryGetValue(identity, out var lease)
-                        || !string.Equals(lease.EpisodeKey, status.EpisodeKey, StringComparison.Ordinal))
+                    if (_blockLeases.NeedsLease(identity, status.EpisodeKey))
                     {
                         var firstBlockedLaunch = await store.TryConsumeFirstApplicationBlockGraceAsync(
                             identity, status.EpisodeKey, stoppingToken);
                         var seconds = firstBlockedLaunch ? 60 : 20;
-                        lease = new BlockLease(
-                            status.EpisodeKey,
-                            Stopwatch.GetTimestamp() + (long)(seconds * (double)Stopwatch.Frequency),
-                            ClosingIssued: false);
-                        _blockLeases[identity] = lease;
+                        _blockLeases.Start(identity, status.EpisodeKey, seconds, Stopwatch.GetTimestamp());
                         coordinator.NotifyApplicationClosing(identity, status.DisplayName, status.Decision, seconds);
+                        continue;
                     }
 
-                    if (!lease.ClosingIssued && Stopwatch.GetTimestamp() >= lease.CloseAtTimestamp)
+                    if (!_blockLeases.TryTakeExpired(identity, Stopwatch.GetTimestamp())) continue;
+
+                    foreach (var process in running.Processes)
                     {
-                        foreach (var process in running.Processes)
+                        try { process.Kill(entireProcessTree: true); }
+                        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
                         {
-                            try { process.Kill(entireProcessTree: true); }
-                            catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
-                            {
-                                logger.LogWarning(exception, "Could not close blocked application process {ProcessId}.", process.Id);
-                            }
+                            logger.LogWarning(exception, "Could not close blocked application process {ProcessId}.", process.Id);
                         }
-                        _blockLeases[identity] = lease with { ClosingIssued = true };
-                        logger.LogWarning("Blocked application {Application} closed after its save-work period.", status.DisplayName);
                     }
+
+                    // The lease is spent here rather than at the next sweep, which would only
+                    // notice once nothing of this application was left running - a relaunch
+                    // inside the same window otherwise kept a closed-out lease alive and ran on.
+                    coordinator.DismissApplicationClosing(identity);
+                    logger.LogWarning("Blocked application {Application} closed after its save-work period.", status.DisplayName);
                 }
                 finally
                 {
@@ -129,5 +128,4 @@ public sealed class ProcessMonitor(
 
     private sealed record TrackedApplication(string IdentityKey, string DisplayName);
     private sealed record RunningApplication(string DisplayName, List<Process> Processes);
-    private sealed record BlockLease(string EpisodeKey, long CloseAtTimestamp, bool ClosingIssued);
 }

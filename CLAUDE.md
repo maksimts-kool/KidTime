@@ -339,7 +339,16 @@ warning in a PC restriction episode lasts 60 seconds; signing in again while the
 active gets 20 seconds. That grace state is persisted locally across service restarts. The service
 owns the monotonic deadline and then calls `WTSLogoffSession`; **notification delivery is never
 trusted for enforcement.** The warning carries an explicit expiration, and the card cannot strand
-itself either - the constraints below are what guarantee that. If the parent dismisses the
+itself either - the constraints below are what guarantee that.
+
+**An enforcement action is granted for one attempt and spent when it is issued, never latched onto
+what it acted on.** `PcSignOutSchedule` and `ApplicationBlockLeases` both encode that. A session
+still signed in `PcSignOutSchedule.SettlePeriod` after its sign-out - the call does not wait for the
+session to end, so a few seconds is ordinary teardown - starts the warning cycle over and reports
+an error the parent sees, rather than being taken as already handled. `ProcessMonitor` likewise
+retires an application's lease as it issues the close: keeping it until a sweep saw nothing of that
+application running let a relaunch inside the same two-second window inherit a spent lease and run
+unrestricted for the rest of the restriction episode. If the parent dismisses the
 restriction during the countdown, a keyed dismissal closes the card, hides any toast, removes it
 from Notification Center, and cancels sign-out. When the rule
 ends, a normal notification says the PC is available and repeats the prior reason.
@@ -509,8 +518,10 @@ windows, timezone day changes, update-tolerant application identity, installer/r
 reconciliation, helper-process filtering, rule-change notifications, persisted first-block grace,
 automatic-update version comparison, controlled-account SID isolation, cached offline rules, durable
 pending usage, buffered usage that survives a restart, durable fault queueing and fingerprinting,
-in-batch fault collapsing, complete English and Russian catalogs with Russian plural agreement,
-language-scoped rule messages, idle exclusion, and cached app-limit evaluation.
+in-batch fault collapsing, spent application close leases that a relaunch cannot inherit, a sign-out
+that is warned about and retried when the session outlives it, complete English and Russian catalogs
+with Russian plural agreement, language-scoped rule messages, idle exclusion, and cached app-limit
+evaluation.
 
 Integration checks on a VM should use a harmless executable such as Notepad before testing game
 rules:
@@ -518,18 +529,20 @@ rules:
 1. allow Notepad and observe foreground usage;
 2. block Notepad in the web panel and launch it again;
 3. set a one-minute Notepad limit and verify it closes at exhaustion;
-4. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
-5. reconnect and confirm pending statistics upload;
-6. manually block the PC, confirm the countdown card appears with the 60-second grace period and
+4. start Notepad again the instant the service closes it, and confirm the warning and the close
+   repeat with the 20-second save period instead of the relaunch running on unrestricted;
+5. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
+6. reconnect and confirm pending statistics upload;
+7. manually block the PC, confirm the countdown card appears with the 60-second grace period and
    no duplicate native toast beside it, expires instead of leaving a topmost window behind, and
    confirm Windows signs the session out;
-7. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
-8. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
+8. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
+9. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
    enforcement remains independent;
-9. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
-   instead, with the device, component, and stack trace, and repeats raise the count rather than
-   adding rows;
-10. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
+10. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
+    instead, with the device, component, and stack trace, and repeats raise the count rather than
+    adding rows;
+11. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
     screen-time window, the next notification, and the countdown card all change without
     reinstalling or signing out, then block the PC and confirm the card counts down in the corner,
     never takes focus, and disappears on its own when the countdown ends or the parent lifts the

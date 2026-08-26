@@ -13,12 +13,9 @@ public sealed class SessionLockoutService(
 {
     internal const int FirstWarningSeconds = 60;
     internal const int RepeatWarningSeconds = 20;
+    private readonly PcSignOutSchedule _signOut = new();
     private bool _wasBlocked;
-    private bool _signOutIssued;
     private bool _pendingAvailableNotification;
-    private uint? _warnedSessionId;
-    private string? _warnedUser;
-    private long _signOutAtTimestamp;
     private RuleDecision? _lastBlockedDecision;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -32,8 +29,8 @@ public sealed class SessionLockoutService(
 
             if (!WindowsSession.IsActiveUserControlled(coordinator.Rules))
             {
-                if (_warnedSessionId is not null) coordinator.DismissPcSignOut();
-                ResetSessionWarning();
+                if (_signOut.IsWarned) coordinator.DismissPcSignOut();
+                _signOut.Clear();
                 continue;
             }
 
@@ -43,19 +40,25 @@ public sealed class SessionLockoutService(
                 _wasBlocked = true;
                 if (sessionId == uint.MaxValue || string.IsNullOrWhiteSpace(user))
                 {
-                    ResetSessionWarning();
+                    _signOut.Clear();
                     continue;
                 }
 
-                if (_warnedSessionId != sessionId || !string.Equals(_warnedUser, user, StringComparison.OrdinalIgnoreCase))
+                var step = _signOut.Next(sessionId, user, Stopwatch.GetTimestamp());
+                if (step is SignOutStep.WarnAgain)
                 {
+                    // The parent has to learn that this PC did not actually sign out; the child
+                    // is warned again rather than being signed out with no notice at all.
+                    logger.LogError(
+                        "Windows session {SessionId} ({User}) is still signed in after it was signed out; warning again.",
+                        sessionId, user);
+                }
+
+                if (step is SignOutStep.Warn or SignOutStep.WarnAgain)
                     await WarnAndScheduleSignOutAsync(sessionId, user, status, stoppingToken);
-                    continue;
-                }
-
-                if (!_signOutIssued && Stopwatch.GetTimestamp() >= _signOutAtTimestamp)
+                else if (step is SignOutStep.SignOut)
                 {
-                    _signOutIssued = true;
+                    _signOut.SignOutIssued(Stopwatch.GetTimestamp());
                     if (WindowsSession.TryLogoff(sessionId))
                         logger.LogWarning("Windows session {SessionId} ({User}) was signed out because the PC is blocked.", sessionId, user);
                     else
@@ -70,7 +73,7 @@ public sealed class SessionLockoutService(
                 _wasBlocked = false;
                 _pendingAvailableNotification = true;
                 coordinator.DismissPcSignOut();
-                ResetSessionWarning();
+                _signOut.Clear();
                 logger.LogInformation("PC restriction ended; an availability notification is pending for the interactive user.");
             }
 
@@ -95,20 +98,9 @@ public sealed class SessionLockoutService(
         logger.LogWarning("Persistent final warning queued for session {SessionId} ({User}); sign-out in {Seconds} seconds.",
             sessionId, user, warningSeconds);
 
-        _warnedSessionId = sessionId;
-        _warnedUser = user;
-        _signOutIssued = false;
-        _signOutAtTimestamp = Stopwatch.GetTimestamp() + (long)(warningSeconds * (double)Stopwatch.Frequency);
+        _signOut.Warn(sessionId, user, warningSeconds, Stopwatch.GetTimestamp());
     }
 
     private string BuildEpisodeKey(PcEnforcementStatus status) =>
         $"{coordinator.Rules.Revision}|{status.Decision.Reason}|{status.Decision.AvailableAtUtc?.UtcTicks}";
-
-    private void ResetSessionWarning()
-    {
-        _warnedSessionId = null;
-        _warnedUser = null;
-        _signOutIssued = false;
-        _signOutAtTimestamp = 0;
-    }
 }
