@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace KidTime.Server.Services;
 
-public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext)
+public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext, TimeProvider timeProvider)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -21,6 +21,25 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext)
             .Include(x => x.Rule)
             .ToListAsync(cancellationToken);
 
+        // Extra time a parent granted today travels as part of the rules, so it reaches the PC
+        // over the path that already exists and stops applying by itself once the device-local
+        // date moves on. A grant for any other date is simply not read.
+        var today = RuleEvaluator.GetLocalDate(timeProvider.GetUtcNow(), device.TimeZoneId);
+        var grants = await dbContext.TimeExtensions.AsNoTracking()
+            .Where(item => item.DeviceId == deviceId
+                           && item.LocalDate == today
+                           && item.Status == TimeExtensionStatuses.Approved
+                           && item.GrantedMinutes > 0)
+            .Select(item => new { item.ApplicationIdentityKey, item.GrantedMinutes })
+            .ToListAsync(cancellationToken);
+        var pcBonus = BuildBonus(today, grants
+            .Where(grant => grant.ApplicationIdentityKey == null)
+            .Sum(grant => grant.GrantedMinutes));
+        var applicationBonuses = grants
+            .Where(grant => grant.ApplicationIdentityKey != null)
+            .GroupBy(grant => grant.ApplicationIdentityKey!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Sum(grant => grant.GrantedMinutes), StringComparer.Ordinal);
+
         return new DeviceRuleSnapshot
         {
             DeviceId = device.Id,
@@ -34,6 +53,7 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext)
             ManualBlockUntilUtc = device.Rule.ManualBlockUntilUtc,
             DailyLimitSeconds = device.Rule.DailyLimitSeconds,
             Schedule = DeserializeSchedule(device.Rule.ScheduleJson),
+            Bonus = pcBonus,
             Applications = appRules
                 .Where(item => ApplicationCatalogPolicy.IsUserManageable(ToDescriptor(item)))
                 .Select(item => new ApplicationRuleSnapshot
@@ -43,10 +63,14 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext)
                 ManuallyBlocked = item.Rule.ManuallyBlocked,
                 DailyLimitSeconds = item.Rule.DailyLimitSeconds,
                 Schedule = DeserializeSchedule(item.Rule.ScheduleJson),
+                Bonus = BuildBonus(today, applicationBonuses.GetValueOrDefault(item.Application.IdentityKey)),
                 UpdatedAtUtc = item.Rule.UpdatedAtUtc
             }).ToList()
         };
     }
+
+    private static TimeBonus? BuildBonus(DateOnly localDate, int minutes) =>
+        minutes > 0 ? new TimeBonus(localDate, minutes * 60) : null;
 
     private static ApplicationDescriptor ToDescriptor(DeviceApplication item) => new()
     {

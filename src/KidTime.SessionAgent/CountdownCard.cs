@@ -26,12 +26,17 @@ internal sealed class CountdownCard : IDisposable
 
     private readonly Dictionary<string, CountdownCardWindow> _cards = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly Action _openExtraTimeRequest;
     private bool _disposed;
 
-    public CountdownCard() => _timer.Tick += OnTick;
+    public CountdownCard(Action openExtraTimeRequest)
+    {
+        _openExtraTimeRequest = openExtraTimeRequest;
+        _timer.Tick += OnTick;
+    }
 
     /// <summary>Returns true only when a card is genuinely on screen for this warning.</summary>
-    public bool Show(string warningKey, string title, string message, int countdownSeconds)
+    public bool Show(string warningKey, string title, string message, int countdownSeconds, bool canAskForExtraTime)
     {
         if (_disposed) return false;
         try
@@ -40,7 +45,8 @@ internal sealed class CountdownCard : IDisposable
             // in the same episode gets its own shorter grace instead of inheriting the first one.
             Dismiss(warningKey);
             var card = new CountdownCardWindow();
-            card.SetContent(title, message, countdownSeconds);
+            card.ExtraTimeRequested += OnExtraTimeRequested;
+            card.SetContent(title, message, countdownSeconds, canAskForExtraTime);
             // Placed before it is shown: a card that appears at the desktop origin and then jumps
             // to the corner is exactly the kind of flicker an urgent warning cannot afford.
             var work = SystemParameters.WorkArea;
@@ -106,6 +112,8 @@ internal sealed class CountdownCard : IDisposable
 
     private void OnCardSizeChanged(object? sender, SizeChangedEventArgs e) => Reposition();
 
+    private void OnExtraTimeRequested(object? sender, EventArgs e) => _openExtraTimeRequest();
+
     private void OnTick(object? sender, EventArgs e)
     {
         var expired = new List<string>();
@@ -146,6 +154,7 @@ internal sealed class CountdownCard : IDisposable
     private void CloseCard(CountdownCardWindow card)
     {
         card.SizeChanged -= OnCardSizeChanged;
+        card.ExtraTimeRequested -= OnExtraTimeRequested;
         try { card.CloseForExit(); }
         catch (Exception exception) when (exception is InvalidOperationException)
         {

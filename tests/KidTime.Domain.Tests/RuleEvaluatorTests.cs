@@ -220,6 +220,122 @@ public sealed class RuleEvaluatorTests
         Assert.Equal(new DateTimeOffset(2026, 8, 25, 2, 0, 0, TimeSpan.Zero), result);
     }
 
+    [Fact]
+    public void Granted_extra_time_raises_the_daily_limit_for_that_day()
+    {
+        var rule = NewDeviceRule(dailyLimitSeconds: 3600);
+        var extended = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            DailyLimitSeconds = 3600,
+            Bonus = new TimeBonus(DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 1800)
+        };
+
+        Assert.False(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 3600).IsAllowed);
+        Assert.True(RuleEvaluator.EvaluateDevice(extended, MondayNoonUtc, 3600).IsAllowed);
+        Assert.False(RuleEvaluator.EvaluateDevice(extended, MondayNoonUtc, 5400).IsAllowed);
+    }
+
+    [Fact]
+    public void Extra_time_granted_for_another_day_is_ignored()
+    {
+        // The grant carries the device-local date it was made for, so it stops applying by
+        // itself at midnight - nothing has to be sent to take it away.
+        var rule = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            DailyLimitSeconds = 3600,
+            Bonus = new TimeBonus(DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime).AddDays(-1), 1800)
+        };
+
+        Assert.False(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 3600).IsAllowed);
+    }
+
+    [Fact]
+    public void Extra_time_does_not_lift_a_manual_block_or_a_schedule()
+    {
+        // Extra time only ever raises a daily limit. A parent who blocked the PC has not been
+        // overruled by a request the child made a minute earlier.
+        var blocked = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            ManuallyBlocked = true,
+            DailyLimitSeconds = 3600,
+            Bonus = new TimeBonus(DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 3600)
+        };
+        var outsideSchedule = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            DailyLimitSeconds = 3600,
+            Schedule = Schedule((DayOfWeek.Monday, "18:00", "20:00")),
+            Bonus = new TimeBonus(DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 3600)
+        };
+
+        Assert.Equal(BlockReason.ManualBlock, RuleEvaluator.EvaluateDevice(blocked, MondayNoonUtc, 0).Reason);
+        Assert.Equal(
+            BlockReason.OutsideAllowedSchedule,
+            RuleEvaluator.EvaluateDevice(outsideSchedule, MondayNoonUtc, 0).Reason);
+    }
+
+    [Fact]
+    public void Granted_extra_time_raises_an_application_limit_too()
+    {
+        var rule = new ApplicationRuleSnapshot
+        {
+            IdentityKey = "app",
+            DisplayName = "Roblox",
+            DailyLimitSeconds = 1800,
+            Bonus = new TimeBonus(DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 900)
+        };
+
+        Assert.True(RuleEvaluator.EvaluateApplication(rule, MondayNoonUtc, "UTC", 1800).IsAllowed);
+        Assert.False(RuleEvaluator.EvaluateApplication(rule, MondayNoonUtc, "UTC", 2700).IsAllowed);
+    }
+
+    [Fact]
+    public void An_unlimited_allowance_is_not_changed_by_a_grant()
+    {
+        var rule = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            Bonus = new TimeBonus(DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 1800)
+        };
+
+        Assert.Null(RuleEvaluator.EffectiveDailyLimitSeconds(
+            rule.DailyLimitSeconds, rule.Bonus, DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime)));
+        Assert.True(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 100_000).IsAllowed);
+    }
+
+    [Fact]
+    public void The_allowance_period_changes_when_a_new_schedule_window_opens()
+    {
+        // A refusal is scoped to the stretch of screen time it was given in, so two windows on the
+        // same day must not share a key - otherwise a "no" at 14:00 would still stand at 18:00.
+        var schedule = Schedule(
+            (DayOfWeek.Monday, "08:00", "15:00"),
+            (DayOfWeek.Monday, "18:00", "22:00"));
+        var afternoon = RuleEvaluator.GetAllowancePeriodKey(schedule, MondayNoonUtc, "UTC");
+        var stillAfternoon = RuleEvaluator.GetAllowancePeriodKey(schedule, MondayNoonUtc.AddHours(2), "UTC");
+        var evening = RuleEvaluator.GetAllowancePeriodKey(schedule, MondayNoonUtc.AddHours(7), "UTC");
+
+        Assert.Equal(afternoon, stillAfternoon);
+        Assert.NotEqual(afternoon, evening);
+    }
+
+    [Fact]
+    public void Without_a_schedule_the_allowance_period_is_the_local_day()
+    {
+        // Nothing reopens, so a refusal lasts until the day turns over - which is the next time
+        // the child has any screen time at all.
+        var schedule = new WeeklySchedule();
+        var noon = RuleEvaluator.GetAllowancePeriodKey(schedule, MondayNoonUtc, "UTC");
+        var later = RuleEvaluator.GetAllowancePeriodKey(schedule, MondayNoonUtc.AddHours(6), "UTC");
+        var tomorrow = RuleEvaluator.GetAllowancePeriodKey(schedule, MondayNoonUtc.AddDays(1), "UTC");
+
+        Assert.Equal(noon, later);
+        Assert.NotEqual(noon, tomorrow);
+    }
+
     private static DeviceRuleSnapshot NewDeviceRule(int? dailyLimitSeconds = null) => new()
     {
         TimeZoneId = "UTC",

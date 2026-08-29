@@ -27,7 +27,12 @@ internal sealed class AgentApplicationHost : IDisposable
     private readonly RoutedNotifyIconEvent _trayLeftClickHandler;
     private readonly StatusWindow _statusWindow;
     private readonly WpfMenuItem _openMenuItem;
-    private readonly CountdownCard _countdownCard = new();
+    private readonly CountdownCard _countdownCard;
+
+    // What the service offered on the last reply. The card and the toast button both need to know
+    // whether asking is possible before they draw anything, and this is the only source of truth
+    // for that - the agent never works it out for itself.
+    private IReadOnlyList<TimeExtensionOffer> _extensionOffers = [];
     private readonly HwndSource _trayParentSource;
     private readonly int _taskbarCreatedMessage;
     private long _sequence;
@@ -39,7 +44,8 @@ internal sealed class AgentApplicationHost : IDisposable
         // WPF-UI.Tray registers through Application.Current.MainWindow. Create its
         // presentation source without visibly opening it so the icon exists before
         // the first click. EnsureHandle alone does not attach a WPF visual source.
-        _statusWindow = new StatusWindow(RemoveKidTimeAsync);
+        _countdownCard = new CountdownCard(OpenExtraTimeRequest);
+        _statusWindow = new StatusWindow(RemoveKidTimeAsync, RequestExtraTimeAsync);
         Application.Current.MainWindow = _statusWindow;
         _statusWindow.ShowActivated = false;
         _statusWindow.ShowInTaskbar = false;
@@ -83,6 +89,7 @@ internal sealed class AgentApplicationHost : IDisposable
         _trayIcon.LeftClick += _trayLeftClickHandler;
         RegisterTrayIcon("startup");
 
+        NativeWindowsNotification.ExtraTimeRequested += OnToastExtraTimeRequested;
         UpdateTrayStatus(null);
         _timer.Tick += TimerTick;
         _timer.Start();
@@ -217,6 +224,11 @@ internal sealed class AgentApplicationHost : IDisposable
     {
         if (AgentUi.TrySetLanguage(state.Language)) ApplyLanguage();
 
+        // Read before the notifications below, so a final warning drawn on this same reply
+        // already knows whether it may offer to ask for more time.
+        _extensionOffers = state.ExtensionOffers ?? [];
+        _statusWindow.UpdateExtraTime(_extensionOffers);
+
         if (state.Status is { } status)
         {
             UpdateTrayStatus(status);
@@ -242,28 +254,89 @@ internal sealed class AgentApplicationHost : IDisposable
             // seconds actually draining away - and two warnings for one deadline only compete for
             // the same corner. The toast remains the fallback: the card is best-effort by design,
             // so a child must never be left with no warning because it failed to draw.
+            var canAsk = CanAskForExtraTime();
             var shown = _countdownCard.Show(
                 warningKey,
                 notification.Title,
                 notification.Message,
-                countdownSeconds);
+                countdownSeconds,
+                canAsk);
             if (!shown)
                 NativeWindowsNotification.ShowFinalWarning(
                     warningKey,
                     notification.Title,
                     notification.Message,
-                    countdownSeconds);
+                    countdownSeconds,
+                    canAsk ? AgentUi.Text.ExtraTimeAskButton : null);
         }
         else if (notification.IsUrgent && notification.PersistentNotificationKey is { } reminderKey)
         {
             // A running-out reminder: urgent, so it survives a full-screen game, but keyed so the
-            // next one takes its place rather than adding a banner beside it.
-            NativeWindowsNotification.ShowUrgentReminder(reminderKey, notification.Title, notification.Message);
+            // next one takes its place rather than adding a banner beside it. This is the one a
+            // child absorbed in a game actually sees, so it carries the way to ask for more time.
+            NativeWindowsNotification.ShowUrgentReminder(
+                reminderKey,
+                notification.Title,
+                notification.Message,
+                CanAskForExtraTime() ? AgentUi.Text.ExtraTimeAskButton : null);
         }
         else
         {
             NativeWindowsNotification.Show(notification.Title, notification.Message, notification.IsUrgent);
         }
+    }
+
+    /// <summary>
+    /// Whether the service is currently offering extra time for anything, and the child is not
+    /// already waiting on an answer. Only then is the button worth drawing: one that replied
+    /// "you cannot ask for that" would be worse than no button at all.
+    /// </summary>
+    private bool CanAskForExtraTime() =>
+        _extensionOffers.Any(offer => offer.State != TimeExtensionOfferState.Pending);
+
+    /// <summary>
+    /// Opens the request for whatever is actually running out - the application in the foreground
+    /// when there is one, the PC otherwise. Nothing here asks for anything by itself; the child
+    /// still chooses the amount in the popup that opens.
+    /// </summary>
+    private void OpenExtraTimeRequest()
+    {
+        try
+        {
+            var offer = _extensionOffers.FirstOrDefault(item => item.ApplicationIdentityKey is not null)
+                        ?? _extensionOffers.FirstOrDefault();
+            _statusWindow.ShowExtraTimeRequest(offer);
+        }
+        catch (Exception exception)
+        {
+            SessionLogger.ReportFault(
+                DiagnosticSeverities.Error,
+                "The KidTime screen-time window could not be opened for an extra-time request.",
+                exception);
+        }
+    }
+
+    /// <summary>
+    /// The toast's own button. Windows raises this on a background thread through the
+    /// notification COM server, so it has to be marshalled onto the UI thread before any window
+    /// is touched.
+    /// </summary>
+    private void OnToastExtraTimeRequested(object? sender, EventArgs e)
+    {
+        if (_disposed) return;
+        Application.Current?.Dispatcher.BeginInvoke(OpenExtraTimeRequest);
+    }
+
+    private async Task<TimeExtensionSubmissionResult> RequestExtraTimeAsync(
+        TimeExtensionSubmission submission,
+        CancellationToken cancellationToken)
+    {
+        // The sampling exchange and this one share a single-instance pipe, so they must not
+        // overlap. A press is rare and the sample is due again in two seconds either way.
+        while (_busy) await Task.Delay(50, cancellationToken);
+        _busy = true;
+        try { return await _client.RequestTimeExtensionAsync(submission, cancellationToken); }
+        finally { _busy = false; }
     }
 
     /// <summary>Repaints the parts of the tray chrome that carry fixed wording.</summary>
@@ -338,6 +411,7 @@ internal sealed class AgentApplicationHost : IDisposable
             _timer.Stop();
             _timer.Tick -= TimerTick;
             _trayParentSource.RemoveHook(TrayParentWindowProc);
+            NativeWindowsNotification.ExtraTimeRequested -= OnToastExtraTimeRequested;
             _trayIcon.LeftClick -= _trayLeftClickHandler;
             _trayIcon.Dispose();
             _countdownCard.Dispose();

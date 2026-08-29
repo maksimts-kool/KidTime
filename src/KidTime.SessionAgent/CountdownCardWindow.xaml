@@ -37,6 +37,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <Grid Grid.Row="0">
@@ -86,16 +87,38 @@
                          Maximum="100"
                          Value="100" />
 
-            <Grid Grid.Row="3" Margin="46,12,0,0">
+            <!--
+                The ask gets its own full-width row rather than sharing one with "Got it". Both
+                labels are sentences, not words - "Попросить ещё времени" beside "Понятно" beside
+                the caption ran straight through each other on a 380-wide card - and a warning
+                whose buttons overlap is a warning that looks broken at the worst moment.
+                Shown only while the service is offering extra time for what is closing; it opens
+                the request and does nothing else, so the card stays a warning.
+            -->
+            <ui:Button x:Name="AskForTimeButton"
+                       Grid.Row="3"
+                       Margin="46,12,0,0"
+                       Padding="12,6"
+                       HorizontalAlignment="Stretch"
+                       HorizontalContentAlignment="Center"
+                       Appearance="Primary"
+                       Click="AskForTimeButton_Click"
+                       Content="Ask for more time"
+                       Focusable="False"
+                       Visibility="Collapsed" />
+
+            <Grid Grid.Row="4" Margin="46,12,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock x:Name="CountdownCaption"
                            VerticalAlignment="Center"
+                           Margin="0,0,10,0"
                            Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                            FontSize="12"
-                           Text="Time left" />
+                           Text="Time left"
+                           TextTrimming="CharacterEllipsis" />
                 <ui:Button x:Name="DismissButton"
                            Grid.Column="1"
                            Padding="12,5"

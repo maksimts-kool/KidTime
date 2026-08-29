@@ -112,6 +112,7 @@ export type ApplicationSummary = {
   lastSeenUtc: string;
   todayActiveSeconds: number;
   hasIcon: boolean;
+  isMicrosoft: boolean;
   manuallyBlocked: boolean;
   dailyLimitSeconds: number | null;
 };
@@ -123,4 +124,21 @@ export type DeviceStatistics = {
   totalActiveSeconds: number;
   daily: DailyUsage[];
   applications: { displayName: string; identityKey: string; activeSeconds: number }[];
+};
+
+/** One child's request for extra time, and what was decided about it. */
+export type TimeExtensionRequest = {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  displayName: string;
+  applicationIdentityKey: string | null;
+  deviceApplicationId: string | null;
+  isPc: boolean;
+  localDate: string;
+  requestedMinutes: number;
+  grantedMinutes: number;
+  status: "Pending" | "Approved" | "Denied";
+  requestedAtUtc: string;
+  decidedAtUtc: string | null;
 };

@@ -24,7 +24,10 @@ public static class RuleEvaluator
                 rule.ManualBlockUntilUtc);
         }
 
-        if (rule.DailyLimitSeconds is int limit && activeSecondsToday >= limit)
+        var localNow = TimeZoneInfo.ConvertTime(utcNow, timeZone).DateTime;
+        if (EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Bonus, DateOnly.FromDateTime(localNow))
+                is int limit
+            && activeSecondsToday >= limit)
         {
             return new RuleDecision(
                 false,
@@ -33,7 +36,6 @@ public static class RuleEvaluator
                 StartOfNextLocalDayUtc(utcNow, timeZone));
         }
 
-        var localNow = TimeZoneInfo.ConvertTime(utcNow, timeZone).DateTime;
         if (!rule.Schedule.Allows(localNow))
         {
             return new RuleDecision(
@@ -64,7 +66,10 @@ public static class RuleEvaluator
                 text.ApplicationBlockedByParent(rule.DisplayName));
         }
 
-        if (rule.DailyLimitSeconds is int limit && activeSecondsToday >= limit)
+        var localNow = TimeZoneInfo.ConvertTime(utcNow, timeZone).DateTime;
+        if (EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Bonus, DateOnly.FromDateTime(localNow))
+                is int limit
+            && activeSecondsToday >= limit)
         {
             return new RuleDecision(
                 false,
@@ -73,7 +78,6 @@ public static class RuleEvaluator
                 StartOfNextLocalDayUtc(utcNow, timeZone));
         }
 
-        var localNow = TimeZoneInfo.ConvertTime(utcNow, timeZone).DateTime;
         if (!rule.Schedule.Allows(localNow))
         {
             return new RuleDecision(
@@ -84,6 +88,34 @@ public static class RuleEvaluator
         }
 
         return RuleDecision.AllowedIn(text);
+    }
+
+    /// <summary>
+    /// The daily limit that actually applies on a device-local date: the parent's limit plus any
+    /// extra time granted for that date. Every path that reads a daily limit - enforcement, the
+    /// running-out reminders, the child's own window - has to go through here, or the child is
+    /// closed down at the original limit while being told they were given more.
+    /// </summary>
+    public static int? EffectiveDailyLimitSeconds(int? dailyLimitSeconds, TimeBonus? bonus, DateOnly localDate) =>
+        dailyLimitSeconds is int limit ? limit + TimeBonus.SecondsOn(bonus, localDate) : null;
+
+    /// <summary>
+    /// Identifies the allowance period in force: the schedule window currently open, or the
+    /// device-local day when no schedule is configured.
+    ///
+    /// This is what makes a refusal last exactly as long as it should. A child told no is told no
+    /// for the stretch of screen time they are in - not for two minutes, and not for the rest of
+    /// the week. When the next window opens, the key changes and they may ask again.
+    /// </summary>
+    public static string GetAllowancePeriodKey(
+        WeeklySchedule schedule,
+        DateTimeOffset utcNow,
+        string timeZoneId)
+    {
+        if (schedule.IsConfigured
+            && FindCurrentAllowanceStartUtc(schedule, utcNow, timeZoneId) is { } windowStart)
+            return $"window:{windowStart.UtcTicks}";
+        return $"day:{GetLocalDate(utcNow, timeZoneId):yyyy-MM-dd}";
     }
 
     public static DateOnly GetLocalDate(DateTimeOffset utcNow, string timeZoneId)

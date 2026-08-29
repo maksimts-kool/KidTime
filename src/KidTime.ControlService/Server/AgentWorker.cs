@@ -2,6 +2,7 @@ using KidTime.ControlService.Enforcement;
 using KidTime.ControlService.Infrastructure;
 using KidTime.ControlService.Sessions;
 using KidTime.Domain.Contracts;
+using KidTime.Domain.Rules;
 
 namespace KidTime.ControlService.Server;
 
@@ -9,6 +10,7 @@ public sealed class AgentWorker(
     LocalStore store,
     AgentApiClient api,
     EnforcementCoordinator coordinator,
+    TimeExtensionService extensions,
     InstalledApplicationDiscovery discovery,
     TrustedClock clock,
     SyncTrigger trigger,
@@ -121,6 +123,8 @@ public sealed class AgentWorker(
             await store.MarkApplicationSynchronizedAsync(application.IdentityKey, cancellationToken);
         }
 
+        await UploadTimeExtensionsAsync(cancellationToken);
+
         await store.PrepareUsageBatchAsync(cancellationToken);
         foreach (var batch in await store.GetPendingBatchesAsync(cancellationToken))
         {
@@ -131,10 +135,57 @@ public sealed class AgentWorker(
         var sync = await api.SyncAsync(cancellationToken);
         clock.Synchronize(sync.ServerUtcNow);
         await store.SaveRulesAsync(sync.Rules, cancellationToken);
+        // The granted minutes are already inside the snapshot the coordinator has just been
+        // given, so this only decides what the child is told - and it runs after UpdateRules so a
+        // "30 minutes added" message can never arrive before the minutes themselves.
         coordinator.UpdateRules(sync.Rules);
+        await AnnounceTimeExtensionDecisionsAsync(sync.TimeExtensions ?? [], cancellationToken);
         foreach (var command in sync.Commands)
             await api.AcknowledgeCommandAsync(command.Id, cancellationToken);
         logger.LogInformation("Synchronization completed at rule revision {Revision}.", sync.Rules.Revision);
+    }
+
+    /// <summary>
+    /// Sends the requests a child has made and have not reached the server yet. A request is
+    /// marked uploaded only after the server has taken it, and its id was minted on this PC, so a
+    /// retry after an uncertain response cannot ask the parent the same question twice.
+    /// </summary>
+    private async Task UploadTimeExtensionsAsync(CancellationToken cancellationToken)
+    {
+        var pending = await extensions.GetPendingUploadsAsync(cancellationToken);
+        if (pending.Count == 0) return;
+        await api.UploadTimeExtensionsAsync(
+            new TimeExtensionBatch(pending.Select(item => new TimeExtensionRequest(
+                item.RequestId,
+                item.RequestedAtUtc,
+                item.LocalDate,
+                item.RequestedMinutes,
+                item.ApplicationIdentityKey,
+                item.DisplayName)).ToList()),
+            cancellationToken);
+        foreach (var item in pending)
+            await extensions.MarkUploadedAsync(item.RequestId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Tells the child, once, what their parent decided. The record is marked announced only
+    /// after the message is queued, so an answer survives a service restart; the queue itself is
+    /// what carries it to the tray agent on the next pipe exchange.
+    /// </summary>
+    private async Task AnnounceTimeExtensionDecisionsAsync(
+        IReadOnlyList<TimeExtensionDecision> decisions,
+        CancellationToken cancellationToken)
+    {
+        await extensions.ApplyDecisionsAsync(decisions, cancellationToken);
+        foreach (var answered in await extensions.GetAnnouncementsAsync(cancellationToken))
+        {
+            coordinator.NotifyTimeExtensionDecision(answered);
+            await extensions.MarkAnnouncedAsync(answered.RequestId, cancellationToken);
+        }
+
+        await extensions.TrimAsync(
+            RuleEvaluator.GetLocalDate(clock.GetUtcNow(), coordinator.Rules.TimeZoneId),
+            cancellationToken);
     }
 
     /// <summary>

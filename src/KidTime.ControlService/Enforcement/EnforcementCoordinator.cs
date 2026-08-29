@@ -22,6 +22,7 @@ public sealed record ApplicationEnforcementStatus(
 public sealed class EnforcementCoordinator(
     LocalStore store,
     TrustedClock clock,
+    TimeExtensionService extensions,
     ILogger<EnforcementCoordinator> logger)
 {
     private static readonly int[] WarningThresholdSeconds = [15 * 60, 5 * 60, 2 * 60];
@@ -203,26 +204,41 @@ public sealed class EnforcementCoordinator(
                 await FlushUsageCoreAsync(cancellationToken);
 
             var pcUsage = await ReadUsageAsync(localDate, null, cancellationToken);
+            // Extra time a parent granted today is part of the limit from here on. Reading the
+            // parent's raw number anywhere below would close the child down at the old limit
+            // while the window told them they had been given more.
+            var pcLimit = RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Bonus, localDate);
             var pcDecision = RuleEvaluator.EvaluateDevice(rules, utcNow, pcUsage);
             if (!pcDecision.IsAllowed && !_lastPcBlocked)
                 logger.LogWarning("PC blocked; reason {Reason}.", pcDecision.Reason);
             else if (pcDecision.IsAllowed && _lastPcBlocked)
                 logger.LogInformation("PC unblocked.");
             _lastPcBlocked = !pcDecision.IsAllowed;
+            var offers = new List<TimeExtensionOffer>(2);
             if (pcDecision.IsAllowed && BuildRestriction(
-                    rules.DailyLimitSeconds, pcUsage, rules.Schedule, utcNow, rules.TimeZoneId, localDate) is { } pcRestriction)
+                    pcLimit, pcUsage, rules.Schedule, utcNow, rules.TimeZoneId, localDate) is { } pcRestriction)
             {
                 // The display name reaches only the application wording and the log line, so the
                 // PC path keeps the stable English label.
                 QueueThresholdWarnings("pc", "PC", pcRestriction, signsOut: true);
             }
+
+            // Deliberately outside the branch above: that one only runs while the PC is still
+            // allowed, and the moment a child most wants to ask is the moment the time ran out
+            // and the sign-out card appeared. The offer survives the block itself.
+            if (await BuildOfferAsync(localDate, null, Text.PcScopeName, pcLimit, pcUsage, pcDecision,
+                    rules.Schedule, utcNow, rules.TimeZoneId, cancellationToken) is { } pcOffer)
+                offers.Add(pcOffer);
+
             RuleDecision? appDecision = null;
             if (identity is not null && rules.Applications.FirstOrDefault(x => x.IdentityKey == identity) is { } appRule)
             {
                 var appUsage = await ReadUsageAsync(localDate, identity, cancellationToken);
+                var appLimit = RuleEvaluator.EffectiveDailyLimitSeconds(
+                    appRule.DailyLimitSeconds, appRule.Bonus, localDate);
                 appDecision = RuleEvaluator.EvaluateApplication(appRule, utcNow, rules.TimeZoneId, appUsage, rules.Language);
                 if (appDecision.IsAllowed && BuildRestriction(
-                             appRule.DailyLimitSeconds, appUsage, appRule.Schedule, utcNow, rules.TimeZoneId, localDate) is { } appRestriction)
+                             appLimit, appUsage, appRule.Schedule, utcNow, rules.TimeZoneId, localDate) is { } appRestriction)
                 {
                     var scope = $"app:{identity}";
                     if (foregroundChanged
@@ -235,14 +251,22 @@ public sealed class EnforcementCoordinator(
                     }
                     QueueThresholdWarnings(scope, appRule.DisplayName, appRestriction, signsOut: false);
                 }
+
+                // Only the application in the foreground is offered extra time - a child asks
+                // about what is closing on them, they do not shop through a list - and the offer
+                // outlives the block for the same reason the PC's does.
+                if (await BuildOfferAsync(localDate, identity, appRule.DisplayName, appLimit, appUsage, appDecision,
+                        appRule.Schedule, utcNow, rules.TimeZoneId, cancellationToken) is { } appOffer)
+                    offers.Add(appOffer);
                 if (appDecision.IsAllowed
                     && _pendingApplicationLimitChanges.TryRemove(identity, out var changedNotification))
                     Enqueue(changedNotification);
             }
 
-            var remaining = rules.DailyLimitSeconds is int limit ? Math.Max(0, limit - pcUsage) : -1;
+            var remaining = pcLimit is int limit ? Math.Max(0, limit - pcUsage) : -1;
             return new EnforcementState(!pcDecision.IsAllowed, pcDecision, appDecision, pcUsage,
-                rules.DailyLimitSeconds, remaining, DrainNotifications(), Language: rules.Language);
+                pcLimit, remaining, DrainNotifications(), Language: rules.Language,
+                ExtensionOffers: offers);
         }
         finally { _gate.Release(); }
     }
@@ -259,7 +283,7 @@ public sealed class EnforcementCoordinator(
             return new PcEnforcementStatus(
                 RuleEvaluator.EvaluateDevice(rules, utcNow, usage),
                 usage,
-                rules.DailyLimitSeconds);
+                RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Bonus, localDate));
         }
         finally { _gate.Release(); }
     }
@@ -280,8 +304,10 @@ public sealed class EnforcementCoordinator(
                 pcDecision,
                 pcUsage,
                 rules.DailyLimitSeconds,
+                rules.Bonus,
                 rules.Schedule,
                 now,
+                localDate,
                 rules.TimeZoneId);
 
             var applications = new List<ApplicationTimeStatus>();
@@ -293,6 +319,11 @@ public sealed class EnforcementCoordinator(
             {
                 var usage = await ReadUsageAsync(localDate, rule.IdentityKey, cancellationToken);
                 var decision = RuleEvaluator.EvaluateApplication(rule, now, rules.TimeZoneId, usage, rules.Language);
+                // Every limited application is offered extra time on its own card, not just the
+                // one in the foreground: a child looking at the Apps tab is looking at exactly the
+                // list of things they might need more time for. This is the snapshot the window
+                // asks for while it is open, so the extra work is bounded by that.
+                var limit = RuleEvaluator.EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Bonus, localDate);
                 applications.Add(new ApplicationTimeStatus(
                     rule.IdentityKey,
                     rule.DisplayName,
@@ -301,9 +332,13 @@ public sealed class EnforcementCoordinator(
                         decision,
                         usage,
                         rule.DailyLimitSeconds,
+                        rule.Bonus,
                         rule.Schedule,
                         now,
-                        rules.TimeZoneId)));
+                        localDate,
+                        rules.TimeZoneId),
+                    await BuildOfferAsync(localDate, rule.IdentityKey, rule.DisplayName, limit, usage, decision,
+                        rule.Schedule, now, rules.TimeZoneId, cancellationToken)));
             }
 
             return new SessionStatusSnapshot(
@@ -612,10 +647,14 @@ public sealed class EnforcementCoordinator(
         RuleDecision decision,
         int activeSeconds,
         int? dailyLimitSeconds,
+        TimeBonus? bonus,
         WeeklySchedule schedule,
         DateTimeOffset utcNow,
+        DateOnly localDate,
         string timeZoneId)
     {
+        var bonusSeconds = TimeBonus.SecondsOn(bonus, localDate);
+        var effectiveLimit = RuleEvaluator.EffectiveDailyLimitSeconds(dailyLimitSeconds, bonus, localDate);
         var isWithinSchedule = RuleEvaluator.IsWithinSchedule(schedule, utcNow, timeZoneId);
         var scheduleEnd = isWithinSchedule
             ? RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, utcNow, timeZoneId)
@@ -625,8 +664,8 @@ public sealed class EnforcementCoordinator(
             decision.Reason,
             decision.Message,
             activeSeconds,
-            dailyLimitSeconds,
-            dailyLimitSeconds is int limit ? Math.Max(0, limit - activeSeconds) : null,
+            effectiveLimit,
+            effectiveLimit is int limit ? Math.Max(0, limit - activeSeconds) : null,
             schedule.IsConfigured,
             isWithinSchedule,
             isWithinSchedule
@@ -635,7 +674,96 @@ public sealed class EnforcementCoordinator(
             scheduleEnd,
             !isWithinSchedule
                 ? RuleEvaluator.FindNextAllowanceStartUtc(schedule, utcNow, timeZoneId)
-                : null);
+                : null,
+            bonusSeconds);
+    }
+
+    /// <summary>
+    /// The child asking for more time, arriving from the tray agent over the pipe. The scope is
+    /// resolved and its remaining seconds measured here - the one place that knows both the
+    /// buffered usage and the limit actually in force - and the request itself is only recorded.
+    /// Nothing on this path can grant anything: the extra minutes come back from the parent,
+    /// inside the rules, like every other change.
+    /// </summary>
+    public async Task<TimeExtensionSubmissionResult> RequestTimeExtensionAsync(
+        TimeExtensionSubmission submission,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var rules = _rules;
+            var text = Text;
+            var localDate = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), rules.TimeZoneId);
+
+            var utcNow = clock.GetUtcNow();
+            if (submission.ApplicationIdentityKey is not { Length: > 0 } identityKey)
+            {
+                var usage = await ReadUsageAsync(localDate, null, cancellationToken);
+                var limit = RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Bonus, localDate);
+                return await extensions.SubmitAsync(localDate, null, text.PcScopeName, submission.Minutes,
+                    RemainingOrNull(limit, usage),
+                    RuleEvaluator.GetAllowancePeriodKey(rules.Schedule, utcNow, rules.TimeZoneId),
+                    text, cancellationToken);
+            }
+
+            if (rules.Applications.FirstOrDefault(item => item.IdentityKey == identityKey) is not { } appRule)
+                return new TimeExtensionSubmissionResult(false, text.ExtraTimeNotPossible);
+            var appUsage = await ReadUsageAsync(localDate, identityKey, cancellationToken);
+            var appLimit = RuleEvaluator.EffectiveDailyLimitSeconds(appRule.DailyLimitSeconds, appRule.Bonus, localDate);
+            return await extensions.SubmitAsync(localDate, identityKey, appRule.DisplayName, submission.Minutes,
+                RemainingOrNull(appLimit, appUsage),
+                RuleEvaluator.GetAllowancePeriodKey(appRule.Schedule, utcNow, rules.TimeZoneId),
+                text, cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Announces one answer the parent gave. Ordinary priority - nothing is closing.</summary>
+    public void NotifyTimeExtensionDecision(LocalTimeExtension request)
+    {
+        var text = Text;
+        Enqueue(request.Status == TimeExtensionStatus.Approved
+            ? new UserNotification(
+                text.ExtraTimeApprovedTitle,
+                text.ExtraTimeApprovedMessage(request.DisplayName, request.GrantedMinutes))
+            : new UserNotification(
+                text.ExtraTimeDeniedTitle,
+                text.ExtraTimeDeniedMessage(request.DisplayName)));
+    }
+
+    private static int? RemainingOrNull(int? limitSeconds, int activeSeconds) =>
+        limitSeconds is int limit ? Math.Max(0, limit - activeSeconds) : null;
+
+    /// <summary>
+    /// The offer for one scope, or nothing when asking would be meaningless: no daily limit to
+    /// extend, plenty of time still left, or a restriction extra minutes would not lift.
+    ///
+    /// Extra time only ever raises a daily limit, so a manual block and a schedule window are
+    /// excluded - offering a button that could not possibly help is worse than offering none.
+    /// A limit that has already been reached still qualifies, because that is exactly the moment
+    /// the sign-out card is on screen and the child has something to ask about. Caller holds the
+    /// gate.
+    /// </summary>
+    private async Task<TimeExtensionOffer?> BuildOfferAsync(
+        DateOnly localDate,
+        string? identityKey,
+        string displayName,
+        int? limitSeconds,
+        int activeSeconds,
+        RuleDecision decision,
+        WeeklySchedule schedule,
+        DateTimeOffset utcNow,
+        string timeZoneId,
+        CancellationToken cancellationToken)
+    {
+        if (!decision.IsAllowed && decision.Reason != BlockReason.DailyLimitReached) return null;
+        if (RemainingOrNull(limitSeconds, activeSeconds) is not int remaining
+            || remaining > TimeExtensionPolicy.RequestThresholdSeconds)
+            return null;
+        var periodKey = RuleEvaluator.GetAllowancePeriodKey(schedule, utcNow, timeZoneId);
+        var (state, minutes) = await extensions.GetStateAsync(localDate, identityKey, periodKey, cancellationToken);
+        return new TimeExtensionOffer(identityKey, displayName, state, minutes, remaining);
     }
 
     private sealed record TimeRestriction(

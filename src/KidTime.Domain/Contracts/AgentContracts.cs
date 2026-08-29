@@ -60,7 +60,42 @@ public sealed record DiscoveredApplicationRequest(
 public sealed record AgentSyncResponse(
     DeviceRuleSnapshot Rules,
     IReadOnlyList<AgentCommand> Commands,
-    DateTimeOffset ServerUtcNow);
+    DateTimeOffset ServerUtcNow,
+    IReadOnlyList<TimeExtensionDecision>? TimeExtensions = null);
+
+/// <summary>
+/// One child's request for more time, on its way to the parent. The agent mints the id, so an
+/// upload retried after an uncertain response lands on the same row instead of asking twice.
+/// <paramref name="ApplicationIdentityKey"/> is null when the request is for the PC's own screen
+/// time rather than for one application that is running out.
+/// </summary>
+public sealed record TimeExtensionRequest(
+    Guid RequestId,
+    DateTimeOffset RequestedAtUtc,
+    DateOnly LocalDate,
+    int RequestedMinutes,
+    string? ApplicationIdentityKey,
+    string DisplayName);
+
+public sealed record TimeExtensionBatch(IReadOnlyList<TimeExtensionRequest> Requests);
+
+public enum TimeExtensionStatus
+{
+    Pending,
+    Approved,
+    Denied
+}
+
+/// <summary>
+/// What the parent decided, on its way back. The granted minutes are already in the rule
+/// snapshot by the time this arrives; this exists so the child can be told, once, what happened.
+/// </summary>
+public sealed record TimeExtensionDecision(
+    Guid RequestId,
+    TimeExtensionStatus Status,
+    int GrantedMinutes,
+    string DisplayName,
+    DateTimeOffset? DecidedAtUtc);
 
 public sealed record AgentCommand(Guid Id, string Type, DateTimeOffset CreatedAtUtc);
 
@@ -108,14 +143,28 @@ public sealed record ParentRemovalRequest(string Email, string Password);
 /// <summary>The outcome of a removal request; <paramref name="Message"/> is already localized.</summary>
 public sealed record DeviceRemovalResult(bool Accepted, string Message);
 
+/// <summary>
+/// The child asking for more time, as it crosses the named pipe. It carries an amount and a
+/// scope and nothing else: the unelevated agent cannot grant time, only ask for it, and the
+/// LocalSystem service checks the amount, the scope, and how little is actually left before it
+/// records anything. Widening this into something that could change a rule would hand the
+/// controlled account the thing the whole boundary exists to keep from it.
+/// </summary>
+public sealed record TimeExtensionSubmission(int Minutes, string? ApplicationIdentityKey);
+
+/// <summary>The answer to one submission; <paramref name="Message"/> is already localized.</summary>
+public sealed record TimeExtensionSubmissionResult(bool Accepted, string Message);
+
 public sealed record SessionAgentRequest(
     SessionUsageSample? UsageSample = null,
     ParentRemovalRequest? RemovalRequest = null,
-    IReadOnlyList<DiagnosticReport>? Diagnostics = null);
+    IReadOnlyList<DiagnosticReport>? Diagnostics = null,
+    TimeExtensionSubmission? TimeExtension = null);
 
 public sealed record SessionAgentResponse(
     EnforcementState? Enforcement = null,
-    DeviceRemovalResult? Removal = null);
+    DeviceRemovalResult? Removal = null,
+    TimeExtensionSubmissionResult? TimeExtension = null);
 
 /// <summary>
 /// A message for the controlled user. <paramref name="IsUrgent"/> selects the Windows "urgent"
@@ -158,6 +207,36 @@ public sealed record ServerConnectionStatus(
     DateTimeOffset? LastSuccessfulSynchronizationUtc,
     string? LastSynchronizationError);
 
+/// <summary>
+/// Whether the child may ask for more time right now, and how the last ask went. One offer is
+/// produced for the PC and one for the application in the foreground, and only while that
+/// allowance is nearly spent - which is exactly when the buttons are worth drawing.
+/// </summary>
+public enum TimeExtensionOfferState
+{
+    /// <summary>Nothing is running out; the child is not offered anything.</summary>
+    Unavailable,
+
+    /// <summary>Running out, nothing asked yet.</summary>
+    Available,
+
+    /// <summary>Asked, waiting on the parent.</summary>
+    Pending,
+
+    /// <summary>The parent granted it; the extra time is already in the limit.</summary>
+    Granted,
+
+    /// <summary>The parent said no. The child may ask again, up to the daily cap.</summary>
+    Denied
+}
+
+public sealed record TimeExtensionOffer(
+    string? ApplicationIdentityKey,
+    string DisplayName,
+    TimeExtensionOfferState State,
+    int Minutes,
+    int RemainingSeconds);
+
 public sealed record TimeAllowanceStatus(
     bool IsAllowed,
     BlockReason Reason,
@@ -169,13 +248,24 @@ public sealed record TimeAllowanceStatus(
     bool IsWithinSchedule,
     DateTimeOffset? ScheduleAvailableSinceUtc,
     DateTimeOffset? ScheduleAvailableUntilUtc,
-    DateTimeOffset? ScheduleAvailableAgainUtc);
+    DateTimeOffset? ScheduleAvailableAgainUtc,
+    /// <summary>
+    /// Extra time granted today, already counted inside <see cref="DailyLimitSeconds"/>. It is
+    /// reported separately only so the child's window can say where the difference came from.
+    /// </summary>
+    int BonusSeconds = 0);
 
 public sealed record ApplicationTimeStatus(
     string IdentityKey,
     string DisplayName,
     bool IsManuallyBlocked,
-    TimeAllowanceStatus Allowance);
+    TimeAllowanceStatus Allowance,
+    /// <summary>
+    /// Whether this application can be asked about right now. Present only while its own
+    /// allowance is nearly spent, so the Apps tab draws a button beside the one running out
+    /// rather than beside every application the parent has ever limited.
+    /// </summary>
+    TimeExtensionOffer? Extension = null);
 
 public sealed record SessionStatusSnapshot(
     DateTimeOffset GeneratedAtUtc,
@@ -204,4 +294,5 @@ public sealed record EnforcementState(
     int RemainingSeconds,
     IReadOnlyList<UserNotification> Notifications,
     SessionStatusSnapshot? Status = null,
-    AgentLanguage Language = AgentLanguage.English);
+    AgentLanguage Language = AgentLanguage.English,
+    IReadOnlyList<TimeExtensionOffer>? ExtensionOffers = null);

@@ -103,7 +103,7 @@ public sealed class LocalStoreTests : IDisposable
         var store = new LocalStore(DatabaseFile);
         await store.InitializeAsync(CancellationToken.None);
         var clock = new TrustedClock();
-        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 1, TimeZoneId = "UTC", IdleThresholdSeconds = 300 });
         var app = Descriptor();
         var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
@@ -126,7 +126,7 @@ public sealed class LocalStoreTests : IDisposable
         var store = new LocalStore(DatabaseFile);
         await store.InitializeAsync(CancellationToken.None);
         var clock = new TrustedClock();
-        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 1, TimeZoneId = "UTC", DailyLimitSeconds = 3_600 });
         var app = Descriptor();
         var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
@@ -206,7 +206,7 @@ public sealed class LocalStoreTests : IDisposable
         var identity = ApplicationIdentity.CreateKey(app);
         var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
         await store.AddUsageAsync(date, identity, 60, CancellationToken.None);
-        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 8,
@@ -230,7 +230,7 @@ public sealed class LocalStoreTests : IDisposable
         clock.Synchronize(new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero));
         var app = Descriptor();
         var identity = ApplicationIdentity.CreateKey(app);
-        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 9,
@@ -252,7 +252,7 @@ public sealed class LocalStoreTests : IDisposable
         Directory.CreateDirectory(_directory);
         var store = new LocalStore(DatabaseFile);
         await store.InitializeAsync(CancellationToken.None);
-        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         var deviceId = Guid.NewGuid();
         coordinator.UpdateRules(new DeviceRuleSnapshot { DeviceId = deviceId, Revision = 1, TimeZoneId = "UTC", DailyLimitSeconds = 7200 });
         await coordinator.HandleSampleAsync(Sample(1, 0, 0, Descriptor()), CancellationToken.None);
@@ -275,7 +275,7 @@ public sealed class LocalStoreTests : IDisposable
         var app = Descriptor();
         var identity = ApplicationIdentity.CreateKey(app);
         var deviceId = Guid.NewGuid();
-        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             DeviceId = deviceId,
@@ -315,7 +315,7 @@ public sealed class LocalStoreTests : IDisposable
         clock.Synchronize(new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero));
         var app = Descriptor();
         var identity = ApplicationIdentity.CreateKey(app);
-        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 9,
@@ -346,7 +346,7 @@ public sealed class LocalStoreTests : IDisposable
         var identity = ApplicationIdentity.CreateKey(app);
         var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
         await store.AddUsageAsync(date, identity, 99, CancellationToken.None);
-        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 10,
@@ -414,7 +414,7 @@ public sealed class LocalStoreTests : IDisposable
         var app = Descriptor();
         var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
         await store.AddUsageAsync(date, null, 99, CancellationToken.None);
-        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 11, TimeZoneId = "UTC", DailyLimitSeconds = 1000 });
         var notifications = await AccrueAsync(coordinator, app, 60);
 
@@ -433,7 +433,7 @@ public sealed class LocalStoreTests : IDisposable
         await store.InitializeAsync(CancellationToken.None);
         var clock = new TrustedClock();
         clock.Synchronize(new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero));
-        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 12, TimeZoneId = "UTC" });
         coordinator.NotifyApplicationClosing(
             "test-app",
@@ -491,7 +491,7 @@ public sealed class LocalStoreTests : IDisposable
         Directory.CreateDirectory(_directory);
         var store = new LocalStore(DatabaseFile);
         await store.InitializeAsync(CancellationToken.None);
-        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 20, TimeZoneId = "UTC" });
         coordinator.NotifyPcSignOut(
             new RuleDecision(false, BlockReason.DailyLimitReached, "The daily limit is reached."),
@@ -515,7 +515,7 @@ public sealed class LocalStoreTests : IDisposable
         Directory.CreateDirectory(_directory);
         var store = new LocalStore(DatabaseFile);
         await store.InitializeAsync(CancellationToken.None);
-        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, new TrustedClock(), Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 21, TimeZoneId = "UTC" });
         coordinator.NotifyApplicationClosing(
             "test-app",
@@ -556,7 +556,7 @@ public sealed class LocalStoreTests : IDisposable
                 }
             ]
         };
-        var coordinator = new EnforcementCoordinator(store, clock, NullLogger<EnforcementCoordinator>.Instance);
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 19,
@@ -614,6 +614,9 @@ public sealed class LocalStoreTests : IDisposable
         SqliteConnection.ClearAllPools();
         if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
     }
+
+    private static TimeExtensionService Extensions(LocalStore store) =>
+        new(store, NullLogger<TimeExtensionService>.Instance);
 
     private static ApplicationDescriptor Descriptor() => new()
     {

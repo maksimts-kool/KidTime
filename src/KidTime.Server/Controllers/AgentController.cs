@@ -129,11 +129,105 @@ public sealed class AgentController(
             .OrderBy(command => command.CreatedAtUtc).Take(100)
             .Select(command => new AgentCommand(command.Id, command.Type, command.CreatedAtUtc))
             .ToListAsync(cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        // The grant itself is already inside the snapshot above; this is only so the child can be
+        // told what their parent decided. The agent keeps its own record of which answers it has
+        // announced, so a window of recent decisions is enough and nothing has to be acknowledged.
+        var decisions = await dbContext.TimeExtensions.AsNoTracking()
+            .Where(item => item.DeviceId == DeviceId
+                           && item.Status != TimeExtensionStatuses.Pending
+                           && item.DecidedAtUtc != null
+                           && item.DecidedAtUtc > now.AddDays(-1))
+            .OrderByDescending(item => item.DecidedAtUtc).Take(50)
+            .ToListAsync(cancellationToken);
         return Ok(new AgentSyncResponse(
             await snapshots.CreateAsync(DeviceId, cancellationToken),
             commands,
-            timeProvider.GetUtcNow()));
+            now,
+            decisions.Select(ToDecision).ToList()));
     }
+
+    /// <summary>
+    /// Accepts a child's requests for more time. The controlled PC's service has already checked
+    /// the amount and how little was left, and does it again here because nothing arriving over
+    /// the network is trusted: an out-of-range amount, an unknown application, or a day's worth
+    /// of asking is refused rather than put in front of the parent.
+    ///
+    /// The request id comes from the agent, so an upload retried after an uncertain response
+    /// lands on the row that already exists instead of asking the same question twice.
+    /// </summary>
+    [Authorize(AuthenticationSchemes = DeviceAuthenticationDefaults.Scheme)]
+    [HttpPost("time-extensions")]
+    public async Task<IActionResult> RequestTimeExtension(
+        TimeExtensionBatch batch,
+        CancellationToken cancellationToken)
+    {
+        if (batch.Requests.Count == 0) return NoContent();
+        var now = timeProvider.GetUtcNow();
+        var accepted = 0;
+        foreach (var request in batch.Requests.Take(TimeExtensionPolicy.MaximumRequestsPerDay))
+        {
+            if (!TimeExtensionPolicy.IsAllowedRequest(request.RequestedMinutes)) continue;
+            if (await dbContext.TimeExtensions.AnyAsync(item => item.Id == request.RequestId, cancellationToken))
+                continue;
+
+            var madeToday = await dbContext.TimeExtensions.CountAsync(
+                item => item.DeviceId == DeviceId && item.LocalDate == request.LocalDate,
+                cancellationToken);
+            if (madeToday >= TimeExtensionPolicy.MaximumRequestsPerDay)
+            {
+                logger.LogInformation("Device {DeviceId} has reached the daily extra-time request cap.", DeviceId);
+                continue;
+            }
+
+            Guid? deviceApplicationId = null;
+            if (request.ApplicationIdentityKey is { Length: > 0 } identityKey)
+            {
+                deviceApplicationId = await dbContext.DeviceApplications.AsNoTracking()
+                    .Where(item => item.DeviceId == DeviceId && item.Application.IdentityKey == identityKey)
+                    .Select(item => (Guid?)item.Id)
+                    .SingleOrDefaultAsync(cancellationToken);
+                if (deviceApplicationId is null)
+                {
+                    logger.LogWarning("Ignoring an extra-time request for undiscovered identity {IdentityKey} from {DeviceId}.",
+                        identityKey, DeviceId);
+                    continue;
+                }
+            }
+
+            dbContext.TimeExtensions.Add(new TimeExtension
+            {
+                Id = request.RequestId,
+                DeviceId = DeviceId,
+                DeviceApplicationId = deviceApplicationId,
+                ApplicationIdentityKey = Trim(request.ApplicationIdentityKey, 64),
+                DisplayName = Trim(request.DisplayName, 255) ?? "PC",
+                LocalDate = request.LocalDate,
+                RequestedMinutes = request.RequestedMinutes,
+                Status = TimeExtensionStatuses.Pending,
+                // A PC clock running ahead must not park a request in the future, where it would
+                // sit at the top of the parent's list forever.
+                RequestedAtUtc = request.RequestedAtUtc > now ? now : request.RequestedAtUtc,
+                ReceivedAtUtc = now
+            });
+            accepted++;
+        }
+
+        if (accepted > 0)
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            logger.LogInformation("Recorded {Count} extra-time request(s) from {DeviceId}.", accepted, DeviceId);
+        }
+
+        return NoContent();
+    }
+
+    private static TimeExtensionDecision ToDecision(TimeExtension item) => new(
+        item.Id,
+        item.Status == TimeExtensionStatuses.Approved ? TimeExtensionStatus.Approved : TimeExtensionStatus.Denied,
+        item.GrantedMinutes,
+        item.DisplayName,
+        item.DecidedAtUtc);
 
     [Authorize(AuthenticationSchemes = DeviceAuthenticationDefaults.Scheme)]
     [HttpGet("update")]

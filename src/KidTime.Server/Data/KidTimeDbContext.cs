@@ -17,6 +17,7 @@ public sealed class KidTimeDbContext(DbContextOptions<KidTimeDbContext> options)
     public DbSet<ProcessedUsageBatch> ProcessedUsageBatches => Set<ProcessedUsageBatch>();
     public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
     public DbSet<DeviceDiagnosticEvent> DeviceDiagnosticEvents => Set<DeviceDiagnosticEvent>();
+    public DbSet<TimeExtension> TimeExtensions => Set<TimeExtension>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -138,6 +139,23 @@ public sealed class KidTimeDbContext(DbContextOptions<KidTimeDbContext> options)
             entity.Property(x => x.ExceptionType).HasMaxLength(200);
             entity.Property(x => x.Detail).HasMaxLength(4000);
             entity.Property(x => x.AgentVersion).HasMaxLength(50);
+        });
+
+        modelBuilder.Entity<TimeExtension>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            // The panel reads pending requests for a device, and the snapshot reads today's
+            // approved ones; both are this index.
+            entity.HasIndex(x => new { x.DeviceId, x.LocalDate, x.Status });
+            entity.HasOne(x => x.Device).WithMany()
+                .HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+            // A request outlives the application card it was made for - widening the catalog
+            // filter retires rows - so the grant is kept by identity key and the link is optional.
+            entity.HasOne(x => x.DeviceApplication).WithMany()
+                .HasForeignKey(x => x.DeviceApplicationId).OnDelete(DeleteBehavior.SetNull);
+            entity.Property(x => x.ApplicationIdentityKey).HasMaxLength(64);
+            entity.Property(x => x.DisplayName).HasMaxLength(255);
+            entity.Property(x => x.Status).HasMaxLength(16);
         });
     }
 }

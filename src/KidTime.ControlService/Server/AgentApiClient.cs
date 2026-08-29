@@ -48,6 +48,9 @@ public sealed class AgentApiClient : IParentDeviceRemovalClient
     public async Task UploadDiagnosticsAsync(DiagnosticReportBatch batch, CancellationToken cancellationToken) =>
         await SendNoContentAsync(HttpMethod.Post, "api/agent/diagnostics", batch, cancellationToken);
 
+    public async Task UploadTimeExtensionsAsync(TimeExtensionBatch batch, CancellationToken cancellationToken) =>
+        await SendNoContentAsync(HttpMethod.Post, "api/agent/time-extensions", batch, cancellationToken);
+
     public async Task UploadApplicationAsync(DiscoveredApplicationRequest application, CancellationToken cancellationToken) =>
         await SendAsync<JsonElement>(HttpMethod.Post, "api/agent/applications", application, cancellationToken);
 

@@ -10,7 +10,20 @@ public sealed class SessionAgentSupervisor(
     Enforcement.EnforcementCoordinator coordinator,
     ILogger<SessionAgentSupervisor> logger) : BackgroundService
 {
+    /// <summary>
+    /// A launch that dies faster than this never reached the child's screen. The agent takes a
+    /// second or two to build its window and register its tray icon, so anything shorter is a
+    /// start-up failure rather than a session ending.
+    /// </summary>
+    private static readonly TimeSpan HealthyLifetime = TimeSpan.FromSeconds(15);
+
+    /// <summary>How many of those in a row before the parent is told. Ten seconds of looping.</summary>
+    private const int CrashLoopLaunches = 5;
+
     private int _agentProcessId = -1;
+    private long _launchedTimestamp;
+    private int _shortLivedLaunches;
+    private bool _crashLoopReported;
 
     public int AgentProcessId => Volatile.Read(ref _agentProcessId);
 
@@ -24,22 +37,64 @@ public sealed class SessionAgentSupervisor(
             {
                 StopAgent();
                 Volatile.Write(ref _agentProcessId, -1);
+                // Signing out is not a crash, so the run of short lives starts over.
+                ResetCrashLoop();
                 continue;
             }
             var activeSessionId = activeUser.SessionId;
             if (IsAgentHealthy((int)activeSessionId)) continue;
+            NoteAgentExited();
             Volatile.Write(ref _agentProcessId, -1);
             try
             {
                 var processId = Launch(activeSessionId);
                 Volatile.Write(ref _agentProcessId, processId);
+                _launchedTimestamp = Stopwatch.GetTimestamp();
                 logger.LogInformation("SessionAgent started with a hardened process ACL in session {SessionId} as process {ProcessId}.", activeSessionId, processId);
             }
             catch (Exception exception)
             {
+                _launchedTimestamp = 0;
                 logger.LogWarning(exception, "SessionAgent could not be started in session {SessionId}.", activeSessionId);
             }
         }
+    }
+
+    /// <summary>
+    /// Counts a launch that has just ended, and reports a crash loop once per episode.
+    ///
+    /// A tray agent that dies before it finishes starting cannot deliver its own fault - it never
+    /// reaches an exchange - so without this the child sits with no UI and no notifications while
+    /// the parent's error log stays empty. The service is the only component still running to say
+    /// so, and it says it as an error, which is what carries it to the panel.
+    /// </summary>
+    private void NoteAgentExited()
+    {
+        if (_launchedTimestamp == 0) return;
+        var lifetime = Stopwatch.GetElapsedTime(_launchedTimestamp);
+        _launchedTimestamp = 0;
+        if (lifetime >= HealthyLifetime)
+        {
+            ResetCrashLoop();
+            return;
+        }
+
+        _shortLivedLaunches++;
+        if (_shortLivedLaunches < CrashLoopLaunches || _crashLoopReported) return;
+        _crashLoopReported = true;
+        logger.LogError(
+            "SessionAgent has exited within {LifetimeSeconds:F0}s of starting {Attempts} times in a row; the controlled user has no KidTime interface or notifications. Enforcement is unaffected.",
+            lifetime.TotalSeconds,
+            _shortLivedLaunches);
+    }
+
+    private void ResetCrashLoop()
+    {
+        if (_shortLivedLaunches == 0 && !_crashLoopReported) return;
+        if (_crashLoopReported)
+            logger.LogInformation("SessionAgent is staying up again after {Attempts} failed starts.", _shortLivedLaunches);
+        _shortLivedLaunches = 0;
+        _crashLoopReported = false;
     }
 
     public bool IsTrustedAgentProcess(uint processId)

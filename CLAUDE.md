@@ -166,12 +166,18 @@ panel by itself**. The pipeline is one-way and durable at each hop:
    running: while it is gone there are no notifications and no usage samples.
 2. The spool travels to `ControlService` on the next pipe exchange and is only deleted after the
    service answers, so a fault survives a crash-restart loop.
-3. In `ControlService`, `DiagnosticReporter` also receives its own unhandled exceptions and every
+3. A fault that stops the agent starting cannot ride a sample, because that copy never reaches
+   the sampling loop - and the service relaunches it every two seconds, so each new copy spools
+   the same fault and dies with it. `App` therefore makes one bounded, best-effort delivery on
+   the way out, and `SessionAgentSupervisor` counts launches that die within fifteen seconds and
+   reports a crash loop as an error once per episode. Between them a child sitting with no
+   interface is something the parent finds in the error log rather than by noticing.
+4. In `ControlService`, `DiagnosticReporter` also receives its own unhandled exceptions and every
    `LogError`/`LogCritical` written through `JsonFileLoggerProvider`. Warnings stay local -
    offline synchronization and IPC retries are expected operation, not defects. Reports are
    appended to a bounded spool, moved into the SQLite queue, and uploaded during synchronization
    before rules and usage, so a PC that fails at a later step still reports why.
-4. `POST api/agent/diagnostics` re-normalizes every field, collapses repeats onto one row by
+5. `POST api/agent/diagnostics` re-normalizes every field, collapses repeats onto one row by
    fingerprint (digits are folded out, so counters and process ids do not fragment one bug),
    ignores a retried upload by `LastReportId`, and caps the history per device. **One batch can
    carry the same fingerprint several times** - the agent's queue is keyed by report id and its
@@ -180,7 +186,7 @@ panel by itself**. The pipeline is one-way and durable at each hop:
    before anything is written, because a second insert for the same `(DeviceId, Fingerprint)`
    violates the unique index and fails the whole transaction - and the agent then retries the
    same poisoned batch forever, so no fault from that PC ever reaches the parent again.
-5. The panel's **Error log** page lists unresolved faults with device, component, severity, count,
+6. The panel's **Error log** page lists unresolved faults with device, component, severity, count,
    agent version, and stack trace, and the devices page badges a PC that has reports waiting.
 
 Repeat suppression exists at both ends: the agent spools one report per fingerprint per five
@@ -217,6 +223,72 @@ Two consequences to respect:
 Strings that are not authored by KidTime stay as they are: `LastSynchronizationError` carries a raw
 exception message, and application display names come from the application itself. Connection state
 crosses the pipe as `ServerConnectionState`, a code, so the unelevated agent phrases it.
+
+### Extra time
+
+A child whose screen time or app limit is nearly spent can ask their parent for more. **The
+request is a question and never a grant.** The unelevated tray agent can only ask; the extra
+minutes come back from the parent through the ordinary rule path, which is what keeps the
+enforcement boundary where it was.
+
+1. `EnforcementCoordinator` produces a `TimeExtensionOffer` whenever a daily limit has
+   `TimeExtensionPolicy.RequestThresholdSeconds` (five minutes) or less left — for the PC, for the
+   foreground application, and for **every limited application in the status snapshot**, so the
+   Apps tab can put the button on the card of the one that is running out rather than only on
+   whatever happens to be in front. The offer deliberately **outlives the block itself** — the
+   moment a child most wants to ask is the moment the time ran out and the sign-out card
+   appeared — but a manual block and a schedule window are excluded, because extra time only ever
+   raises a daily limit and a button that could not possibly help is worse than none.
+2. The child asks from four places, and all of them open the **same popup**: the PC card in the
+   Today panel, the button on an application's card in the Apps tab, a button on the countdown
+   card, and an action button on the urgent running-out toast. One slider in one dialog serves
+   every scope; the entry points differ only in what they are about, and the last two open it
+   directly for the thing that is closing. The toast button reaches the running agent through
+   `ToastNotificationManagerCompat.OnActivated`, and if that registration ever fails the child
+   still has the window and the card — **nothing depends on it**.
+3. `TimeExtensionSubmission` crosses the named pipe as the fourth and last shape that protocol
+   accepts. `EnforcementCoordinator.RequestTimeExtensionAsync` resolves the scope, measures what
+   is actually left from the buffered usage and the limit in force, and `TimeExtensionService`
+   records the request in SQLite. It is durable before it is uploaded, so a service restart or a
+   night offline never swallows a question a child is waiting on.
+4. `AgentWorker` uploads pending requests before usage, and `POST api/agent/time-extensions`
+   re-checks everything the service checked — nothing arriving over the network is trusted. The
+   request id is minted on the PC, so a retry after an uncertain response cannot ask the parent
+   the same question twice.
+5. The panel's **Requests** page shows what is waiting, on the same slider the child used and
+   starting on the amount they asked for, so "yes, but twenty minutes" is one drag and one click. A decision — approve *or* deny —
+   bumps `DeviceRule.Revision`, queues a command, and is pushed over the hub, because that is the
+   one path the PC already watches, and a child left staring at "waiting for your parent" has been
+   told nothing at all.
+6. `RuleSnapshotFactory` reads today's approved grants back as a `TimeBonus` on the device rule and
+   on each application rule, and `RuleEvaluator.EffectiveDailyLimitSeconds` is where every path
+   must read a daily limit from. **A bonus carries the device-local date it was granted for**, so
+   it stops applying by itself at midnight with no second message to take it away, and a grant
+   approved after the day has turned grants nothing.
+7. The agent announces the answer once — `TimeExtensionService` marks it announced after the
+   notification is queued — as an ordinary toast. Nothing is closing, so nothing interrupts.
+
+The limits are `TimeExtensionPolicy`. The amount is a **slider from 5 to 30 minutes in steps of
+five** rather than a number field: a dial with a floor and a ceiling asks a smaller question, and
+there is nothing between the stops to argue about. Both ends check it — a value off the grid is
+refused by the service and again by the server, because the slider is a convenience and never the
+constraint. Beyond that: one pending request per scope, eight requests per PC per day, and a grant
+bounded at four hours, which is looser than the slider so a decision made outside it is still
+bounded by something.
+
+**A refusal holds for the allowance period it was given in.** `RuleEvaluator.GetAllowancePeriodKey`
+names that period — the schedule window currently open, or the device-local day when no schedule
+is configured — and the request records it. Asked and told no at 14:00 inside an 08:00–15:00
+window, the child cannot ask again for that scope until the 18:00 window opens; then the key
+changes and the buttons come back on their own. That is the difference between a child who may ask
+and a child who may pester, and it is per scope: a "no" about the PC does not silence a question
+about Roblox. A grant is not a lock — minutes that have themselves run out can be asked about
+again — and the daily cap still stands behind all of it.
+
+If a grant lands during a sign-out countdown, the ordinary path cancels it: the rule stops
+blocking, `SessionLockoutService` dismisses the warning and clears the schedule. **Do not add a
+path that grants time locally** — offline, the cached snapshot is the answer, and a request simply
+waits for the next synchronization.
 
 ### Rule precedence
 
@@ -306,11 +378,17 @@ outright, because it running is not the child using the application. Four filter
 that weight:
 
 - a role word ending the executable name, with or without a separator — `steamwebhelper` is one
-  word to Steam and a helper to everybody else — and a `(2)` copy marker stripped first, so a
-  repeat download is still the installer it is. `agent`, `service`, and `services` are role words
-  too: `lghub_agent.exe` and `BlueStacksServices.exe` run whether or not a child ever opens
-  Logitech G HUB or BlueStacks. `InteractiveDespiteRoleName` is the narrow exception, and Riot is
-  why it exists — the window a child signs in and launches games from is `RiotClientServices.exe`;
+  word to Steam and a helper to everybody else — and a `(2)` copy marker and a trailing bitness
+  marker stripped first, so a repeat download is still the installer it is and `nvsphelper64.exe`
+  is the helper `nvsphelper` is. `agent`, `service`, and `services` are role words too:
+  `lghub_agent.exe` and `BlueStacksServices.exe` run whether or not a child ever opens Logitech
+  G HUB or BlueStacks. So are the abbreviations and the other background shapes a vendor writes
+  into a file name — `svc`, `daemon`, `watchdog`, `tray`, `proxy` — and the probes an application
+  runs against the machine, `driverquery`, `sysinfo`, and `adb`: `BstkSVC.exe`, `vgtray.exe`,
+  `lghub_system_tray.exe`, `mscopilot_proxy.exe`, `vulkandriverquery64.exe`, `steamsysinfo.exe`
+  and `HD-Adb.exe` all earned a card on a real controlled PC and none of them is a window a child
+  opens. `InteractiveDespiteRoleName` is the narrow exception, and Riot is why it exists — the
+  window a child signs in and launches games from is `RiotClientServices.exe`;
 - a role word **leading** the name, for the same reason: Rockstar's
   `uninstallRGSCRedistributable.exe` reached a parent's panel as "Rockstar Games SDK", and
   `unins000.exe` is what every Inno Setup package leaves behind;
@@ -319,6 +397,13 @@ that weight:
 - `wextract.exe` as the original filename: an IExpress self-extractor keeps that version resource,
   which is why KidTime's own `KidTimeSetup.exe` once announced itself to the parent as "Internet
   Explorer";
+- a dotted version number inside the executable name, which is the shape of a download rather than
+  of an installed application: `ProtonVPN_v5.1.7_x64.exe` is the installer a child ran once, and
+  the application it installed is plain `ProtonVPN.exe` and keeps its card. A game whose name
+  merely ends in a digit — `cs2.exe` — carries no version and is untouched;
+- `hypervisor` and `installer` in the product or display name, and the bare console tools an
+  application ships and starts on its own (`adb.exe`, `ffmpeg.exe`). Those two carry no version
+  metadata at all, so they reached the panel as cards named after the executable;
 - a package family read back out of a `WindowsApps\Name_Version_Arch__PublisherId` path when the
   process did not report one. A family only inferred this way still faces the executable checks;
   a reported one identifies the application outright.
@@ -355,6 +440,22 @@ name — so no name filter tells the widget feed or the handwriting dictionary f
 package has no Start entry and is not something a person opens. On a real PC that keeps 18
 applications out of 111 packages. A manifest that cannot be read keeps its package, named as
 before; losing a real application because one file would not open is the worse failure.
+
+#### Windows' own applications
+
+A real controlled PC carries three dozen in-box packages that pass every catalog test — Clock,
+Weather, Feedback Hub, Quick Assist — and listing them first buries Steam, Roblox and Discord under
+things nobody sets a rule on. The applications page therefore hides them behind a **Show Microsoft
+apps** switch, off by default and remembered per browser.
+
+`ApplicationCatalogPolicy.IsMicrosoftPublished` makes the call on the server, because only the
+server sees the publisher and the package family. Two rules keep it from hiding the wrong thing:
+an application that already carries a rule is never hidden — losing sight of a limit you set is a
+worse failure than a long list — and `MicrosoftEntertainmentPackages` exempts the games Microsoft
+publishes. Minecraft is why that list exists: its family is `Microsoft.MinecraftUWP_8wekyb3d8bbwe`,
+so a switch filtering on the publisher alone would hide the one application a parent most wants a
+rule on. **This is presentation only.** A hidden application is still in the snapshot, still
+evaluated, and still enforced.
 
 `ApplicationCatalogPolicy.GetFriendlyDisplayName` is the second line, and it runs on the server, so
 it repairs rows an older agent already uploaded. A display name that is the package's own identity
@@ -463,7 +564,10 @@ corner. It is not a blocker. The constraints are the design:
 - `WS_EX_NOACTIVATE` and `WS_EX_TOOLWINDOW` keep it out of the focus chain and out of Alt+Tab. A
   window that stole the keyboard while telling a child to save their work would be self-defeating.
 - It is a small corner card sized like a toast, cannot be resized, and dismissing it hides the
-  card only.
+  card only. The extra-time shortcut, when it is offered, takes a full-width row of its own rather
+  than sharing one with "Got it": both labels are sentences in Russian, and on a 380-wide card
+  they ran straight through each other and the caption. A warning whose buttons overlap looks
+  broken at the one moment it must not.
 - It cannot strand itself. One shared one-second timer closes any card past its deadline and stops
   when the last card goes; and the window belongs to the supervised SessionAgent process, which
   the service restarts within two seconds if it dies, so the card dies with it.
@@ -576,6 +680,20 @@ design** — do not add them, and do not extend the contract to upload window ti
 - Every string the controlled user can read lives in `AgentStrings` and must be implemented in
   both `EnglishAgentStrings` and `RussianAgentStrings`. `AgentStringsTests` walks the catalog by
   reflection and fails on a member that returns blank in either language.
+- **A XAML-wired event handler must tolerate its siblings not existing yet.** WPF raises
+  `ValueChanged` while `InitializeComponent` is still running - applying a `Slider`'s Minimum
+  coerces its value off zero - and fields declared later in the markup are still null at that
+  point. The exception escapes the window constructor, `AgentApplicationHost` never finishes, and
+  the child is left with no tray icon, no screen-time window, and no notifications while
+  enforcement carries on without them. Guard the handler; do not rely on attribute order.
+- The amount controls at both ends are sliders over the same range, and the range lives in
+  `TimeExtensionPolicy` rather than in either UI. `components/ui/slider.tsx` wraps Base UI's parts
+  (Root → Control → Track → Indicator + Thumb); the track needs an explicit height because the
+  indicator inherits it, and the accessible name belongs on the thumb, not the root.
+- A parent-facing list filter that is remembered per browser reads localStorage through
+  `useSyncExternalStore`, never through an effect that calls `setState` — the server render cannot
+  see localStorage, and the lint rule that forbids the effect is there because the alternative is a
+  second render pass fighting the first. `components/application-list.tsx` is the pattern.
 - Commit messages are plain imperative sentences describing the change ("Match the documented Caddy
   matcher to the deployed one"), with no conventional-commit prefixes.
 
@@ -619,10 +737,20 @@ windows, timezone day changes, update-tolerant application identity, installer/r
 reconciliation, helper-process filtering, satellite processes resolved onto their application,
 crash handlers and downloaded installers kept out of the catalog, packaged components filtered from
 an inferred family name, vendor agents and services retired while a launcher named like one is
-kept, a runtime host filtered despite reporting the family it hosts, package identities shown as
+kept, vendor probes, trays, proxies and versioned downloads retired while games whose names end in
+a digit are kept, Microsoft-published applications recognized as such while the games among them
+are not, a runtime host filtered despite reporting the family it hosts, package identities shown as
 readable names, rule-change notifications, urgent running-out reminders, a delayed final
 warning restated in the seconds actually left, an expired final warning dropped rather than shown,
-persisted first-block grace, automatic-update version comparison, controlled-account SID isolation,
+persisted first-block grace, granted extra time raising a daily limit for its own date only and
+never lifting a manual block or a schedule, extra time offered only once an allowance is nearly
+spent and still offered after it has run out, offered on every nearly-spent application rather
+than only the foreground one, a second request refused while the first is unanswered, a refusal
+that holds for its allowance period and lifts when the next window opens without silencing the
+other scopes, the daily request cap, a request that survives a restart before it is uploaded, an
+answer announced once however often the server repeats it, every stop on the request slider
+accepted while anything between or beyond them is refused, automatic-update version comparison,
+controlled-account SID isolation,
 cached offline rules, durable pending usage, buffered usage that survives a restart, durable fault
 queueing and fingerprinting, in-batch fault collapsing, spent application close leases that a
 relaunch cannot inherit, a sign-out that is warned about and retried when the session outlives it,
@@ -642,7 +770,10 @@ rules:
 6. let a limit run past 15, 5, and 2 minutes remaining with a game in the foreground, and confirm
    each reminder interrupts instead of fading behind it;
 7. confirm the applications page reads as a list of applications: no `Microsoft.BingNews` or any
-   other package identity, no WebView2, and no vendor agent, service, or uninstaller;
+   other package identity, no WebView2, and no vendor agent, service, uninstaller, tray icon,
+   hypervisor, driver probe (`vulkandriverquery`, `steamsysinfo`), `adb.exe`, or versioned
+   installer download — then turn on **Show Microsoft apps** and confirm Windows' own applications
+   appear, and that a Microsoft-published game such as Minecraft was visible with the switch off;
 8. start Steam and confirm one card named Steam appears in the panel — no `steamwebhelper`, no crash
    handler, no `Internet Explorer` from a downloaded `KidTimeSetup.exe` — then block Steam and
    confirm the window the child is looking at is what closes;
@@ -656,12 +787,27 @@ rules:
     enforcement remains independent;
 14. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
     instead, with the device, component, and stack trace, and repeats raise the count rather than
-    adding rows;
-15. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
+    adding rows - including a fault that stops the tray agent starting at all, which arrives both
+    as the agent's own report and as the service's crash-loop error;
+15. let a PC limit run down to under five minutes and confirm the Today panel offers extra time,
+    that the 5-minute reminder toast and the sign-out countdown card both carry the button, and
+    that pressing any of them opens the same card; confirm the slider moves only between 5 and 30
+    in steps of five and that its label follows it, ask for 30 minutes, approve 20 in the panel's
+    Requests page, and confirm the sign-out is cancelled, the child is told once, and the ring
+    shows the new total — then deny a second request and confirm the child is told that too;
+16. set a one-minute Notepad limit, let it run out, ask for extra time from the countdown card,
+    and confirm the popup opens on Notepad rather than the PC, then check the Apps tab shows the
+    same button on Notepad's own card and nowhere else;
+17. deny that request and confirm the child cannot ask again for it while the same schedule window
+    is open, that the card says when they may, and that the PC's own button still works — then
+    let the next window open and confirm the button comes back on its own;
+18. confirm a granted 30 minutes is gone the next day without anything being sent to remove it,
+    and that a manual block offers no extra-time button at all;
+19. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
     screen-time window, the next notification, and the countdown card all change without
     reinstalling or signing out, then block the PC and confirm the card counts down in the corner,
-    never takes focus, and disappears on its own when the countdown ends or the parent lifts the
-    block.
+    never takes focus, does not overlap its own buttons with the longer Russian labels, and
+    disappears on its own when the countdown ends or the parent lifts the block.
 
 On a disposable PC, verify enrollment end to end (Connect stays disabled until server URL,
 enrollment code, and child account are all valid; an expired code is rejected; the panel switches to
@@ -696,6 +842,11 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   `ApplicationCatalogReconciler` folds its rules and usage into the principal at server start, so
   restart the server container once after deploying rather than re-creating the rule.
 - **Usage is lower than elapsed login time:** expected — only non-idle foreground time counts.
+- **The child has no tray icon, window, or notifications while rules still apply:** the tray agent
+  is failing to start and the service is relaunching it every two seconds. The error log carries
+  both the agent's own fault and a "SessionAgent has exited within ... times in a row" error from
+  the service; `%LOCALAPPDATA%\KidTime\logs\session-agent-faults.ndjson` on the PC has the stack
+  trace either way. Enforcement is unaffected, which is why this can go unnoticed.
 - **The error log stays empty after a crash:** reports ride the next synchronization, so a PC that
   is offline delivers them when it reconnects. Check `LastSeenUtc`, then
   `%LOCALAPPDATA%\KidTime\logs\session-agent-faults.ndjson` (queued in the child's session) and
@@ -703,6 +854,19 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
 - **The same error keeps coming back after being marked handled:** marking handled is not a fix.
   The next occurrence reopens the row and raises its count, which is the intended signal that the
   fault is still happening.
+- **The child says the "ask for more time" button is not there:** it appears only when a daily
+  limit has five minutes or less left, and only for a limit — a manual block and a schedule window
+  are excluded on purpose, because extra time cannot lift either. A request already waiting on an
+  answer hides it until the parent decides, and so does a refusal, until the next schedule window
+  opens (or the next day, with no schedule configured). The card says which of those it is.
+- **An approved grant has not reached the PC:** a decision bumps the rule revision like any other
+  change, so it lands with the next sync. Check `LastSeenUtc` and that the revision on the device
+  page has caught up. A grant is for the device-local date the child asked on and grants nothing
+  once that date has passed.
+- **The toast's extra-time button does nothing:** the button reaches the running agent through the
+  notification COM server, which an unusual machine can refuse to register. The screen-time window
+  and the countdown card are the paths that do not depend on it; check
+  `%LOCALAPPDATA%\KidTime\logs` for the subscription failure.
 - **The PC is still speaking English after switching the language:** the language is part of the
   rules, so it lands with the next sync. Check `LastSeenUtc` and that the rule revision on the
   device page has caught up.

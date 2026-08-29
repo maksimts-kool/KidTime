@@ -74,13 +74,47 @@ public sealed class LocalStore
                     consumed_at_utc TEXT NOT NULL,
                     PRIMARY KEY(identity_key, episode_key)
                 );
+                CREATE TABLE IF NOT EXISTS time_extensions (
+                    request_id TEXT PRIMARY KEY,
+                    local_date TEXT NOT NULL,
+                    identity_key TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    requested_minutes INTEGER NOT NULL,
+                    granted_minutes INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    requested_at_utc TEXT NOT NULL,
+                    uploaded INTEGER NOT NULL DEFAULT 0,
+                    announced INTEGER NOT NULL DEFAULT 0,
+                    period_key TEXT NOT NULL DEFAULT ''
+                );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
+            // CREATE TABLE IF NOT EXISTS leaves a database written by an earlier agent alone, so a
+            // column added later has to be added explicitly. Adding one that is already there is
+            // the ordinary case on every start after the first, not a failure.
+            await AddColumnIfMissingAsync(connection, "time_extensions", "period_key",
+                "TEXT NOT NULL DEFAULT ''", cancellationToken);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private static async Task AddColumnIfMissingAsync(
+        SqliteConnection connection,
+        string table,
+        string column,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        await using var existing = connection.CreateCommand();
+        existing.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name=$column";
+        existing.Parameters.AddWithValue("$column", column);
+        if (Convert.ToInt64(await existing.ExecuteScalarAsync(cancellationToken)) > 0) return;
+        await using var add = connection.CreateCommand();
+        add.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition}";
+        await add.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<DeviceRuleSnapshot?> LoadRulesAsync(CancellationToken cancellationToken)
@@ -338,6 +372,120 @@ public sealed class LocalStore
 
     public Task<bool> TryConsumeFirstPcBlockGraceAsync(string episodeKey, CancellationToken cancellationToken) =>
         TryConsumeFirstApplicationBlockGraceAsync("__pc__", episodeKey, cancellationToken);
+
+    // ------------------------------------------------------------------ extra time
+
+    /// <summary>
+    /// Records a request the child just made. It is durable before it is uploaded, so a service
+    /// restart or a night offline does not swallow a question a child is waiting on an answer to.
+    /// The PC's own screen time is stored under an empty identity key, which keeps the primary
+    /// key simple while still telling the two scopes apart.
+    /// </summary>
+    public Task AddTimeExtensionAsync(LocalTimeExtension request, CancellationToken cancellationToken) =>
+        ExecuteAsync("""
+            INSERT INTO time_extensions(
+                request_id,local_date,identity_key,display_name,requested_minutes,granted_minutes,
+                status,requested_at_utc,uploaded,announced,period_key)
+            VALUES($id,$date,$identity,$name,$minutes,0,$status,$requested,0,0,$period)
+            ON CONFLICT(request_id) DO NOTHING
+            """,
+            cancellationToken,
+            ("$period", request.PeriodKey),
+            ("$id", request.RequestId.ToString()),
+            ("$date", request.LocalDate.ToString("yyyy-MM-dd")),
+            ("$identity", request.ApplicationIdentityKey ?? string.Empty),
+            ("$name", request.DisplayName),
+            ("$minutes", request.RequestedMinutes),
+            ("$status", request.Status.ToString()),
+            ("$requested", request.RequestedAtUtc.ToString("O")));
+
+    public Task<IReadOnlyList<LocalTimeExtension>> GetTimeExtensionsAsync(
+        DateOnly localDate,
+        CancellationToken cancellationToken) =>
+        ReadTimeExtensionsAsync(
+            "WHERE local_date=$date ORDER BY requested_at_utc",
+            cancellationToken,
+            ("$date", localDate.ToString("yyyy-MM-dd")));
+
+    public Task<IReadOnlyList<LocalTimeExtension>> GetTimeExtensionsToUploadAsync(CancellationToken cancellationToken) =>
+        ReadTimeExtensionsAsync("WHERE uploaded=0 ORDER BY requested_at_utc LIMIT 20", cancellationToken);
+
+    /// <summary>Requests whose answer has arrived but has not been shown to the child yet.</summary>
+    public Task<IReadOnlyList<LocalTimeExtension>> GetTimeExtensionsToAnnounceAsync(CancellationToken cancellationToken) =>
+        ReadTimeExtensionsAsync(
+            "WHERE announced=0 AND status<>'Pending' ORDER BY requested_at_utc LIMIT 20",
+            cancellationToken);
+
+    public Task MarkTimeExtensionUploadedAsync(Guid requestId, CancellationToken cancellationToken) =>
+        ExecuteAsync("UPDATE time_extensions SET uploaded=1 WHERE request_id=$id", cancellationToken,
+            ("$id", requestId.ToString()));
+
+    public Task MarkTimeExtensionAnnouncedAsync(Guid requestId, CancellationToken cancellationToken) =>
+        ExecuteAsync("UPDATE time_extensions SET announced=1 WHERE request_id=$id", cancellationToken,
+            ("$id", requestId.ToString()));
+
+    /// <summary>
+    /// Writes back what the parent decided. Only a request still pending locally is changed, so a
+    /// server that keeps repeating an old decision cannot make the child's window flip back and
+    /// forth or announce the same answer twice.
+    /// </summary>
+    public Task ApplyTimeExtensionDecisionAsync(
+        Guid requestId,
+        TimeExtensionStatus status,
+        int grantedMinutes,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync("""
+            UPDATE time_extensions SET status=$status, granted_minutes=$granted
+            WHERE request_id=$id AND status='Pending'
+            """,
+            cancellationToken,
+            ("$id", requestId.ToString()),
+            ("$status", status.ToString()),
+            ("$granted", grantedMinutes));
+
+    /// <summary>Drops uploaded requests old enough that nobody is waiting on them any more.</summary>
+    public Task TrimTimeExtensionsAsync(DateOnly oldestKept, CancellationToken cancellationToken) =>
+        ExecuteAsync("DELETE FROM time_extensions WHERE local_date < $date AND uploaded=1", cancellationToken,
+            ("$date", oldestKept.ToString("yyyy-MM-dd")));
+
+    private async Task<IReadOnlyList<LocalTimeExtension>> ReadTimeExtensionsAsync(
+        string filter,
+        CancellationToken cancellationToken,
+        params (string Name, object Value)[] parameters)
+    {
+        var results = new List<LocalTimeExtension>();
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"""
+                SELECT request_id,local_date,identity_key,display_name,requested_minutes,
+                       granted_minutes,status,requested_at_utc,period_key
+                FROM time_extensions {filter}
+                """;
+            foreach (var parameter in parameters) command.Parameters.AddWithValue(parameter.Name, parameter.Value);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var identityKey = reader.GetString(2);
+                results.Add(new LocalTimeExtension(
+                    Guid.Parse(reader.GetString(0)),
+                    DateOnly.ParseExact(reader.GetString(1), "yyyy-MM-dd"),
+                    identityKey.Length == 0 ? null : identityKey,
+                    reader.GetString(3),
+                    reader.GetInt32(4),
+                    reader.GetInt32(5),
+                    Enum.TryParse<TimeExtensionStatus>(reader.GetString(6), out var status)
+                        ? status
+                        : TimeExtensionStatus.Pending,
+                    DateTimeOffset.Parse(reader.GetString(7)),
+                    reader.IsDBNull(8) ? string.Empty : reader.GetString(8)));
+            }
+        }
+        finally { _gate.Release(); }
+        return results;
+    }
 
     /// <summary>
     /// Queues one fault for upload. The queue is bounded so a component that fails in a loop

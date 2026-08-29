@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
@@ -14,16 +15,27 @@ namespace KidTime.SessionAgent;
 public partial class StatusWindow : FluentWindow
 {
     private readonly Func<ParentRemovalRequest, CancellationToken, Task<DeviceRemovalResult>> _removeKidTime;
+    private readonly Func<TimeExtensionSubmission, CancellationToken, Task<TimeExtensionSubmissionResult>> _requestExtraTime;
     private readonly ObservableCollection<ApplicationCardViewModel> _applications = [];
     private string? _lastRenderedSignature;
     private bool _allowClose;
     private bool _removalDialogOpen;
 
+    // The PC's own offer, which is what the Today card acts on. Application offers ride on their
+    // cards instead. The service decides all of them; the window only shows what it was told.
+    private TimeExtensionOffer? _extraTimeOffer;
+    private string? _lastExtraTimeSignature;
+    private bool _extraTimeRequestInFlight;
+    private bool _extraTimeDialogOpen;
+
     private static AgentStrings Text => AgentUi.Text;
 
-    public StatusWindow(Func<ParentRemovalRequest, CancellationToken, Task<DeviceRemovalResult>> removeKidTime)
+    public StatusWindow(
+        Func<ParentRemovalRequest, CancellationToken, Task<DeviceRemovalResult>> removeKidTime,
+        Func<TimeExtensionSubmission, CancellationToken, Task<TimeExtensionSubmissionResult>> requestExtraTime)
     {
         _removeKidTime = removeKidTime;
+        _requestExtraTime = requestExtraTime;
         InitializeComponent();
         ApplicationsItems.ItemsSource = _applications;
         SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, updateAccents: true);
@@ -61,6 +73,10 @@ public partial class StatusWindow : FluentWindow
         RemoveCardTitle.Text = text.RemoveCardTitle;
         RemoveCardDetail.Text = text.RemoveCardDetail;
         RemoveKidTimeButton.Content = text.RemoveButton;
+        ExtraTimeTitleText.Text = text.ExtraTimeCardTitle;
+        ExtraTimeAskButton.Content = text.ExtraTimeAskButton;
+        // The card's live wording comes from the next offer, so force it to be redrawn.
+        _lastExtraTimeSignature = null;
 
         if (_lastRenderedSignature is not null) return;
         // Nothing has been rendered yet, so the placeholders are still on screen.
@@ -204,6 +220,211 @@ public partial class StatusWindow : FluentWindow
     }
 
     /// <summary>
+    /// Draws the extra-time card from what the service offered on the last reply. The service
+    /// decides whether asking is possible at all - the window never works that out for itself,
+    /// because the buttons would then disagree with what the service would actually accept.
+    ///
+    /// At most one offer is shown: the application the child is looking at when it is running
+    /// out, the PC otherwise. Two cards competing for one decision is not a choice a child in the
+    /// last five minutes of their time should be made to think about.
+    /// </summary>
+    public void UpdateExtraTime(IReadOnlyList<TimeExtensionOffer>? offers)
+    {
+        // The PC only. An application that is running out gets its button on its own card in the
+        // Apps tab, where a child looks for it - rather than this card changing identity to
+        // whatever happens to be in the foreground.
+        var offer = offers?.FirstOrDefault(item => item.ApplicationIdentityKey is null);
+        _extraTimeOffer = offer;
+        if (offer is null)
+        {
+            if (_lastExtraTimeSignature is null) return;
+            _lastExtraTimeSignature = null;
+            ExtraTimeCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var text = Text;
+        var signature = $"{text.Language}|{offer.ApplicationIdentityKey}|{offer.DisplayName}|{offer.State}|{offer.Minutes}";
+        if (signature == _lastExtraTimeSignature) return;
+        _lastExtraTimeSignature = signature;
+
+        ExtraTimeCard.Visibility = Visibility.Visible;
+        ExtraTimeScopeText.Text = text.ExtraTimeForScope(offer.DisplayName);
+        // Only a request still waiting on an answer takes the buttons away. A grant that has been
+        // used up, or a refusal, leaves them: the child may ask once more, up to the daily cap the
+        // service enforces.
+        var waiting = offer.State == TimeExtensionOfferState.Pending;
+        ExtraTimeControls.Visibility = waiting ? Visibility.Collapsed : Visibility.Visible;
+        ExtraTimeDetailText.Text = offer.State switch
+        {
+            TimeExtensionOfferState.Pending => text.ExtraTimeWaitingForParent,
+            TimeExtensionOfferState.Granted => text.ExtraTimeGrantedCaption(offer.Minutes),
+            TimeExtensionOfferState.Denied => text.ExtraTimeDeniedCaption,
+            _ => text.ExtraTimeChooseHowMuch
+        };
+        if (!waiting) return;
+        // The answer to the previous press is now the caption above, so the transient bar goes.
+        ExtraTimeInfo.IsOpen = false;
+    }
+
+    /// <summary>
+    /// Brings the window forward and opens the request straight away, for the thing that is
+    /// running out. Called from the countdown card and the toast, where the child has already
+    /// said what they want - making them find the button again would be a step for nothing.
+    /// </summary>
+    public void ShowExtraTimeRequest(TimeExtensionOffer? offer)
+    {
+        SelectTab(offer?.ApplicationIdentityKey is null ? "Today" : "Apps");
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+        if (offer is { State: not TimeExtensionOfferState.Pending })
+            _ = RequestExtraTimeAsync(offer, offer.ApplicationIdentityKey is null ? ExtraTimeInfo : AppsExtraTimeInfo);
+    }
+
+    private void ExtraTimeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_extraTimeOffer is not { } offer) return;
+        _ = RequestExtraTimeAsync(offer, ExtraTimeInfo);
+    }
+
+    private void ApplicationExtraTimeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Control { Tag: string identityKey }) return;
+        if (_applications.FirstOrDefault(card => card.IdentityKey == identityKey)?.Extension is not { } offer) return;
+        _ = RequestExtraTimeAsync(offer, AppsExtraTimeInfo);
+    }
+
+    /// <summary>
+    /// The one place an amount is chosen and a request is sent, whichever button started it.
+    ///
+    /// The slider is built here rather than sitting in a panel because there is one of it and
+    /// several things it can be about: the PC, or any application on the Apps tab. Its range comes
+    /// from the policy the service checks against, so it cannot offer a stop that would be refused.
+    /// </summary>
+    private async Task RequestExtraTimeAsync(TimeExtensionOffer offer, InfoBar target)
+    {
+        // ContentDialog allows one at a time; a second would throw out of an async void handler.
+        if (_extraTimeDialogOpen || _extraTimeRequestInFlight) return;
+        _extraTimeDialogOpen = true;
+        try
+        {
+            var text = Text;
+            target.IsOpen = false;
+            var amountText = new System.Windows.Controls.TextBlock
+            {
+                FontSize = 20,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 14, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Text = text.ExtraTimeAmount(TimeExtensionPolicy.DefaultRequestMinutes)
+            };
+            var slider = new System.Windows.Controls.Slider
+            {
+                Minimum = TimeExtensionPolicy.MinimumRequestMinutes,
+                Maximum = TimeExtensionPolicy.MaximumRequestMinutes,
+                TickFrequency = TimeExtensionPolicy.RequestStepMinutes,
+                SmallChange = TimeExtensionPolicy.RequestStepMinutes,
+                LargeChange = TimeExtensionPolicy.RequestStepMinutes,
+                IsSnapToTickEnabled = true,
+                TickPlacement = System.Windows.Controls.Primitives.TickPlacement.BottomRight,
+                Value = TimeExtensionPolicy.DefaultRequestMinutes,
+                Margin = new Thickness(0, 8, 0, 0),
+                MinWidth = 360
+            };
+            System.Windows.Automation.AutomationProperties.SetName(slider, text.ExtraTimeChooseHowMuch);
+            slider.ValueChanged += (_, _) =>
+                amountText.Text = text.ExtraTimeAmount(SnapMinutes(slider.Value));
+
+            var content = new System.Windows.Controls.StackPanel();
+            content.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = text.ExtraTimeForScope(offer.DisplayName),
+                TextWrapping = TextWrapping.Wrap
+            });
+            content.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = text.ExtraTimeChooseHowMuch,
+                Opacity = 0.75,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
+            content.Children.Add(amountText);
+            content.Children.Add(slider);
+
+            var dialog = new ContentDialog(RootContentDialogHost)
+            {
+                Title = text.ExtraTimeCardTitle,
+                Content = content,
+                PrimaryButtonText = text.ExtraTimeAskButton,
+                CloseButtonText = text.Cancel,
+                PrimaryButtonAppearance = ControlAppearance.Primary,
+                DefaultButton = ContentDialogButton.Primary,
+                DialogWidth = 460
+            };
+            if (await dialog.ShowAsync(CancellationToken.None) != ContentDialogResult.Primary) return;
+            await SubmitExtraTimeAsync(offer, SnapMinutes(slider.Value), target);
+        }
+        catch (Exception exception)
+        {
+            SessionLogger.ReportFault(
+                DiagnosticSeverities.Error,
+                "The KidTime extra-time dialog failed.",
+                exception);
+        }
+        finally
+        {
+            _extraTimeDialogOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// The slider snaps to its ticks already, but it reports a double and the service accepts
+    /// only the stops.
+    /// </summary>
+    private static int SnapMinutes(double value) =>
+        TimeExtensionPolicy.ClampToStep((int)Math.Round(value));
+
+    private async Task SubmitExtraTimeAsync(TimeExtensionOffer offer, int minutes, InfoBar target)
+    {
+        _extraTimeRequestInFlight = true;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var result = await _requestExtraTime(
+                new TimeExtensionSubmission(minutes, offer.ApplicationIdentityKey),
+                timeout.Token);
+            ShowExtraTimeResult(target, result.Accepted, result.Message);
+            // The service now holds the pending request, so the next reply repaints the cards.
+            _lastExtraTimeSignature = null;
+        }
+        catch (Exception exception) when (exception is IOException or TimeoutException or OperationCanceledException)
+        {
+            SessionLogger.Information("The extra-time request could not reach the service.", exception);
+            ShowExtraTimeResult(target, false, Text.ExtraTimeNotPossible);
+        }
+        catch (Exception exception)
+        {
+            SessionLogger.ReportFault(
+                DiagnosticSeverities.Error,
+                "The KidTime extra-time request failed.",
+                exception);
+        }
+        finally
+        {
+            _extraTimeRequestInFlight = false;
+        }
+    }
+
+    private static void ShowExtraTimeResult(InfoBar target, bool accepted, string message)
+    {
+        target.IsOpen = true;
+        target.Severity = accepted ? InfoBarSeverity.Success : InfoBarSeverity.Warning;
+        target.Title = message;
+        target.Message = string.Empty;
+    }
+
+    /// <summary>
     /// Called for every status the service sends. Rendering is skipped when nothing a person
     /// can see has changed, and the application list is updated in place, so an open window
     /// does not re-run layout for the whole page every two seconds.
@@ -233,9 +454,12 @@ public partial class StatusWindow : FluentWindow
             DailyRing.Progress = dailyLimit <= 0 ? 0 : Math.Clamp(remaining * 100d / dailyLimit, 0, 100);
             RemainingText.Text = text.DurationLabel(remaining);
             RemainingCaption.Text = text.LeftToday;
-            DailyUsageText.Text = text.UsedOf(
-                text.DurationLabel(screenTime.TodayActiveSeconds),
-                text.DurationLabel(dailyLimit));
+            DailyUsageText.Text = screenTime.BonusSeconds > 0
+                ? $"{text.UsedOf(text.DurationLabel(screenTime.TodayActiveSeconds), text.DurationLabel(dailyLimit))}  ·  " +
+                  text.ExtraTimeAddedToday(screenTime.BonusSeconds / 60)
+                : text.UsedOf(
+                    text.DurationLabel(screenTime.TodayActiveSeconds),
+                    text.DurationLabel(dailyLimit));
         }
         else
         {
@@ -329,6 +553,7 @@ public partial class StatusWindow : FluentWindow
             .Append(screenTime.Message).Append('|')
             .Append(text.DurationLabel(screenTime.TodayActiveSeconds)).Append('|')
             .Append(screenTime.DailyLimitSeconds).Append('|')
+            .Append(screenTime.BonusSeconds).Append('|')
             .Append(text.DurationLabel(screenTime.DailyRemainingSeconds ?? 0)).Append('|')
             .Append(FormatScheduleHeadline(text, screenTime)).Append('|')
             .Append(FormatScheduleDetail(text, screenTime)).Append('|')
@@ -345,7 +570,8 @@ public partial class StatusWindow : FluentWindow
             builder.Append(card.IdentityKey).Append(':')
                 .Append(card.StatusText).Append(':')
                 .Append(card.DailySummary).Append(':')
-                .Append(card.ScheduleSummary).Append(';');
+                .Append(card.ScheduleSummary).Append(':')
+                .Append(card.ExtraTimeVisibility).Append(';');
         }
         return builder.ToString();
     }
@@ -402,6 +628,8 @@ public partial class StatusWindow : FluentWindow
                 _ => text.AppStatusAvailable
             };
         var appearance = allowance.IsAllowed ? ControlAppearance.Success : ControlAppearance.Danger;
+        // A request already waiting on an answer takes the button away; anything else leaves it.
+        var canAsk = application.Extension is { State: not TimeExtensionOfferState.Pending };
         var dailySummary = allowance.DailyLimitSeconds is int limit
             ? text.AppDailySummary(
                 text.DurationLabel(allowance.DailyRemainingSeconds ?? 0),
@@ -418,7 +646,10 @@ public partial class StatusWindow : FluentWindow
             DailySummary = dailySummary,
             ScheduleSummary = FormatScheduleHeadline(text, allowance),
             DailyRemainingPercent = dailyPercent,
-            DailyProgressVisibility = allowance.DailyLimitSeconds is null ? Visibility.Collapsed : Visibility.Visible
+            DailyProgressVisibility = allowance.DailyLimitSeconds is null ? Visibility.Collapsed : Visibility.Visible,
+            Extension = application.Extension,
+            ExtraTimeButtonText = text.ExtraTimeAskButton,
+            ExtraTimeVisibility = canAsk ? Visibility.Visible : Visibility.Collapsed
         };
     }
 
@@ -456,6 +687,9 @@ public partial class StatusWindow : FluentWindow
         private string _scheduleSummary = string.Empty;
         private double _dailyRemainingPercent;
         private Visibility _dailyProgressVisibility;
+        private string _extraTimeButtonText = string.Empty;
+        private Visibility _extraTimeVisibility = Visibility.Collapsed;
+        private TimeExtensionOffer? _extension;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -468,6 +702,11 @@ public partial class StatusWindow : FluentWindow
         public string ScheduleSummary { get => _scheduleSummary; set => Set(ref _scheduleSummary, value); }
         public double DailyRemainingPercent { get => _dailyRemainingPercent; set => Set(ref _dailyRemainingPercent, value); }
         public Visibility DailyProgressVisibility { get => _dailyProgressVisibility; set => Set(ref _dailyProgressVisibility, value); }
+        public string ExtraTimeButtonText { get => _extraTimeButtonText; set => Set(ref _extraTimeButtonText, value); }
+        public Visibility ExtraTimeVisibility { get => _extraTimeVisibility; set => Set(ref _extraTimeVisibility, value); }
+
+        /// <summary>What the button acts on. Not bound - the click handler reads it.</summary>
+        public TimeExtensionOffer? Extension { get => _extension; set => Set(ref _extension, value); }
 
         public void CopyFrom(ApplicationCardViewModel other)
         {
@@ -478,6 +717,9 @@ public partial class StatusWindow : FluentWindow
             ScheduleSummary = other.ScheduleSummary;
             DailyRemainingPercent = other.DailyRemainingPercent;
             DailyProgressVisibility = other.DailyProgressVisibility;
+            ExtraTimeButtonText = other.ExtraTimeButtonText;
+            ExtraTimeVisibility = other.ExtraTimeVisibility;
+            Extension = other.Extension;
         }
 
         private void Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

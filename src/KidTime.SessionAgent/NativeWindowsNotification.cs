@@ -9,9 +9,22 @@ namespace KidTime.SessionAgent;
 internal static class NativeWindowsNotification
 {
     private const string UrgentGroup = "KidTimeFinalWarning";
+    private const string ExtraTimeArgument = "kidtime-action=extra-time";
     private static readonly object Gate = new();
     private static readonly Dictionary<string, ToastNotification> KeyedUrgentToasts = new(StringComparer.Ordinal);
     private static readonly TimeSpan ReminderLifetime = TimeSpan.FromMinutes(15);
+    private static bool _activationHandlerRegistered;
+
+    /// <summary>
+    /// Raised when the child presses the toast's "ask for more time" button. Windows delivers
+    /// this through the notification COM server on a background thread, so the handler has to
+    /// marshal onto the UI thread itself.
+    ///
+    /// The button is a shortcut to the screen-time window and nothing more. If the activation
+    /// never arrives - the COM registration is the sort of thing an unusual machine can refuse -
+    /// the child still has the window and the countdown card, which is why nothing depends on it.
+    /// </summary>
+    public static event EventHandler? ExtraTimeRequested;
 
     /// <summary>
     /// Shows an unkeyed toast. The urgent scenario stays on screen and overrides Focus Assist, and
@@ -51,16 +64,26 @@ internal static class NativeWindowsNotification
     /// otherwise leave three banners stacked in the corner - which is its own way of not being
     /// read.
     /// </summary>
-    public static void ShowUrgentReminder(string reminderKey, string title, string message) =>
-        ShowKeyedUrgent(reminderKey, title, message, ReminderLifetime, "reminder");
+    public static void ShowUrgentReminder(
+        string reminderKey,
+        string title,
+        string message,
+        string? extraTimeButtonLabel = null) =>
+        ShowKeyedUrgent(reminderKey, title, message, ReminderLifetime, "reminder", extraTimeButtonLabel);
 
-    public static void ShowFinalWarning(string warningKey, string title, string message, int countdownSeconds) =>
+    public static void ShowFinalWarning(
+        string warningKey,
+        string title,
+        string message,
+        int countdownSeconds,
+        string? extraTimeButtonLabel = null) =>
         ShowKeyedUrgent(
             warningKey,
             title,
             message,
             TimeSpan.FromSeconds(Math.Max(10, countdownSeconds + 5)),
-            "final warning");
+            "final warning",
+            extraTimeButtonLabel);
 
     /// <summary>
     /// Shows one urgent toast per key, retiring whatever stood under that key before it. The tag
@@ -72,10 +95,12 @@ internal static class NativeWindowsNotification
         string title,
         string message,
         TimeSpan lifetime,
-        string description)
+        string description,
+        string? extraTimeButtonLabel)
     {
         try
         {
+            EnsureActivationHandler();
             var notifier = ToastNotificationManagerCompat.CreateToastNotifier();
             var tag = CreateTag(warningKey);
             ToastNotification? previous;
@@ -88,12 +113,23 @@ internal static class NativeWindowsNotification
 
             // Two short lines only: the title carries the time left, the body carries the reason.
             // A child reading an urgent toast has seconds, not paragraphs.
-            var content = new ToastContentBuilder()
+            var builder = new ToastContentBuilder()
                 .SetToastDuration(ToastDuration.Long)
                 .AddText(title)
                 .AddText(message)
-                .AddAudio(new Uri("ms-winsoundevent:Notification.Reminder"))
-                .GetToastContent();
+                .AddAudio(new Uri("ms-winsoundevent:Notification.Reminder"));
+            // One button, and only when the service is actually offering extra time. It activates
+            // in the background so pressing it does not tear the child away from what is on
+            // screen - the window is raised by the running agent instead.
+            if (extraTimeButtonLabel is { Length: > 0 } label)
+            {
+                builder.AddButton(new ToastButton()
+                    .SetContent(label)
+                    .AddArgument("kidtime-action", "extra-time")
+                    .SetBackgroundActivation());
+            }
+
+            var content = builder.GetToastContent();
             var xml = new XmlDocument();
             xml.LoadXml(content.GetContent());
             xml.DocumentElement.SetAttribute("scenario", "urgent");
@@ -132,6 +168,45 @@ internal static class NativeWindowsNotification
         catch (Exception exception)
         {
             SessionLogger.Information($"Native Windows final warning dismissal failed: {warningKey}", exception);
+        }
+    }
+
+    /// <summary>
+    /// Subscribes to toast activation once, so a button press reaches this already-running agent
+    /// through its notification COM server rather than starting a second process - which
+    /// <see cref="App"/> shuts straight back down, because that copy is not the one the service
+    /// supervises.
+    /// </summary>
+    private static void EnsureActivationHandler()
+    {
+        lock (Gate)
+        {
+            if (_activationHandlerRegistered) return;
+            _activationHandlerRegistered = true;
+        }
+
+        try
+        {
+            ToastNotificationManagerCompat.OnActivated += OnToastActivated;
+        }
+        catch (Exception exception)
+        {
+            // Without this the button simply does nothing; the window and the card still work.
+            SessionLogger.Information("Toast activation could not be subscribed to.", exception);
+        }
+    }
+
+    private static void OnToastActivated(ToastNotificationActivatedEventArgsCompat arguments)
+    {
+        try
+        {
+            if (!arguments.Argument.Contains(ExtraTimeArgument, StringComparison.Ordinal)) return;
+            SessionLogger.Information("The extra-time toast button was pressed.");
+            ExtraTimeRequested?.Invoke(null, EventArgs.Empty);
+        }
+        catch (Exception exception)
+        {
+            SessionLogger.Information("A toast activation could not be handled.", exception);
         }
     }
 

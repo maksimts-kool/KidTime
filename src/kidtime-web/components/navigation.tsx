@@ -3,7 +3,7 @@
 import { appPath } from "@/lib/paths";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { AppWindow, BarChart3, LayoutDashboard, LogOut, MonitorCog, Settings, TriangleAlert } from "lucide-react";
+import { AppWindow, BarChart3, Clock, LayoutDashboard, LogOut, MonitorCog, Settings, TriangleAlert } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +11,7 @@ const links = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/devices", label: "Devices", icon: MonitorCog },
   { href: "/applications", label: "Applications", icon: AppWindow },
+  { href: "/requests", label: "Requests", icon: Clock },
   { href: "/statistics", label: "Statistics", icon: BarChart3 },
   { href: "/diagnostics", label: "Error log", icon: TriangleAlert },
   { href: "/settings", label: "Settings", icon: Settings },

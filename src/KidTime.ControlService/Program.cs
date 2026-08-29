@@ -41,6 +41,7 @@ builder.Services.AddSingleton<SystemUninstaller>();
 builder.Services.AddSingleton<IParentDeviceRemovalClient>(provider => provider.GetRequiredService<AgentApiClient>());
 builder.Services.AddSingleton<ISystemUninstaller>(provider => provider.GetRequiredService<SystemUninstaller>());
 builder.Services.AddSingleton<DeviceRemovalService>();
+builder.Services.AddSingleton<TimeExtensionService>();
 builder.Services.AddSingleton<EnforcementCoordinator>();
 builder.Services.AddSingleton<ApplicationInspector>();
 builder.Services.AddSingleton<ApplicationIconExtractor>();

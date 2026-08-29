@@ -228,4 +228,34 @@ internal sealed class RussianAgentStrings : AgentStrings
 
     public override string CountdownCardTimeLeft => "Осталось";
     public override string CountdownCardDismiss => "Понятно";
+
+    // ---------------------------------------------------------------- extra time
+
+    public override string ExtraTimeCardTitle => "Нужно больше времени?";
+    public override string ExtraTimeForScope(string scope) => $"Можно попросить у родителей ещё времени. Для чего: {scope}.";
+    public override string ExtraTimeChooseHowMuch => "Выберите, сколько попросить.";
+    public override string ExtraTimeAmount(int minutes) => $"+{minutes} мин";
+    public override string ExtraTimeAskButton => "Попросить ещё времени";
+    public override string ExtraTimeSent => "Запрос отправлен. Решают родители.";
+    public override string ExtraTimeWaitingForParent => "Ждём ответа родителей.";
+    public override string ExtraTimeGrantedCaption(int minutes) =>
+        $"Родители добавили {minutes} {Pick(minutes, "минуту", "минуты", "минут")}.";
+    public override string ExtraTimeDeniedCaption =>
+        "Родители отказали. Попросить снова можно, когда начнётся следующее экранное время.";
+    public override string ExtraTimeDeniedUntilNextPeriod =>
+        "Родители уже отказали. Попросить снова можно, когда начнётся следующее экранное время.";
+
+    public override string ExtraTimeNotRunningOutYet => "Времени пока достаточно.";
+    public override string ExtraTimeAlreadyAsked => "Запрос уже отправлен. Ждём ответа.";
+    public override string ExtraTimeTooManyToday => "Сегодня вы просили уже достаточно раз.";
+    public override string ExtraTimeNotPossible => "Сейчас попросить больше времени нельзя.";
+
+    public override string ExtraTimeApprovedTitle => "Время добавлено";
+    public override string ExtraTimeApprovedMessage(string scope, int minutes) =>
+        $"Родители добавили {minutes} {Pick(minutes, "минуту", "минуты", "минут")}. Для чего: {scope}.";
+    public override string ExtraTimeDeniedTitle => "Без дополнительного времени";
+    public override string ExtraTimeDeniedMessage(string scope) =>
+        $"Родители отказали в дополнительном времени. Для чего: {scope}.";
+
+    public override string ExtraTimeAddedToday(int minutes) => $"Добавлено сегодня: +{minutes} мин";
 }

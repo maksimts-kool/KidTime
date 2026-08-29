@@ -27,6 +27,9 @@ public partial class CountdownCardWindow : FluentWindow
     private int _totalSeconds = 1;
     private bool _allowClose;
 
+    /// <summary>Raised when the child asks for more time; the host opens the window.</summary>
+    public event EventHandler? ExtraTimeRequested;
+
     public CountdownCardWindow()
     {
         InitializeComponent();
@@ -38,7 +41,7 @@ public partial class CountdownCardWindow : FluentWindow
         0,
         _totalSeconds - (int)Stopwatch.GetElapsedTime(_startedTimestamp).TotalSeconds);
 
-    public void SetContent(string title, string message, int countdownSeconds)
+    public void SetContent(string title, string message, int countdownSeconds, bool canAskForExtraTime)
     {
         var text = AgentUi.Text;
         _totalSeconds = Math.Max(1, countdownSeconds);
@@ -46,6 +49,10 @@ public partial class CountdownCardWindow : FluentWindow
         MessageText.Text = message;
         CountdownCaption.Text = text.CountdownCardTimeLeft;
         DismissButton.Content = text.CountdownCardDismiss;
+        AskForTimeButton.Content = text.ExtraTimeAskButton;
+        // Only offered when the service says asking is actually possible for what is closing. A
+        // button that answered "you cannot ask for that" would be worse than no button at all.
+        AskForTimeButton.Visibility = canAskForExtraTime ? Visibility.Visible : Visibility.Collapsed;
         Tick();
     }
 
@@ -64,6 +71,14 @@ public partial class CountdownCardWindow : FluentWindow
     }
 
     private void DismissButton_Click(object sender, RoutedEventArgs e) => Hide();
+
+    private void AskForTimeButton_Click(object sender, RoutedEventArgs e)
+    {
+        // The warning has been read, and the window is about to take over. Enforcement is
+        // untouched either way - the service owns the deadline whether this card is up or not.
+        Hide();
+        ExtraTimeRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {

@@ -358,6 +358,137 @@ public sealed class ApplicationCatalogPolicyTests
         Assert.Equal("Rail Route", ApplicationCatalogPolicy.GetFriendlyDisplayName(descriptor));
     }
 
+    [Theory]
+    // Every one of these earned a card on a real controlled PC. None of them is a window a child
+    // opens; several are named only after the bare executable because they carry no metadata at all.
+    [InlineData("adb", "adb.exe")]
+    [InlineData("HD-Adb", "HD-Adb.exe")]
+    [InlineData("ffmpeg", "ffmpeg.exe")]
+    [InlineData("steamsysinfo", "steamsysinfo.exe")]
+    [InlineData("vulkandriverquery", "vulkandriverquery.exe")]
+    [InlineData("vulkandriverquery64", "vulkandriverquery64.exe")]
+    [InlineData("gldriverquery64", "gldriverquery64.exe")]
+    [InlineData("Vanguard Tray", "vgtray.exe")]
+    [InlineData("G HUB", "lghub_system_tray.exe")]
+    [InlineData("BlueStacks Watchdog", "BstkWatchdog.exe")]
+    [InlineData("NVIDIA App", "nvsphelper64.exe")]
+    [InlineData("Discord", "DiscordHookHelper64.exe")]
+    [InlineData("Steam", "gameoverlayui64.exe")]
+    [InlineData("Microsoft Edge", "mscopilot_proxy.exe")]
+    [InlineData("Proton VPN", "ProtonVPN_v5.1.7_x64.exe")]
+    public void Vendor_probes_trays_and_downloads_are_not_manageable(string name, string executable)
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = name,
+            ProductName = name,
+            ExecutableName = executable,
+            OriginalFilename = executable,
+            ExecutablePath = $@"C:\Program Files\Vendor\{executable}"
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Fact]
+    public void A_hypervisor_is_not_manageable_however_it_is_named()
+    {
+        // BlueStacks' BstkSVC.exe announces itself as "Bluestack Hypervisor" beside the
+        // HD-Player.exe card that is the emulator the child actually looks at.
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = "Bluestack Hypervisor",
+            ProductName = "Bluestack Hypervisor",
+            ExecutableName = "BstkSVC.exe",
+            OriginalFilename = "BstkSVC.exe",
+            Company = "Bluestack System Inc.",
+            ExecutablePath = @"C:\Program Files\BlueStacks_nxt\BstkSVC.exe"
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Theory]
+    // A trailing bitness marker must not be read as part of a name, and a game whose name simply
+    // ends in a digit must not be read as carrying one.
+    [InlineData("Counter-Strike 2", "cs2.exe")]
+    [InlineData("Counter-Strike: Global Offensive", "csgo.exe")]
+    [InlineData("Grand Theft Auto V Enhanced", "GTA5_Enhanced.exe")]
+    [InlineData("BlueStacks", "HD-Player.exe")]
+    [InlineData("Logitech G HUB", "lghub.exe")]
+    [InlineData("Rockstar Games Launcher", "Launcher.exe")]
+    [InlineData("Epic Games Launcher", "EpicGamesLauncher.exe")]
+    [InlineData("Proton VPN", "ProtonVPN.exe")]
+    public void Applications_beside_their_own_machinery_are_still_manageable(string name, string executable)
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = name,
+            ProductName = name,
+            ExecutableName = executable,
+            OriginalFilename = executable,
+            ExecutablePath = $@"C:\Program Files\Vendor\{executable}"
+        };
+
+        Assert.True(ApplicationCatalogPolicy.IsUserManageable(descriptor));
+    }
+
+    [Theory]
+    [InlineData("Clock", "Microsoft.WindowsAlarms_8wekyb3d8bbwe", "")]
+    [InlineData("Feedback Hub", "Microsoft.WindowsFeedbackHub_8wekyb3d8bbwe", "")]
+    [InlineData("Microsoft Edge", "", "Microsoft Corporation")]
+    public void Windows_own_applications_are_recognized_as_Microsoft_published(
+        string name, string family, string company)
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = name,
+            ProductName = name,
+            ExecutableName = "app.exe",
+            ExecutablePath = @"C:\Program Filespp.exe",
+            PackageFamilyName = family.Length == 0 ? null : family,
+            Company = company.Length == 0 ? null : company
+        };
+
+        Assert.True(ApplicationCatalogPolicy.IsMicrosoftPublished(descriptor));
+    }
+
+    [Theory]
+    // The switch exists to hide Windows tooling, so a game Microsoft happens to publish must stay
+    // visible - Minecraft is the application a parent most wants a rule on.
+    [InlineData("Minecraft", "Microsoft.MinecraftUWP_8wekyb3d8bbwe")]
+    [InlineData("Solitaire Collection", "Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe")]
+    [InlineData("Xbox", "Microsoft.GamingApp_8wekyb3d8bbwe")]
+    public void Microsoft_published_games_are_not_hidden_as_Windows_applications(string name, string family)
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = name,
+            ProductName = name,
+            PackageFamilyName = family,
+            Company = "Microsoft Corporation",
+            ExecutablePath = $@"C:\Program Files\WindowsApps\{family}"
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsMicrosoftPublished(descriptor));
+    }
+
+    [Fact]
+    public void A_third_party_application_is_not_Microsoft_published()
+    {
+        var descriptor = new ApplicationDescriptor
+        {
+            DisplayName = "Steam",
+            ProductName = "Steam",
+            ExecutableName = "steam.exe",
+            ExecutablePath = @"C:\Program Files (x86)\Steam\steam.exe",
+            Company = "Valve Corporation",
+            SignaturePublisher = "Valve Corp."
+        };
+
+        Assert.False(ApplicationCatalogPolicy.IsMicrosoftPublished(descriptor));
+    }
+
     [Fact]
     public void Packaged_applications_still_face_the_executable_checks_when_the_family_is_only_inferred()
     {

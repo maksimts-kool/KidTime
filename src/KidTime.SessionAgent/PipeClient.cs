@@ -30,6 +30,24 @@ internal sealed class PipeClient
         return response.Removal ?? throw new InvalidDataException("The service returned an empty removal response.");
     }
 
+    /// <summary>
+    /// Delivers fault reports and nothing else - the shape this protocol accepts for inert data.
+    /// Used on the way out of a failed start, where there is no sample to ride along with.
+    /// </summary>
+    public async Task SendDiagnosticsAsync(
+        IReadOnlyList<DiagnosticReport> diagnostics,
+        CancellationToken cancellationToken) =>
+        await ExchangeAsync(new SessionAgentRequest(Diagnostics: diagnostics), cancellationToken);
+
+    public async Task<TimeExtensionSubmissionResult> RequestTimeExtensionAsync(
+        TimeExtensionSubmission submission,
+        CancellationToken cancellationToken)
+    {
+        var response = await ExchangeAsync(new SessionAgentRequest(TimeExtension: submission), cancellationToken);
+        return response.TimeExtension
+               ?? throw new InvalidDataException("The service returned an empty extra-time response.");
+    }
+
     private static async Task<SessionAgentResponse> ExchangeAsync(
         SessionAgentRequest request,
         CancellationToken cancellationToken)

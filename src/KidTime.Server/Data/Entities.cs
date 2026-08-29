@@ -176,3 +176,44 @@ public sealed class DeviceCommand
     public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? AcknowledgedAtUtc { get; set; }
 }
+
+/// <summary>
+/// One request from a controlled PC for extra time, and what the parent decided about it.
+///
+/// <see cref="Id"/> is the id the agent minted, so an upload retried after an uncertain response
+/// lands on the row that already exists rather than asking the parent the same question twice.
+/// An approved row is read back into the rule snapshot as a <c>TimeBonus</c> for
+/// <see cref="LocalDate"/>, which is what actually extends the limit - and what makes the grant
+/// expire on its own when that date passes.
+/// </summary>
+public sealed class TimeExtension
+{
+    public Guid Id { get; set; }
+    public Guid DeviceId { get; set; }
+    public Device Device { get; set; } = null!;
+
+    /// <summary>Null for the PC's own screen time; otherwise the application that is running out.</summary>
+    public Guid? DeviceApplicationId { get; set; }
+    public DeviceApplication? DeviceApplication { get; set; }
+    public string? ApplicationIdentityKey { get; set; }
+
+    /// <summary>The name the child saw when they asked, kept so the panel reads the same.</summary>
+    public required string DisplayName { get; set; }
+
+    public DateOnly LocalDate { get; set; }
+    public int RequestedMinutes { get; set; }
+    public int GrantedMinutes { get; set; }
+    public required string Status { get; set; }
+    public DateTimeOffset RequestedAtUtc { get; set; }
+    public DateTimeOffset ReceivedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? DecidedAtUtc { get; set; }
+    public Guid? DecidedByParentUserId { get; set; }
+}
+
+/// <summary>The three states a request can be in, as they are stored and sent.</summary>
+public static class TimeExtensionStatuses
+{
+    public const string Pending = "Pending";
+    public const string Approved = "Approved";
+    public const string Denied = "Denied";
+}

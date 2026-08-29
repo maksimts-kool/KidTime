@@ -55,7 +55,35 @@ public partial class App : Application
                 DiagnosticSeverities.Fatal,
                 "The KidTime tray agent could not start.",
                 exception);
+            FlushFaultsBeforeExit();
             Shutdown();
+        }
+    }
+
+    /// <summary>
+    /// Hands the spooled faults to the service before this process gives up.
+    ///
+    /// Ordinarily a fault rides the next foreground sample, but a startup failure never reaches
+    /// the sampling loop: the service relaunches the agent every two seconds, each copy writes
+    /// the same fault and dies before it can deliver anything, and the parent's error log stays
+    /// empty while the child has no UI at all. This is the one path that closes that - a single
+    /// best-effort exchange, bounded, on the way out.
+    /// </summary>
+    private static void FlushFaultsBeforeExit()
+    {
+        var reports = SessionLogger.TakePendingReports();
+        if (reports.Count == 0) return;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            new PipeClient().SendDiagnosticsAsync(reports, timeout.Token).GetAwaiter().GetResult();
+            SessionLogger.Information($"Delivered {reports.Count} startup fault(s) to the service.");
+        }
+        catch (Exception exception)
+        {
+            // The spool keeps them, so a later instance that does start delivers them instead.
+            SessionLogger.Requeue(reports);
+            SessionLogger.Information("Startup faults could not be delivered to the service.", exception);
         }
     }
 

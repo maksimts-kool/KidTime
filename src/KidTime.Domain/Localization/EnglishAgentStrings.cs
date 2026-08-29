@@ -201,4 +201,32 @@ internal sealed class EnglishAgentStrings : AgentStrings
 
     public override string CountdownCardTimeLeft => "Time left";
     public override string CountdownCardDismiss => "Got it";
+
+    // ---------------------------------------------------------------- extra time
+
+    public override string ExtraTimeCardTitle => "Need more time?";
+    public override string ExtraTimeForScope(string scope) => $"Ask a parent for more time on {scope}.";
+    public override string ExtraTimeChooseHowMuch => "Choose how much to ask for.";
+    public override string ExtraTimeAmount(int minutes) => $"+{minutes} min";
+    public override string ExtraTimeAskButton => "Ask for more time";
+    public override string ExtraTimeSent => "Sent. Your parent decides.";
+    public override string ExtraTimeWaitingForParent => "Waiting for your parent to answer.";
+    public override string ExtraTimeGrantedCaption(int minutes) => $"Your parent added {minutes} minutes.";
+    public override string ExtraTimeDeniedCaption =>
+        "Your parent said no. You can ask again when your next screen time starts.";
+    public override string ExtraTimeDeniedUntilNextPeriod =>
+        "Your parent already said no. You can ask again when your next screen time starts.";
+
+    public override string ExtraTimeNotRunningOutYet => "You still have plenty of time left.";
+    public override string ExtraTimeAlreadyAsked => "You already asked. Waiting for an answer.";
+    public override string ExtraTimeTooManyToday => "You have asked enough times today.";
+    public override string ExtraTimeNotPossible => "More time cannot be asked for right now.";
+
+    public override string ExtraTimeApprovedTitle => "More time added";
+    public override string ExtraTimeApprovedMessage(string scope, int minutes) =>
+        $"Your parent added {minutes} minutes to {scope}.";
+    public override string ExtraTimeDeniedTitle => "No extra time";
+    public override string ExtraTimeDeniedMessage(string scope) => $"Your parent said no to more time on {scope}.";
+
+    public override string ExtraTimeAddedToday(int minutes) => $"+{minutes} min added today";
 }

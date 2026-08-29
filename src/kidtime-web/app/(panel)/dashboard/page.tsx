@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { ArrowRight, Clock3, Monitor, Sparkles } from "lucide-react";
+import { ArrowRight, Clock3, HandHelping, Monitor, Sparkles } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
 import { formatDuration } from "@/lib/format";
-import type { ApplicationSummary, DeviceStatistics, DeviceSummary } from "@/lib/types";
+import type { ApplicationSummary, DeviceStatistics, DeviceSummary, TimeExtensionRequest } from "@/lib/types";
 import { ApplicationIcon } from "@/components/application-icon";
+import { AutoRefresh } from "@/components/auto-refresh";
 import { EmptyDevices } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { QuickBlock } from "@/components/quick-block";
@@ -20,9 +21,10 @@ export default async function DashboardPage() {
   if (devices.length === 0) return <><Heading /><EmptyDevices /></>;
 
   const device = devices[0];
-  const [statistics, applications] = await Promise.all([
+  const [statistics, applications, requests] = await Promise.all([
     backendFetch<DeviceStatistics>(`/api/statistics/devices/${device.id}`),
     backendFetch<ApplicationSummary[]>(`/api/applications?deviceId=${device.id}`),
+    backendFetch<TimeExtensionRequest[]>("/api/time-extensions"),
   ]);
   const percent = device.dailyLimitSeconds
     ? Math.min(100, device.todayActiveSeconds / device.dailyLimitSeconds * 100)
@@ -32,7 +34,30 @@ export default async function DashboardPage() {
 
   return (
     <>
+      <AutoRefresh seconds={30} />
       <Heading />
+      {requests.length > 0 && (
+        /*
+          A child asks for more time with minutes left on the clock, so the request has to be
+          visible on the page a parent already has open, not only on one they might navigate to.
+        */
+        <Card className="mb-4 border-primary/40 bg-primary/5">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+            <div className="flex items-center gap-3">
+              <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary"><HandHelping className="size-4" /></span>
+              <div>
+                <p className="font-medium">{requests.length === 1 ? "A request is waiting" : `${requests.length} requests are waiting`}</p>
+                <p className="text-sm text-muted-foreground">
+                  {requests[0].deviceName} asked for {requests[0].requestedMinutes} more minutes on{" "}
+                  {requests[0].isPc ? "PC screen time" : requests[0].displayName}
+                  {requests.length > 1 ? ", and more" : ""}.
+                </p>
+              </div>
+            </div>
+            <Button render={<Link href="/requests" />}>Review <ArrowRight data-icon="inline-end" /></Button>
+          </CardContent>
+        </Card>
+      )}
       <Card className="mb-4">
         <CardHeader className="border-b">
           <div className="flex items-center gap-2"><StatusBadge online={device.isOnline} /><span className="text-sm text-muted-foreground">{device.windowsVersion}</span></div>

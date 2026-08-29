@@ -50,6 +50,21 @@ public sealed class WeeklySchedule
     }
 }
 
+/// <summary>
+/// Extra time a parent granted for one local date, in answer to a child asking for it.
+///
+/// It rides inside the rule snapshot rather than on a channel of its own, so granting it bumps
+/// the rule revision and reaches the PC over the path that already exists - and it expires by
+/// itself the moment the device-local date moves on, with no second message needed to take it
+/// back. A bonus only means anything beside a daily limit: unlimited time cannot be extended.
+/// </summary>
+public sealed record TimeBonus(DateOnly LocalDate, int Seconds)
+{
+    /// <summary>The bonus that applies on a given device-local date, in seconds; zero otherwise.</summary>
+    public static int SecondsOn(TimeBonus? bonus, DateOnly localDate) =>
+        bonus is not null && bonus.LocalDate == localDate ? Math.Max(0, bonus.Seconds) : 0;
+}
+
 public sealed class ApplicationRuleSnapshot
 {
     public required string IdentityKey { get; init; }
@@ -57,6 +72,10 @@ public sealed class ApplicationRuleSnapshot
     public bool ManuallyBlocked { get; init; }
     public int? DailyLimitSeconds { get; init; }
     public WeeklySchedule Schedule { get; init; } = new();
+
+    /// <summary>Extra time granted for this application today, if any.</summary>
+    public TimeBonus? Bonus { get; init; }
+
     public DateTimeOffset UpdatedAtUtc { get; init; }
 }
 
@@ -79,6 +98,10 @@ public sealed class DeviceRuleSnapshot
     public DateTimeOffset? ManualBlockUntilUtc { get; init; }
     public int? DailyLimitSeconds { get; init; }
     public WeeklySchedule Schedule { get; init; } = new();
+
+    /// <summary>Extra screen time granted for this PC today, if any.</summary>
+    public TimeBonus? Bonus { get; init; }
+
     public List<ApplicationRuleSnapshot> Applications { get; init; } = [];
 }
 

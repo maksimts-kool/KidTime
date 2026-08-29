@@ -21,7 +21,20 @@ public static class ApplicationCatalogPolicy
         // a window a child actually uses, and that one is resolved onto steam.exe below; the rest
         // are background machinery and must never earn a card of their own.
         "gameoverlayui.exe", "steamservice.exe", "steamerrorreporter.exe", "steamerrorreporter64.exe",
-        "steam_monitor.exe", "streaming_client.exe"
+        "steam_monitor.exe", "streaming_client.exe",
+        // Command-line tools that ship inside an application and are never opened by a person.
+        // adb.exe arrives with every Android emulator - BlueStacks starts it on its own - and
+        // ffmpeg.exe is bundled by half the recorders and launchers on a gaming PC. Both reached a
+        // real parent's panel as cards named after the bare executable, because neither carries any
+        // version metadata to name them with.
+        "adb.exe", "ffmpeg.exe", "ffprobe.exe",
+        // Riot's anti-cheat. The game it protects keeps its own card; the tray icon and the driver
+        // service are not things a child opens, and blocking them would break the game silently.
+        "vgc.exe", "vgtray.exe",
+        // Valve's capability probes. Steam runs them at start-up to ask the GPU what it supports,
+        // and each one flashes through the foreground long enough to be sampled.
+        "steamsysinfo.exe", "vulkandriverquery.exe", "vulkandriverquery64.exe",
+        "gldriverquery.exe", "gldriverquery64.exe"
     };
 
     private static readonly string[] PackageInfrastructureTokens =
@@ -51,7 +64,14 @@ public static class ApplicationCatalogPolicy
         "gameinput", "maintenance service", "webview2", "vmware tools", "vmware svga", "graphics driver",
         // An anti-cheat starting is the game starting, but the card it would earn is not one a
         // parent can act on: blocking it breaks the game without saying so.
-        "anti-cheat", "anticheat", "battleye"
+        "anti-cheat", "anticheat", "battleye",
+        // A hypervisor is the machinery an emulator runs on, never the window a child looks at:
+        // BlueStacks' BstkSVC.exe announces itself as "Bluestack Hypervisor" beside the
+        // HD-Player.exe card that is the emulator itself.
+        "hypervisor", "telemetry", "crash handler", "crash reporter",
+        // An installer is not a thing to put a screen-time rule on, whatever it installs. The
+        // packaged "LG Monitor App Installer" is the shape this catches that a file name cannot.
+        "installer"
     ];
 
     /// <summary>
@@ -164,7 +184,7 @@ public static class ApplicationCatalogPolicy
         // recognizes, let alone one blocking WhatsApp through would be honest about.
         if (executableName.Length > 0
             && !InteractiveDespiteRoleName.Contains(executableName)
-            && (InfrastructureExecutables.Contains(executableName)
+            && (IsInfrastructureExecutable(executableName)
                 || IsNonInteractiveExecutableName(executableName)))
             return false;
 
@@ -175,6 +195,14 @@ public static class ApplicationCatalogPolicy
         var packageIdentity = packageFamily.Length > 0
             ? packageFamily
             : ReadWindowsAppsPackageFamily(executablePath);
+        var productText = $"{displayName}|{productName}";
+        // What a package calls itself is checked before its family is taken as proof that it is an
+        // application. A reported family says "this is a real packaged thing", not "a person opens
+        // this": LGElectronics.LGMonitorApp announces itself as "LG Monitor App Installer", and an
+        // installer is not something to put a screen-time rule on however it was packaged.
+        if (ProductInfrastructureTokens.Any(token =>
+                productText.Contains(token, StringComparison.OrdinalIgnoreCase)))
+            return false;
         if (packageIdentity.Length > 0)
         {
             var packageText = $"{displayName}|{productName}|{packageIdentity}";
@@ -187,11 +215,7 @@ public static class ApplicationCatalogPolicy
             if (packageFamily.Length > 0) return true;
         }
 
-        if (!executableName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return false;
-
-        var productText = $"{displayName}|{productName}";
-        return !ProductInfrastructureTokens.Any(token =>
-            productText.Contains(token, StringComparison.OrdinalIgnoreCase));
+        return executableName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -307,6 +331,43 @@ public static class ApplicationCatalogPolicy
         return text.ToString();
     }
 
+    /// <summary>
+    /// Microsoft-published applications that are entertainment rather than Windows tooling, and so
+    /// stay on the parent's page whatever the "show Microsoft apps" switch says. Minecraft is why
+    /// this list exists: its package family is Microsoft.MinecraftUWP_8wekyb3d8bbwe, so a switch
+    /// that filtered on the publisher alone would hide the one application a parent most wants a
+    /// rule on. Keyed on the package name, the part of the family before the publisher id.
+    /// </summary>
+    private static readonly HashSet<string> MicrosoftEntertainmentPackages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Microsoft.MinecraftUWP", "Microsoft.MinecraftWindowsBeta", "Microsoft.MinecraftEducationEdition",
+        "Microsoft.MicrosoftSolitaireCollection", "Microsoft.GamingApp", "Microsoft.XboxApp",
+        "Microsoft.MicrosoftMahjong", "Microsoft.MicrosoftJigsaw", "Microsoft.MicrosoftSudoku",
+        "Microsoft.MicrosoftMinesweeper", "Microsoft.MicrosoftUltimateWordGames", "Microsoft.MicrosoftTreasureHunt"
+    };
+
+    /// <summary>
+    /// Whether an application is one Microsoft ships with Windows rather than one somebody chose to
+    /// install. A real controlled PC carries three dozen of them - Clock, Weather, Feedback Hub,
+    /// Quick Assist - and listing them all by default buries Steam, Roblox and Discord, so the
+    /// parent's page hides them behind a switch.
+    ///
+    /// This is a presentation filter and nothing else. A rule on a hidden application is still in
+    /// the snapshot, still evaluated, and still enforced; hiding one never relaxes it.
+    /// </summary>
+    public static bool IsMicrosoftPublished(ApplicationDescriptor application)
+    {
+        application = ResolvePrincipal(application);
+        if (MicrosoftEntertainmentPackages.Contains(ReadPackageName(application))) return false;
+        // 8wekyb3d8bbwe is Microsoft's own publisher id and the tail of every in-box package
+        // family, which identifies a packaged application even when nothing else was readable.
+        if ((application.PackageFamilyName ?? string.Empty)
+            .EndsWith("_8wekyb3d8bbwe", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return $"{application.SignaturePublisher}|{application.Company}"
+            .Contains("Microsoft Corporation", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static ApplicationDescriptor NormalizeForCatalog(ApplicationDescriptor application)
     {
         application = ResolvePrincipal(application);
@@ -372,11 +433,30 @@ public static class ApplicationCatalogPolicy
             : $"{name[..versionIndex]}_{publisherId}";
     }
 
+    /// <summary>
+    /// Whether a name is one of the known background executables, with a trailing bitness marker
+    /// discounted. Windows ships both halves of most of these - gameoverlayui.exe on one PC is
+    /// gameoverlayui64.exe on the next - and listing every pair separately is how the 64-bit one
+    /// gets forgotten and earns a card.
+    /// </summary>
+    private static bool IsInfrastructureExecutable(string executableName)
+    {
+        if (InfrastructureExecutables.Contains(executableName)) return true;
+        var stem = Path.GetFileNameWithoutExtension(executableName).Trim();
+        var narrowed = StripBitnessMarker(stem.ToLowerInvariant());
+        return narrowed.Length != stem.Length && InfrastructureExecutables.Contains($"{narrowed}.exe");
+    }
+
     private static bool IsNonInteractiveExecutableName(string executableName)
     {
-        var stem = StripCopyMarker(Path.GetFileNameWithoutExtension(executableName).Trim().ToLowerInvariant());
+        var stem = StripBitnessMarker(
+            StripCopyMarker(Path.GetFileNameWithoutExtension(executableName).Trim().ToLowerInvariant()));
         if (stem is "install" or "installer" or "setup" or "uninstall" or "uninstaller" or "update" or "updater")
             return true;
+        // A file that carries its own version number is a download, not an installed application:
+        // ProtonVPN_v5.1.7_x64.exe is the installer a child ran once, while the application it
+        // installed is plain ProtonVPN.exe and keeps its card.
+        if (HasEmbeddedVersion(stem)) return true;
         // A role word can lead the name as readily as it can end it: Rockstar's
         // uninstallRGSCRedistributable.exe reached a real parent's panel as "Rockstar Games SDK",
         // and unins000.exe is what every Inno Setup package leaves behind.
@@ -395,6 +475,28 @@ public static class ApplicationCatalogPolicy
                || HasRoleSuffix(stem, "agent")
                || HasRoleSuffix(stem, "service")
                || HasRoleSuffix(stem, "services")
+               // The same role, abbreviated the way a vendor writes it in a file name.
+               // BlueStacks' BstkSVC.exe is the hypervisor service behind HD-Player.exe, and a
+               // watchdog or a daemon is machinery by definition.
+               || HasRoleSuffix(stem, "svc")
+               || HasRoleSuffix(stem, "daemon")
+               || HasRoleSuffix(stem, "watchdog")
+               // A tray icon is a vendor's background half announcing itself, not the application:
+               // lghub_system_tray.exe sits beside the real lghub.exe, and vgtray.exe is Riot's
+               // anti-cheat, which a parent must not be offered a rule for.
+               || HasRoleSuffix(stem, "tray")
+               // A proxy process hosts a window that belongs to something else. Edge names its
+               // mscopilot_proxy.exe and msedge_proxy.exe that way, and both reached a parent's
+               // panel as a second "Microsoft Edge".
+               || HasRoleSuffix(stem, "proxy")
+               // Probes an application runs to interrogate the machine. Steam starts
+               // vulkandriverquery.exe, gldriverquery64.exe and steamsysinfo.exe at every launch,
+               // and each is in the foreground just long enough to be sampled.
+               || HasRoleSuffix(stem, "driverquery")
+               || HasRoleSuffix(stem, "sysinfo")
+               // Android Debug Bridge, which every emulator ships and starts on its own -
+               // adb.exe beside BlueStacks, HD-Adb.exe inside it.
+               || HasRoleSuffix(stem, "adb")
                // A crash reporter starting is the opposite of a child using an application, yet it
                // is exactly what the foreground sample catches at that moment. Steam and Unity each
                // ship one, and neither belongs on the parent's panel.
@@ -416,6 +518,49 @@ public static class ApplicationCatalogPolicy
         if (open <= 0) return stem;
         var inner = trimmed[(open + 1)..^1];
         return inner.Length > 0 && inner.All(char.IsAsciiDigit) ? trimmed[..open].TrimEnd() : stem;
+    }
+
+    /// <summary>
+    /// Drops a trailing bitness marker so a name is judged on the role it names rather than on
+    /// which build of it is installed: "nvsphelper64" is the helper "nvsphelper" is. The marker is
+    /// only dropped when a real name is left behind, so a game called cs2 or Portal2 keeps its own.
+    /// </summary>
+    private static string StripBitnessMarker(string stem)
+    {
+        foreach (var marker in (string[])["x64", "x86", "64", "32"])
+        {
+            if (!stem.EndsWith(marker, StringComparison.Ordinal)) continue;
+            var head = stem[..^marker.Length].TrimEnd('_', '-', '.', ' ');
+            if (head.Length >= 3) return head;
+        }
+        return stem;
+    }
+
+    /// <summary>
+    /// Whether a name carries a dotted version number, the shape a downloaded installer has and an
+    /// installed application does not.
+    /// </summary>
+    private static bool HasEmbeddedVersion(string stem)
+    {
+        var digitsBefore = 0;
+        var dots = 0;
+        for (var index = 0; index < stem.Length; index++)
+        {
+            var current = stem[index];
+            if (char.IsAsciiDigit(current))
+            {
+                digitsBefore++;
+                continue;
+            }
+            if (current == '.' && digitsBefore > 0 && index + 1 < stem.Length && char.IsAsciiDigit(stem[index + 1]))
+            {
+                if (++dots == 2) return true;
+                continue;
+            }
+            digitsBefore = 0;
+            dots = 0;
+        }
+        return false;
     }
 
     /// <summary>

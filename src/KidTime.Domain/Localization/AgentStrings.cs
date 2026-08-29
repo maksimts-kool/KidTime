@@ -283,4 +283,47 @@ public abstract class AgentStrings
 
     public abstract string CountdownCardTimeLeft { get; }
     public abstract string CountdownCardDismiss { get; }
+
+    // ---------------------------------------------------------------- extra time
+
+    /// <summary>
+    /// Everything around asking a parent for more time. The child reads all of it, so it lives
+    /// here like the rest - and the wording stays plain: a request is a question, never a
+    /// negotiation, and a refusal is stated without any suggestion that asking again will work.
+    /// </summary>
+    public abstract string ExtraTimeCardTitle { get; }
+
+    /// <summary>Names what the extra time would be for: the PC, or one application.</summary>
+    public abstract string ExtraTimeForScope(string scope);
+
+    public abstract string ExtraTimeChooseHowMuch { get; }
+
+    /// <summary>The amount the slider is on, as the child reads it: "+15 min".</summary>
+    public abstract string ExtraTimeAmount(int minutes);
+
+    public abstract string ExtraTimeAskButton { get; }
+    public abstract string ExtraTimeSent { get; }
+    public abstract string ExtraTimeWaitingForParent { get; }
+    public abstract string ExtraTimeGrantedCaption(int minutes);
+    public abstract string ExtraTimeDeniedCaption { get; }
+
+    /// <summary>
+    /// The answer to asking again after a refusal, while the same stretch of screen time is still
+    /// running. It has to say when asking becomes possible again, or it reads as "never".
+    /// </summary>
+    public abstract string ExtraTimeDeniedUntilNextPeriod { get; }
+
+    /// <summary>Why a request was not accepted. Each is the whole answer the child gets.</summary>
+    public abstract string ExtraTimeNotRunningOutYet { get; }
+    public abstract string ExtraTimeAlreadyAsked { get; }
+    public abstract string ExtraTimeTooManyToday { get; }
+    public abstract string ExtraTimeNotPossible { get; }
+
+    public abstract string ExtraTimeApprovedTitle { get; }
+    public abstract string ExtraTimeApprovedMessage(string scope, int minutes);
+    public abstract string ExtraTimeDeniedTitle { get; }
+    public abstract string ExtraTimeDeniedMessage(string scope);
+
+    /// <summary>Shown on the Today panel once extra time is part of the allowance.</summary>
+    public abstract string ExtraTimeAddedToday(int minutes);
 }

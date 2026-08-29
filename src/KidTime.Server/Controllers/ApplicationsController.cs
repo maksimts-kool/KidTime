@@ -68,6 +68,10 @@ public sealed class ApplicationsController(
                 item.LastSeenUtc,
                 todayActiveSeconds = seconds,
                 hasIcon = item.IconPng is { Length: > 0 },
+                // The panel hides Windows' own applications behind a switch. The classification is
+                // made here rather than in the browser because only the server sees the publisher
+                // and package family the decision is made from.
+                isMicrosoft = ApplicationCatalogPolicy.IsMicrosoftPublished(ToDescriptor(item)),
                 item.Rule.ManuallyBlocked,
                 item.Rule.DailyLimitSeconds
             });

@@ -56,7 +56,16 @@ public sealed class NamedPipeHost(
     {
         AcceptDiagnostics(request.Diagnostics);
 
-        if (request is { UsageSample: { } sample, RemovalRequest: null })
+        if (request is { UsageSample: null, RemovalRequest: null, TimeExtension: { } extension })
+        {
+            // Asking for more time is not a privileged operation - it records a question the
+            // parent has to answer. The amount, the scope, and how little is actually left are
+            // all checked by the service, so the message itself carries no authority.
+            var result = await coordinator.RequestTimeExtensionAsync(extension, cancellationToken);
+            return new SessionAgentResponse(TimeExtension: result);
+        }
+
+        if (request is { UsageSample: { } sample, RemovalRequest: null, TimeExtension: null })
         {
             var enforcement = await coordinator.HandleSampleAsync(sample, cancellationToken);
             // The screen-time window is the only consumer of the full snapshot, and building it
@@ -67,7 +76,7 @@ public sealed class NamedPipeHost(
             return new SessionAgentResponse(Enforcement: enforcement with { Status = status });
         }
 
-        if (request is { UsageSample: null, RemovalRequest: { } removal })
+        if (request is { UsageSample: null, RemovalRequest: { } removal, TimeExtension: null })
         {
             var result = await removalService.AuthorizeAndScheduleAsync(
                 removal,
@@ -76,14 +85,14 @@ public sealed class NamedPipeHost(
             return new SessionAgentResponse(Removal: result);
         }
 
-        if (request is { UsageSample: null, RemovalRequest: null, Diagnostics.Count: > 0 })
+        if (request is { UsageSample: null, RemovalRequest: null, TimeExtension: null, Diagnostics.Count: > 0 })
             return new SessionAgentResponse();
 
         throw new InvalidDataException("IPC request must contain exactly one supported operation.");
     }
 
     /// <summary>
-    /// Fault reports are the third and last shape this pipe accepts. They are inert data: the
+    /// Fault reports are the last of the four shapes this pipe accepts. They are inert data: the
     /// component is stamped by the service rather than trusted from the message, every field is
     /// truncated, and the batch is bounded, so the unelevated agent cannot use this path to
     /// impersonate the service, flood the queue, or reach any privileged operation.

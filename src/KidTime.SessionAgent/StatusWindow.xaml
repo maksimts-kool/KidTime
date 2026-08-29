@@ -202,10 +202,64 @@
                             </StackPanel>
                         </Grid>
                     </ui:Card>
+
+                    <!--
+                        Asking a parent for more time. The card only appears once an allowance is
+                        nearly spent - the service decides that and says so on every reply - so it
+                        is not a button sitting there all day inviting a child to press it.
+                    -->
+                    <ui:Card x:Name="ExtraTimeCard" Margin="0,14,0,0" Padding="20" Visibility="Collapsed">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Timer24" FontSize="20" VerticalAlignment="Center" />
+                                <TextBlock x:Name="ExtraTimeTitleText"
+                                           Margin="10,0,0,0"
+                                           VerticalAlignment="Center"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           Text="Need more time?" />
+                            </StackPanel>
+                            <TextBlock x:Name="ExtraTimeScopeText"
+                                       Margin="0,6,0,0"
+                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="Ask a parent for more time on this PC." />
+                            <TextBlock x:Name="ExtraTimeDetailText"
+                                       Margin="0,2,0,0"
+                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="Choose how much to ask for." />
+                            <!--
+                                The amount is chosen in the shared popup, not here. One slider in
+                                one place serves the PC card, every application card, and the
+                                shortcut on the countdown warning.
+                            -->
+                            <StackPanel x:Name="ExtraTimeControls" Margin="0,12,0,0">
+                                <ui:Button x:Name="ExtraTimeAskButton"
+                                           Padding="16,7"
+                                           HorizontalAlignment="Left"
+                                           Appearance="Primary"
+                                           Click="ExtraTimeButton_Click"
+                                           Content="Ask for more time" />
+                            </StackPanel>
+                            <ui:InfoBar x:Name="ExtraTimeInfo"
+                                        Margin="0,12,0,0"
+                                        IsClosable="False"
+                                        IsOpen="False"
+                                        Severity="Informational"
+                                        Title="" />
+                        </StackPanel>
+                    </ui:Card>
                 </StackPanel>
 
                 <!-- Apps -->
                 <StackPanel x:Name="AppsPanel" Visibility="Collapsed">
+                    <ui:InfoBar x:Name="AppsExtraTimeInfo"
+                                Margin="0,0,0,10"
+                                IsClosable="False"
+                                IsOpen="False"
+                                Severity="Informational"
+                                Title="" />
                     <ui:Card x:Name="EmptyAppsCard" Padding="24">
                         <StackPanel HorizontalAlignment="Center">
                             <ui:SymbolIcon HorizontalAlignment="Center" Symbol="CheckmarkCircle24" FontSize="32" />
@@ -240,12 +294,26 @@
                                                        Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
                                                        Text="{Binding DailySummary}" />
                                         </StackPanel>
-                                        <ui:Badge Grid.Column="2"
-                                                  Margin="12,3,0,0"
-                                                  Padding="10,5"
-                                                  VerticalAlignment="Top"
-                                                  Appearance="{Binding StatusAppearance}"
-                                                  Content="{Binding StatusText}" />
+                                        <StackPanel Grid.Column="2" Margin="12,3,0,0" HorizontalAlignment="Right">
+                                            <ui:Badge Padding="10,5"
+                                                      HorizontalAlignment="Right"
+                                                      Appearance="{Binding StatusAppearance}"
+                                                      Content="{Binding StatusText}" />
+                                            <!--
+                                                Appears on the card of an application that is
+                                                nearly out of time, and nowhere else. Tag carries
+                                                the identity so the handler knows which one.
+                                            -->
+                                            <ui:Button x:Name="ApplicationExtraTimeButton"
+                                                       Margin="0,8,0,0"
+                                                       Padding="12,5"
+                                                       HorizontalAlignment="Right"
+                                                       Appearance="Primary"
+                                                       Click="ApplicationExtraTimeButton_Click"
+                                                       Content="{Binding ExtraTimeButtonText}"
+                                                       Tag="{Binding IdentityKey}"
+                                                       Visibility="{Binding ExtraTimeVisibility}" />
+                                        </StackPanel>
 
                                         <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
                                             <Grid.RowDefinitions>
