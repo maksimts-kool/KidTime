@@ -237,8 +237,8 @@ enforcement boundary where it was.
    Apps tab can put the button on the card of the one that is running out rather than only on
    whatever happens to be in front. The offer deliberately **outlives the block itself** — the
    moment a child most wants to ask is the moment the time ran out and the sign-out card
-   appeared — but a manual block and a schedule window are excluded, because extra time only ever
-   raises a daily limit and a button that could not possibly help is worse than none.
+   appeared — and **anything that is actually shut can be asked about**, a manual block and a
+   closed schedule window included, because a grant now lifts those two as well.
 2. The child asks from four places, and all of them open the **same popup**: the PC card in the
    Today panel, the button on an application's card in the Apps tab, a button on the countdown
    card, and an action button on the urgent running-out toast. One slider in one dialog serves
@@ -248,7 +248,8 @@ enforcement boundary where it was.
    still has the window and the card — **nothing depends on it**.
 3. `TimeExtensionSubmission` crosses the named pipe as the fourth and last shape that protocol
    accepts. `EnforcementCoordinator.RequestTimeExtensionAsync` resolves the scope, measures what
-   is actually left from the buffered usage and the limit in force, and `TimeExtensionService`
+   is actually left from the buffered usage and the limit in force — or, for a scope that is
+   already shut, says so, since a block has nothing left to measure — and `TimeExtensionService`
    records the request in SQLite. It is durable before it is uploaded, so a service restart or a
    night offline never swallows a question a child is waiting on.
 4. `AgentWorker` uploads pending requests before usage, and `POST api/agent/time-extensions`
@@ -264,7 +265,19 @@ enforcement boundary where it was.
    on each application rule, and `RuleEvaluator.EffectiveDailyLimitSeconds` is where every path
    must read a daily limit from. **A bonus carries the device-local date it was granted for**, so
    it stops applying by itself at midnight with no second message to take it away, and a grant
-   approved after the day has turned grants nothing.
+   approved after the day has turned adds nothing to that day's limit.
+
+   A `TimeBonus` carries a second thing, because the restrictions extra time lifts are not counted
+   the same way. `Seconds` raises a daily limit and is spent in **active foreground time** like the
+   rest of that allowance. `LiftedUntilUtc` is what the same grant does to a manual block or a
+   closed schedule window: neither is an allowance with seconds left in it, so that half runs as
+   **wall-clock time from the parent's decision** — `DecidedAtUtc` plus the granted minutes — which
+   is the one starting point the child and the parent both saw. `TimeBonus.LiftsBlocksAt` is the
+   only thing `RuleEvaluator` consults for it, and only the manual-block and schedule branches
+   consult it: a lifted block never hands over a spent daily limit, since the same grant already
+   raised that by its own minutes. The window is an absolute instant rather than a date, so one
+   opened at ten to midnight runs the minutes it was given; the snapshot therefore reads yesterday's
+   grants too, for the window alone.
 7. The agent announces the answer once — `TimeExtensionService` marks it announced after the
    notification is queued — as an ordinary toast. Nothing is closing, so nothing interrupts.
 
@@ -274,7 +287,8 @@ there is nothing between the stops to argue about. Both ends check it — a valu
 refused by the service and again by the server, because the slider is a convenience and never the
 constraint. Beyond that: one pending request per scope, eight requests per PC per day, and a grant
 bounded at four hours, which is looser than the slider so a decision made outside it is still
-bounded by something.
+bounded by something. That ceiling is also what bounds the window a grant opens over a manual
+block, which is the one case where the minutes are not spent by the child using the PC.
 
 **A refusal holds for the allowance period it was given in.** `RuleEvaluator.GetAllowancePeriodKey`
 names that period — the schedule window currently open, or the device-local day when no schedule
@@ -286,9 +300,12 @@ about Roblox. A grant is not a lock — minutes that have themselves run out can
 again — and the daily cap still stands behind all of it.
 
 If a grant lands during a sign-out countdown, the ordinary path cancels it: the rule stops
-blocking, `SessionLockoutService` dismisses the warning and clears the schedule. **Do not add a
+blocking, `SessionLockoutService` dismisses the warning and clears the schedule. That is the same
+path that ends a manual block for the granted minutes — nothing separate lifts it. **Do not add a
 path that grants time locally** — offline, the cached snapshot is the answer, and a request simply
-waits for the next synchronization.
+waits for the next synchronization, which is also why the window is anchored to the decision and
+not to the moment the PC hears about it: a grant nobody was there to use is over rather than
+waiting to be spent.
 
 ### Rule precedence
 
@@ -297,6 +314,10 @@ A PC or application is unavailable when any relevant rule denies it, in this ord
 1. active manual block;
 2. active-time daily total greater than or equal to the limit;
 3. current device-local time outside the weekly schedule.
+
+Extra time a parent granted while the scope was shut suspends the first and the third for the
+minutes it was given, counted from the decision; it never suspends the second, which the same
+grant has already raised by those minutes.
 
 PC rules are evaluated before the interactive desktop is exposed. Application rules are evaluated at
 process discovery and again while the application is foreground, so reaching a limit closes an
@@ -564,9 +585,11 @@ corner. It is not a blocker. The constraints are the design:
 - `WS_EX_NOACTIVATE` and `WS_EX_TOOLWINDOW` keep it out of the focus chain and out of Alt+Tab. A
   window that stole the keyboard while telling a child to save their work would be self-defeating.
 - It is a small corner card sized like a toast, cannot be resized, and dismissing it hides the
-  card only. The extra-time shortcut, when it is offered, takes a full-width row of its own rather
-  than sharing one with "Got it": both labels are sentences in Russian, and on a 380-wide card
-  they ran straight through each other and the caption. A warning whose buttons overlap looks
+  card only. **"Got it" carries the accent and the extra-time shortcut is drawn small and quiet
+  beside it**: this card is a warning, and acknowledging it is the ordinary thing to do, while
+  asking for more time is the side door that is not always even offered. The caption sits on its
+  own row above the two, because both labels are sentences in Russian and on a 380-wide card a
+  caption plus two buttons ran straight through each other. A warning whose buttons overlap looks
   broken at the one moment it must not.
 - It cannot strand itself. One shared one-second timer closes any card past its deadline and stops
   when the last card goes; and the window belongs to the supervised SessionAgent process, which
@@ -742,10 +765,12 @@ a digit are kept, Microsoft-published applications recognized as such while the 
 are not, a runtime host filtered despite reporting the family it hosts, package identities shown as
 readable names, rule-change notifications, urgent running-out reminders, a delayed final
 warning restated in the seconds actually left, an expired final warning dropped rather than shown,
-persisted first-block grace, granted extra time raising a daily limit for its own date only and
-never lifting a manual block or a schedule, extra time offered only once an allowance is nearly
-spent and still offered after it has run out, offered on every nearly-spent application rather
-than only the foreground one, a second request refused while the first is unanswered, a refusal
+persisted first-block grace, granted extra time raising a daily limit for its own date only,
+minutes alone never lifting a manual block or a schedule while the window a grant opens lifts both
+from the decision until it expires, per scope and without handing over a spent daily limit, extra
+time offered only once an allowance is nearly spent and still offered after it has run out, offered
+while the PC or an application is blocked outright and askable there with no limit to measure,
+offered on every nearly-spent application rather than only the foreground one, a second request refused while the first is unanswered, a refusal
 that holds for its allowance period and lifts when the next window opens without silencing the
 other scopes, the daily request cap, a request that survives a restart before it is uploaded, an
 answer announced once however often the server repeats it, every stop on the request slider
@@ -801,9 +826,14 @@ rules:
 17. deny that request and confirm the child cannot ask again for it while the same schedule window
     is open, that the card says when they may, and that the PC's own button still works — then
     let the next window open and confirm the button comes back on its own;
-18. confirm a granted 30 minutes is gone the next day without anything being sent to remove it,
-    and that a manual block offers no extra-time button at all;
-19. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
+18. confirm a granted 30 minutes is gone the next day without anything being sent to remove it;
+19. manually block the PC, and confirm the child can still ask: the countdown card carries the
+    small button beside "Got it" while "Got it" is the accented one, the request reaches the
+    Requests page, and approving 20 minutes signs nothing out and lets the child back in from the
+    moment of the decision — then watch those twenty minutes run out on the wall clock and confirm
+    the block returns with the ordinary warning; do the same with a blocked application and confirm
+    only that application comes back;
+20. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
     screen-time window, the next notification, and the countdown card all change without
     reinstalling or signing out, then block the PC and confirm the card counts down in the corner,
     never takes focus, does not overlap its own buttons with the longer Russian labels, and
@@ -854,15 +884,20 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
 - **The same error keeps coming back after being marked handled:** marking handled is not a fix.
   The next occurrence reopens the row and raises its count, which is the intended signal that the
   fault is still happening.
-- **The child says the "ask for more time" button is not there:** it appears only when a daily
-  limit has five minutes or less left, and only for a limit — a manual block and a schedule window
-  are excluded on purpose, because extra time cannot lift either. A request already waiting on an
-  answer hides it until the parent decides, and so does a refusal, until the next schedule window
-  opens (or the next day, with no schedule configured). The card says which of those it is.
+- **The child says the "ask for more time" button is not there:** it appears when a daily limit has
+  five minutes or less left, and whenever the PC or the application is actually shut — a spent
+  limit, a manual block, or a closed schedule window. A request already waiting on an answer hides
+  it until the parent decides, and so does a refusal, until the next schedule window opens (or the
+  next day, with no schedule configured). The card says which of those it is. On the countdown card
+  the button is the small quiet one beside "Got it", which is deliberate.
 - **An approved grant has not reached the PC:** a decision bumps the rule revision like any other
   change, so it lands with the next sync. Check `LastSeenUtc` and that the revision on the device
-  page has caught up. A grant is for the device-local date the child asked on and grants nothing
-  once that date has passed.
+  page has caught up. A grant adds minutes to the device-local date the child asked on and adds
+  nothing to the limit once that date has passed.
+- **A grant given during a block ran short:** that half of a grant is wall-clock time from the
+  moment the parent approved it, not from the moment the PC heard about it, so a PC that was
+  offline or switched off spends the window while nobody is using it. The minutes added to a daily
+  limit are not affected — those are still spent in active foreground time.
 - **The toast's extra-time button does nothing:** the button reaches the running agent through the
   notification COM server, which an unusual machine can refuse to register. The screen-time window
   and the countdown card are the paths that do not depend on it; check

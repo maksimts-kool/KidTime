@@ -87,42 +87,44 @@
                          Maximum="100"
                          Value="100" />
 
-            <!--
-                The ask gets its own full-width row rather than sharing one with "Got it". Both
-                labels are sentences, not words - "Попросить ещё времени" beside "Понятно" beside
-                the caption ran straight through each other on a 380-wide card - and a warning
-                whose buttons overlap is a warning that looks broken at the worst moment.
-                Shown only while the service is offering extra time for what is closing; it opens
-                the request and does nothing else, so the card stays a warning.
-            -->
-            <ui:Button x:Name="AskForTimeButton"
+            <TextBlock x:Name="CountdownCaption"
                        Grid.Row="3"
-                       Margin="46,12,0,0"
-                       Padding="12,6"
-                       HorizontalAlignment="Stretch"
-                       HorizontalContentAlignment="Center"
-                       Appearance="Primary"
-                       Click="AskForTimeButton_Click"
-                       Content="Ask for more time"
-                       Focusable="False"
-                       Visibility="Collapsed" />
+                       Margin="46,6,0,0"
+                       Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                       FontSize="12"
+                       Text="Time left"
+                       TextTrimming="CharacterEllipsis" />
 
+            <!--
+                Two buttons, and the weight between them is the point. This card is a warning, so
+                acknowledging it is the ordinary thing to do and gets the accent; asking for more
+                time is the side door and is drawn small and quiet, offered only while the service
+                says asking is actually possible for what is closing.
+
+                They share one row but never one line's worth of space: the caption moved up to its
+                own row above, because "Попросить ещё времени" beside "Понятно" beside a caption ran
+                straight through each other on a 380-wide card, and a warning whose buttons overlap
+                looks broken at the one moment it must not.
+            -->
             <Grid Grid.Row="4" Margin="46,12,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="CountdownCaption"
-                           VerticalAlignment="Center"
+                <ui:Button x:Name="AskForTimeButton"
+                           HorizontalAlignment="Left"
                            Margin="0,0,10,0"
-                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                           Padding="8,3"
                            FontSize="12"
-                           Text="Time left"
-                           TextTrimming="CharacterEllipsis" />
+                           Appearance="Transparent"
+                           Click="AskForTimeButton_Click"
+                           Content="Ask for more time"
+                           Focusable="False"
+                           Visibility="Collapsed" />
                 <ui:Button x:Name="DismissButton"
                            Grid.Column="1"
-                           Padding="12,5"
-                           Appearance="Secondary"
+                           Padding="14,6"
+                           Appearance="Primary"
                            Click="DismissButton_Click"
                            Content="Got it"
                            Focusable="False" />

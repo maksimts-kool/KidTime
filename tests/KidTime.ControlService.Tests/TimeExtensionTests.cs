@@ -25,7 +25,7 @@ public sealed class TimeExtensionTests : IDisposable
         var (_, extensions) = await NewServiceAsync();
 
         var result = await extensions.SubmitAsync(
-            Today, null, "PC", 30, remainingSeconds: 3600, Period, AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 30, remainingSeconds: 3600, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
 
         Assert.False(result.Accepted);
         Assert.Equal(AgentStrings.English.ExtraTimeNotRunningOutYet, result.Message);
@@ -37,7 +37,7 @@ public sealed class TimeExtensionTests : IDisposable
         var (_, extensions) = await NewServiceAsync();
 
         var result = await extensions.SubmitAsync(
-            Today, null, "PC", 30, remainingSeconds: null, Period, AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 30, remainingSeconds: null, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
 
         Assert.False(result.Accepted);
         Assert.Equal(AgentStrings.English.ExtraTimeNotPossible, result.Message);
@@ -49,7 +49,7 @@ public sealed class TimeExtensionTests : IDisposable
         var (_, extensions) = await NewServiceAsync();
 
         var result = await extensions.SubmitAsync(
-            Today, null, "PC", 240, remainingSeconds: 60, Period, AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 240, remainingSeconds: 60, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
 
         Assert.False(result.Accepted);
     }
@@ -60,9 +60,9 @@ public sealed class TimeExtensionTests : IDisposable
         var (_, extensions) = await NewServiceAsync();
 
         var first = await extensions.SubmitAsync(
-            Today, null, "PC", 30, 60, Period, AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 30, 60, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
         var second = await extensions.SubmitAsync(
-            Today, null, "PC", 15, 60, Period, AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 15, 60, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
 
         Assert.True(first.Accepted);
         Assert.False(second.Accepted);
@@ -74,9 +74,9 @@ public sealed class TimeExtensionTests : IDisposable
     {
         var (_, extensions) = await NewServiceAsync();
 
-        var pc = await extensions.SubmitAsync(Today, null, "PC", 30, 60, Period, AgentStrings.English, CancellationToken.None);
+        var pc = await extensions.SubmitAsync(Today, null, "PC", 30, 60, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
         var app = await extensions.SubmitAsync(
-            Today, "roblox", "Roblox", 15, 60, Period, AgentStrings.English, CancellationToken.None);
+            Today, "roblox", "Roblox", 15, 60, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
 
         Assert.True(pc.Accepted);
         Assert.True(app.Accepted);
@@ -92,13 +92,13 @@ public sealed class TimeExtensionTests : IDisposable
         for (var round = 0; round < TimeExtensionPolicy.MaximumRequestsPerDay; round++)
         {
             var accepted = await extensions.SubmitAsync(
-                Today, null, "PC", 15, 60, $"window:{round}", AgentStrings.English, CancellationToken.None);
+                Today, null, "PC", 15, 60, isBlocked: false, $"window:{round}", AgentStrings.English, CancellationToken.None);
             Assert.True(accepted.Accepted);
             await AnswerEverythingAsync(extensions, TimeExtensionStatus.Denied);
         }
 
         var refused = await extensions.SubmitAsync(
-            Today, null, "PC", 15, 60, "window:last", AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 15, 60, isBlocked: false, "window:last", AgentStrings.English, CancellationToken.None);
 
         Assert.False(refused.Accepted);
         Assert.Equal(AgentStrings.English.ExtraTimeTooManyToday, refused.Message);
@@ -109,16 +109,16 @@ public sealed class TimeExtensionTests : IDisposable
     {
         var (_, extensions) = await NewServiceAsync();
         await extensions.SubmitAsync(
-            Today, null, "PC", 15, 60, "window:afternoon", AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 15, 60, isBlocked: false, "window:afternoon", AgentStrings.English, CancellationToken.None);
         await AnswerEverythingAsync(extensions, TimeExtensionStatus.Denied);
 
         var sameWindow = await extensions.SubmitAsync(
-            Today, null, "PC", 15, 60, "window:afternoon", AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 15, 60, isBlocked: false, "window:afternoon", AgentStrings.English, CancellationToken.None);
         var sameWindowState = await extensions.GetStateAsync(
             Today, null, "window:afternoon", CancellationToken.None);
         // The schedule closed and opened again; this is a new stretch of screen time.
         var nextWindow = await extensions.SubmitAsync(
-            Today, null, "PC", 15, 60, "window:evening", AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 15, 60, isBlocked: false, "window:evening", AgentStrings.English, CancellationToken.None);
 
         Assert.False(sameWindow.Accepted);
         Assert.Equal(AgentStrings.English.ExtraTimeDeniedUntilNextPeriod, sameWindow.Message);
@@ -131,7 +131,7 @@ public sealed class TimeExtensionTests : IDisposable
     {
         var (_, extensions) = await NewServiceAsync();
         await extensions.SubmitAsync(
-            Today, null, "PC", 15, 60, "window:afternoon", AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 15, 60, isBlocked: false, "window:afternoon", AgentStrings.English, CancellationToken.None);
         await AnswerEverythingAsync(extensions, TimeExtensionStatus.Denied);
 
         var duringRefusal = await extensions.GetStateAsync(
@@ -149,11 +149,11 @@ public sealed class TimeExtensionTests : IDisposable
     {
         var (_, extensions) = await NewServiceAsync();
         await extensions.SubmitAsync(
-            Today, null, "PC", 15, 60, "window:afternoon", AgentStrings.English, CancellationToken.None);
+            Today, null, "PC", 15, 60, isBlocked: false, "window:afternoon", AgentStrings.English, CancellationToken.None);
         await AnswerEverythingAsync(extensions, TimeExtensionStatus.Denied);
 
         var application = await extensions.SubmitAsync(
-            Today, "roblox", "Roblox", 15, 60, "window:afternoon", AgentStrings.English, CancellationToken.None);
+            Today, "roblox", "Roblox", 15, 60, isBlocked: false, "window:afternoon", AgentStrings.English, CancellationToken.None);
 
         Assert.True(application.Accepted);
     }
@@ -162,7 +162,7 @@ public sealed class TimeExtensionTests : IDisposable
     public async Task A_request_survives_a_restart_before_it_is_uploaded()
     {
         var (store, extensions) = await NewServiceAsync();
-        await extensions.SubmitAsync(Today, null, "PC", 30, 60, Period, AgentStrings.English, CancellationToken.None);
+        await extensions.SubmitAsync(Today, null, "PC", 30, 60, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
 
         var reopened = new LocalStore(DatabaseFile);
         await reopened.InitializeAsync(CancellationToken.None);
@@ -179,7 +179,7 @@ public sealed class TimeExtensionTests : IDisposable
     public async Task An_uploaded_request_is_not_sent_again()
     {
         var (_, extensions) = await NewServiceAsync();
-        await extensions.SubmitAsync(Today, null, "PC", 30, 60, Period, AgentStrings.English, CancellationToken.None);
+        await extensions.SubmitAsync(Today, null, "PC", 30, 60, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
 
         var first = await extensions.GetPendingUploadsAsync(CancellationToken.None);
         await extensions.MarkUploadedAsync(first[0].RequestId, CancellationToken.None);
@@ -193,7 +193,7 @@ public sealed class TimeExtensionTests : IDisposable
     public async Task An_answer_is_announced_once_and_a_repeated_decision_changes_nothing()
     {
         var (_, extensions) = await NewServiceAsync();
-        await extensions.SubmitAsync(Today, null, "PC", 30, 60, Period, AgentStrings.English, CancellationToken.None);
+        await extensions.SubmitAsync(Today, null, "PC", 30, 60, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
         var request = (await extensions.GetPendingUploadsAsync(CancellationToken.None))[0];
         var decision = new TimeExtensionDecision(
             request.RequestId, TimeExtensionStatus.Approved, 20, "PC", DateTimeOffset.UtcNow);
@@ -220,7 +220,7 @@ public sealed class TimeExtensionTests : IDisposable
         var (_, extensions) = await NewServiceAsync();
 
         var before = await extensions.GetStateAsync(Today, null, Period, CancellationToken.None);
-        await extensions.SubmitAsync(Today, null, "PC", 30, 60, Period, AgentStrings.English, CancellationToken.None);
+        await extensions.SubmitAsync(Today, null, "PC", 30, 60, isBlocked: false, Period, AgentStrings.English, CancellationToken.None);
         var pending = await extensions.GetStateAsync(Today, null, Period, CancellationToken.None);
         var request = (await extensions.GetPendingUploadsAsync(CancellationToken.None))[0];
         await extensions.ApplyDecisionsAsync(
@@ -289,8 +289,10 @@ public sealed class TimeExtensionTests : IDisposable
     }
 
     [Fact]
-    public async Task A_manual_block_is_not_something_extra_time_can_be_asked_about()
+    public async Task A_manual_block_can_be_asked_about_as_well()
     {
+        // A block is exactly what a child wants to ask about, and a grant now lifts one from the
+        // moment the parent gives it, so the button belongs there too.
         Directory.CreateDirectory(_directory);
         var store = new LocalStore(DatabaseFile);
         await store.InitializeAsync(CancellationToken.None);
@@ -308,7 +310,70 @@ public sealed class TimeExtensionTests : IDisposable
         var blocked = await AdvanceAsync(coordinator, 90);
 
         Assert.True(blocked.IsPcBlocked);
-        Assert.Empty(blocked.ExtensionOffers ?? []);
+        var offer = Assert.Single(blocked.ExtensionOffers ?? []);
+        Assert.Equal(TimeExtensionOfferState.Available, offer.State);
+    }
+
+    [Fact]
+    public async Task A_PC_with_no_limit_at_all_can_still_be_asked_about_while_it_is_blocked()
+    {
+        // Nothing is running out - the parent simply shut the PC - so there is no remaining count
+        // to measure and the question is asked about the block itself.
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var coordinator = new EnforcementCoordinator(
+            store, new TrustedClock(), Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+        coordinator.UpdateRules(new DeviceRuleSnapshot
+        {
+            Revision = 1,
+            TimeZoneId = "UTC",
+            IdleThresholdSeconds = 300,
+            ManuallyBlocked = true
+        });
+
+        var blocked = await AdvanceAsync(coordinator, 4);
+        var accepted = await coordinator.RequestTimeExtensionAsync(
+            new TimeExtensionSubmission(15, null), CancellationToken.None);
+
+        Assert.True(blocked.IsPcBlocked);
+        Assert.NotNull(Assert.Single(blocked.ExtensionOffers ?? []));
+        Assert.True(accepted.Accepted);
+    }
+
+    [Fact]
+    public async Task Extra_time_granted_during_a_manual_block_lets_the_PC_back_in()
+    {
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var clock = new TrustedClock();
+        var coordinator = new EnforcementCoordinator(
+            store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+        coordinator.UpdateRules(new DeviceRuleSnapshot
+        {
+            Revision = 1,
+            TimeZoneId = "UTC",
+            IdleThresholdSeconds = 300,
+            ManuallyBlocked = true
+        });
+        var blocked = await AdvanceAsync(coordinator, 4);
+
+        coordinator.UpdateRules(new DeviceRuleSnapshot
+        {
+            Revision = 2,
+            TimeZoneId = "UTC",
+            IdleThresholdSeconds = 300,
+            ManuallyBlocked = true,
+            Bonus = new TimeBonus(
+                RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC"),
+                20 * 60,
+                clock.GetUtcNow().AddMinutes(20))
+        });
+        var granted = await AdvanceAsync(coordinator, 2);
+
+        Assert.True(blocked.IsPcBlocked);
+        Assert.False(granted.IsPcBlocked);
     }
 
     [Fact]
@@ -394,8 +459,9 @@ public sealed class TimeExtensionTests : IDisposable
         Assert.Equal(TimeExtensionOfferState.Available, nearlySpent.Extension.State);
         // Plenty of time left, so there is nothing to ask about yet.
         Assert.Null(Assert.Single(status.Applications, item => item.IdentityKey == "plenty-left").Extension);
-        // Extra time raises a limit; it cannot lift a block, so offering it would be a lie.
-        Assert.Null(Assert.Single(status.Applications, item => item.IdentityKey == "blocked-outright").Extension);
+        // A blocked application is asked about too: the grant lifts the block from the moment it
+        // is given, so the button on its card is not a lie.
+        Assert.NotNull(Assert.Single(status.Applications, item => item.IdentityKey == "blocked-outright").Extension);
     }
 
     [Fact]

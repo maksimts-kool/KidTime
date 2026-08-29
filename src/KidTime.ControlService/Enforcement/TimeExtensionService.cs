@@ -26,8 +26,10 @@ public sealed class TimeExtensionService(LocalStore store, ILogger<TimeExtension
 
     /// <summary>
     /// Records one request, or explains why it was not recorded. <paramref name="remainingSeconds"/>
-    /// is what the caller measured for this exact scope: null means the scope has no daily limit,
-    /// and extending an allowance that does not exist is meaningless.
+    /// is what the caller measured for this exact scope: null means the scope has no daily limit.
+    /// <paramref name="isBlocked"/> says the scope is shut right now - a spent limit, a manual
+    /// block, or a closed schedule window - and that settles it on its own: there is nothing left
+    /// to measure, and a child looking at a block is exactly who this is for.
     /// </summary>
     public async Task<TimeExtensionSubmissionResult> SubmitAsync(
         DateOnly localDate,
@@ -35,16 +37,21 @@ public sealed class TimeExtensionService(LocalStore store, ILogger<TimeExtension
         string displayName,
         int minutes,
         int? remainingSeconds,
+        bool isBlocked,
         string periodKey,
         AgentStrings text,
         CancellationToken cancellationToken)
     {
         if (!TimeExtensionPolicy.IsAllowedRequest(minutes))
             return new TimeExtensionSubmissionResult(false, text.ExtraTimeNotPossible);
-        if (remainingSeconds is not int remaining)
-            return new TimeExtensionSubmissionResult(false, text.ExtraTimeNotPossible);
-        if (remaining > TimeExtensionPolicy.RequestThresholdSeconds)
-            return new TimeExtensionSubmissionResult(false, text.ExtraTimeNotRunningOutYet);
+        if (!isBlocked)
+        {
+            // Nothing is shut, so there has to be an allowance running out to talk about.
+            if (remainingSeconds is not int remaining)
+                return new TimeExtensionSubmissionResult(false, text.ExtraTimeNotPossible);
+            if (remaining > TimeExtensionPolicy.RequestThresholdSeconds)
+                return new TimeExtensionSubmissionResult(false, text.ExtraTimeNotRunningOutYet);
+        }
 
         await _gate.WaitAsync(cancellationToken);
         try

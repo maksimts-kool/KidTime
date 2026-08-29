@@ -56,13 +56,28 @@ public sealed class WeeklySchedule
 /// It rides inside the rule snapshot rather than on a channel of its own, so granting it bumps
 /// the rule revision and reaches the PC over the path that already exists - and it expires by
 /// itself the moment the device-local date moves on, with no second message needed to take it
-/// back. A bonus only means anything beside a daily limit: unlimited time cannot be extended.
+/// back.
+///
+/// It carries two things, because the restrictions extra time can lift are not counted the same
+/// way. <paramref name="Seconds"/> raises a daily limit and is spent in active foreground time
+/// like the rest of that allowance - and means nothing beside an unlimited one.
+/// <paramref name="LiftedUntilUtc"/> is what a grant does to a manual block or a closed schedule
+/// window: neither is an allowance with seconds left in it, so the grant runs as wall-clock time
+/// from the moment the parent approved it, which is the one starting point the child and the
+/// parent both saw.
 /// </summary>
-public sealed record TimeBonus(DateOnly LocalDate, int Seconds)
+public sealed record TimeBonus(DateOnly LocalDate, int Seconds, DateTimeOffset? LiftedUntilUtc = null)
 {
     /// <summary>The bonus that applies on a given device-local date, in seconds; zero otherwise.</summary>
     public static int SecondsOn(TimeBonus? bonus, DateOnly localDate) =>
         bonus is not null && bonus.LocalDate == localDate ? Math.Max(0, bonus.Seconds) : 0;
+
+    /// <summary>
+    /// Whether a grant is still holding a manual block or a schedule off. Deliberately not scoped
+    /// to a local date: a window opened at ten to midnight runs the minutes it was given.
+    /// </summary>
+    public static bool LiftsBlocksAt(TimeBonus? bonus, DateTimeOffset utcNow) =>
+        bonus?.LiftedUntilUtc is DateTimeOffset until && until > utcNow;
 }
 
 public sealed class ApplicationRuleSnapshot

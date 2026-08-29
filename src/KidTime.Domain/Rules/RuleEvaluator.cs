@@ -11,8 +11,13 @@ public static class RuleEvaluator
     {
         var timeZone = ResolveTimeZone(rule.TimeZoneId);
         var text = AgentStrings.For(rule.Language);
+        // Extra time granted while the PC was blocked outright runs from the moment the parent
+        // said yes, because a manual block and a closed schedule window have no seconds left in
+        // them to add to. Until it runs out, those two are held off; the daily limit below is
+        // not, since the same grant already raised it.
+        var lifted = TimeBonus.LiftsBlocksAt(rule.Bonus, utcNow);
 
-        if (rule.ManuallyBlocked &&
+        if (!lifted && rule.ManuallyBlocked &&
             (rule.ManualBlockUntilUtc is null || rule.ManualBlockUntilUtc > utcNow))
         {
             return new RuleDecision(
@@ -36,7 +41,7 @@ public static class RuleEvaluator
                 StartOfNextLocalDayUtc(utcNow, timeZone));
         }
 
-        if (!rule.Schedule.Allows(localNow))
+        if (!lifted && !rule.Schedule.Allows(localNow))
         {
             return new RuleDecision(
                 false,
@@ -57,8 +62,9 @@ public static class RuleEvaluator
     {
         var timeZone = ResolveTimeZone(timeZoneId);
         var text = AgentStrings.For(language);
+        var lifted = TimeBonus.LiftsBlocksAt(rule.Bonus, utcNow);
 
-        if (rule.ManuallyBlocked)
+        if (!lifted && rule.ManuallyBlocked)
         {
             return new RuleDecision(
                 false,
@@ -78,7 +84,7 @@ public static class RuleEvaluator
                 StartOfNextLocalDayUtc(utcNow, timeZone));
         }
 
-        if (!rule.Schedule.Allows(localNow))
+        if (!lifted && !rule.Schedule.Allows(localNow))
         {
             return new RuleDecision(
                 false,

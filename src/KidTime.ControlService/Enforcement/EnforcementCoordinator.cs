@@ -225,7 +225,8 @@ public sealed class EnforcementCoordinator(
 
             // Deliberately outside the branch above: that one only runs while the PC is still
             // allowed, and the moment a child most wants to ask is the moment the time ran out
-            // and the sign-out card appeared. The offer survives the block itself.
+            // and the sign-out card appeared. The offer survives every block, including the two
+            // a grant now lifts from the moment it is given.
             if (await BuildOfferAsync(localDate, null, Text.PcScopeName, pcLimit, pcUsage, pcDecision,
                     rules.Schedule, utcNow, rules.TimeZoneId, cancellationToken) is { } pcOffer)
                 offers.Add(pcOffer);
@@ -252,9 +253,9 @@ public sealed class EnforcementCoordinator(
                     QueueThresholdWarnings(scope, appRule.DisplayName, appRestriction, signsOut: false);
                 }
 
-                // Only the application in the foreground is offered extra time - a child asks
-                // about what is closing on them, they do not shop through a list - and the offer
-                // outlives the block for the same reason the PC's does.
+                // Only the application in the foreground is offered extra time here - a child
+                // asks about what is closing on them, they do not shop through a list - and the
+                // offer outlives the block for the same reason the PC's does.
                 if (await BuildOfferAsync(localDate, identity, appRule.DisplayName, appLimit, appUsage, appDecision,
                         appRule.Schedule, utcNow, rules.TimeZoneId, cancellationToken) is { } appOffer)
                     offers.Add(appOffer);
@@ -701,8 +702,13 @@ public sealed class EnforcementCoordinator(
             {
                 var usage = await ReadUsageAsync(localDate, null, cancellationToken);
                 var limit = RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Bonus, localDate);
+                // A scope that is shut right now has no seconds left to measure, and that is the
+                // one moment the question is worth asking, so it is passed as its own fact rather
+                // than inferred from a remaining count of zero.
+                var isBlocked = !RuleEvaluator.EvaluateDevice(rules, utcNow, usage).IsAllowed;
                 return await extensions.SubmitAsync(localDate, null, text.PcScopeName, submission.Minutes,
                     RemainingOrNull(limit, usage),
+                    isBlocked,
                     RuleEvaluator.GetAllowancePeriodKey(rules.Schedule, utcNow, rules.TimeZoneId),
                     text, cancellationToken);
             }
@@ -711,8 +717,11 @@ public sealed class EnforcementCoordinator(
                 return new TimeExtensionSubmissionResult(false, text.ExtraTimeNotPossible);
             var appUsage = await ReadUsageAsync(localDate, identityKey, cancellationToken);
             var appLimit = RuleEvaluator.EffectiveDailyLimitSeconds(appRule.DailyLimitSeconds, appRule.Bonus, localDate);
+            var isAppBlocked = !RuleEvaluator
+                .EvaluateApplication(appRule, utcNow, rules.TimeZoneId, appUsage, rules.Language).IsAllowed;
             return await extensions.SubmitAsync(localDate, identityKey, appRule.DisplayName, submission.Minutes,
                 RemainingOrNull(appLimit, appUsage),
+                isAppBlocked,
                 RuleEvaluator.GetAllowancePeriodKey(appRule.Schedule, utcNow, rules.TimeZoneId),
                 text, cancellationToken);
         }
@@ -736,14 +745,14 @@ public sealed class EnforcementCoordinator(
         limitSeconds is int limit ? Math.Max(0, limit - activeSeconds) : null;
 
     /// <summary>
-    /// The offer for one scope, or nothing when asking would be meaningless: no daily limit to
-    /// extend, plenty of time still left, or a restriction extra minutes would not lift.
+    /// The offer for one scope, or nothing when asking would be meaningless: an allowance with
+    /// plenty of time still left, or none at all and nothing blocking it either.
     ///
-    /// Extra time only ever raises a daily limit, so a manual block and a schedule window are
-    /// excluded - offering a button that could not possibly help is worse than offering none.
-    /// A limit that has already been reached still qualifies, because that is exactly the moment
-    /// the sign-out card is on screen and the child has something to ask about. Caller holds the
-    /// gate.
+    /// Anything that is actually shut - a spent daily limit, a manual block, a closed schedule
+    /// window - can be asked about, because a grant now lifts all three: the minutes raise the
+    /// limit, and a grant given while the scope was blocked outright runs from the moment the
+    /// parent said yes. That a limit has already been reached is exactly the moment the sign-out
+    /// card is on screen and the child has something to ask about. Caller holds the gate.
     /// </summary>
     private async Task<TimeExtensionOffer?> BuildOfferAsync(
         DateOnly localDate,
@@ -757,13 +766,13 @@ public sealed class EnforcementCoordinator(
         string timeZoneId,
         CancellationToken cancellationToken)
     {
-        if (!decision.IsAllowed && decision.Reason != BlockReason.DailyLimitReached) return null;
-        if (RemainingOrNull(limitSeconds, activeSeconds) is not int remaining
-            || remaining > TimeExtensionPolicy.RequestThresholdSeconds)
+        var remaining = RemainingOrNull(limitSeconds, activeSeconds);
+        if (decision.IsAllowed
+            && (remaining is not int left || left > TimeExtensionPolicy.RequestThresholdSeconds))
             return null;
         var periodKey = RuleEvaluator.GetAllowancePeriodKey(schedule, utcNow, timeZoneId);
         var (state, minutes) = await extensions.GetStateAsync(localDate, identityKey, periodKey, cancellationToken);
-        return new TimeExtensionOffer(identityKey, displayName, state, minutes, remaining);
+        return new TimeExtensionOffer(identityKey, displayName, state, minutes, remaining ?? 0);
     }
 
     private sealed record TimeRestriction(

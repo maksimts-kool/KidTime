@@ -252,10 +252,10 @@ public sealed class RuleEvaluatorTests
     }
 
     [Fact]
-    public void Extra_time_does_not_lift_a_manual_block_or_a_schedule()
+    public void Minutes_alone_do_not_lift_a_manual_block_or_a_schedule()
     {
-        // Extra time only ever raises a daily limit. A parent who blocked the PC has not been
-        // overruled by a request the child made a minute earlier.
+        // Minutes are added to a daily limit; they say nothing about a block. Only the window a
+        // grant opens - and only while it is running - holds those two off.
         var blocked = new DeviceRuleSnapshot
         {
             TimeZoneId = "UTC",
@@ -275,6 +275,80 @@ public sealed class RuleEvaluatorTests
         Assert.Equal(
             BlockReason.OutsideAllowedSchedule,
             RuleEvaluator.EvaluateDevice(outsideSchedule, MondayNoonUtc, 0).Reason);
+    }
+
+    [Fact]
+    public void Extra_time_granted_during_a_block_runs_from_the_moment_it_was_granted()
+    {
+        // A block has no seconds left in it to add to, so a grant given during one is wall-clock
+        // time starting at the parent's decision - and it ends by itself, with nothing sent to
+        // take it back.
+        var grantedAt = MondayNoonUtc;
+        var blocked = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            ManuallyBlocked = true,
+            Bonus = new TimeBonus(
+                DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 20 * 60, grantedAt.AddMinutes(20))
+        };
+        var outsideSchedule = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            Schedule = Schedule((DayOfWeek.Monday, "18:00", "20:00")),
+            Bonus = new TimeBonus(
+                DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 20 * 60, grantedAt.AddMinutes(20))
+        };
+
+        Assert.True(RuleEvaluator.EvaluateDevice(blocked, grantedAt.AddMinutes(19), 0).IsAllowed);
+        Assert.True(RuleEvaluator.EvaluateDevice(outsideSchedule, grantedAt.AddMinutes(19), 0).IsAllowed);
+        Assert.Equal(
+            BlockReason.ManualBlock,
+            RuleEvaluator.EvaluateDevice(blocked, grantedAt.AddMinutes(21), 0).Reason);
+        Assert.Equal(
+            BlockReason.OutsideAllowedSchedule,
+            RuleEvaluator.EvaluateDevice(outsideSchedule, grantedAt.AddMinutes(21), 0).Reason);
+    }
+
+    [Fact]
+    public void A_block_lifted_for_an_application_says_nothing_about_the_others()
+    {
+        var granted = new ApplicationRuleSnapshot
+        {
+            IdentityKey = "roblox",
+            DisplayName = "Roblox",
+            ManuallyBlocked = true,
+            Bonus = new TimeBonus(
+                DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 15 * 60, MondayNoonUtc.AddMinutes(15))
+        };
+        var untouched = new ApplicationRuleSnapshot
+        {
+            IdentityKey = "steam",
+            DisplayName = "Steam",
+            ManuallyBlocked = true
+        };
+
+        Assert.True(RuleEvaluator.EvaluateApplication(granted, MondayNoonUtc, "UTC", 0).IsAllowed);
+        Assert.False(RuleEvaluator.EvaluateApplication(untouched, MondayNoonUtc, "UTC", 0).IsAllowed);
+    }
+
+    [Fact]
+    public void A_lifted_block_does_not_hand_over_a_spent_daily_limit()
+    {
+        // The same grant raised the limit by its own minutes; it does not make the rest of the
+        // day free as well.
+        var rule = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            ManuallyBlocked = true,
+            DailyLimitSeconds = 3600,
+            Bonus = new TimeBonus(
+                DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 20 * 60, MondayNoonUtc.AddMinutes(20))
+        };
+
+        Assert.True(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 3600).IsAllowed);
+        Assert.Equal(
+            BlockReason.DailyLimitReached,
+            RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 4800).Reason);
     }
 
     [Fact]
