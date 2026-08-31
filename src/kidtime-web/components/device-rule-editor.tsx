@@ -105,6 +105,11 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
       </Card>
 
       <Card>
+        <CardHeader><CardTitle>Weekly schedule</CardTitle><CardDescription>Add as many non-overlapping access ranges as needed. Overnight windows are supported.</CardDescription></CardHeader>
+        <CardContent><WeeklyScheduleEditor days={days} onChange={setDays} /><p className="mt-3 text-xs text-muted-foreground">Leave every day disabled to allow the PC at all times.</p></CardContent>
+      </Card>
+
+      <Card>
         <CardHeader><CardTitle>Daily PC limit</CardTitle><CardDescription>Only active, non-idle time counts toward this limit.</CardDescription></CardHeader>
         <CardContent>
           <FieldGroup>
@@ -120,11 +125,6 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
             </div>
           </FieldGroup>
         </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Weekly schedule</CardTitle><CardDescription>Add as many non-overlapping access ranges as needed. Overnight windows are supported.</CardDescription></CardHeader>
-        <CardContent><WeeklyScheduleEditor days={days} onChange={setDays} /><p className="mt-3 text-xs text-muted-foreground">Leave every day disabled to allow the PC at all times.</p></CardContent>
       </Card>
 
       <Card>

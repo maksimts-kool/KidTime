@@ -700,6 +700,20 @@ design** — do not add them, and do not extend the contract to upload window ti
   `Switch.Root`, so the control is the row and there is one click target rather than a 32×18 pixel
   one. Reach for those instead of the bare `Switch`, and never wrap a switch in a `<label>` to widen
   its target — the label and the control both handle the click and it toggles twice.
+- **The panel leads with the weekly schedule, not the daily limit.** A household that governs the
+  PC by schedule learns nothing from "No limit" repeated down a page, so a device card headlines
+  what the schedule says right now - "Allowed until 21:30", "Allowed from tomorrow 09:00" - and
+  draws today as a `ScheduleStrip`: the day as a bar with the allowed windows filled and a marker
+  where the PC's own clock stands. The daily limit stays, smaller: its progress bar appears only
+  when a limit is set, and an application with no rule shows a dash rather than a sentence about
+  a limit it does not have. `DevicesController` computes the schedule state (open now, when it
+  closes, when it next opens, today's windows) because only the server knows the device timezone
+  well enough; the instants cross as UTC and `lib/schedule.ts` renders them in the child's clock
+  time, since 21:30 has to mean 21:30 on the controlled PC whichever timezone the parent is
+  reading from.
+- **An offline PC has no current application.** `ForegroundApplication` is the last thing that was
+  reported, so a card for a device that is not reporting says so instead of naming a game the
+  child closed hours ago.
 - Every string the controlled user can read lives in `AgentStrings` and must be implemented in
   both `EnglishAgentStrings` and `RussianAgentStrings`. `AgentStringsTests` walks the catalog by
   reflection and fails on a member that returns blank in either language.

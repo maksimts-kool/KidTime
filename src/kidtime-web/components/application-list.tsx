@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { formatDuration } from "@/lib/format";
+import { describeApplicationRules } from "@/lib/schedule";
 import type { ApplicationSummary } from "@/lib/types";
 import { ApplicationIcon } from "@/components/application-icon";
 import { Badge } from "@/components/ui/badge";
@@ -60,7 +61,8 @@ export function ApplicationList({
 }) {
   const showMicrosoft = useSyncExternalStore(subscribe, readPreference, () => false);
 
-  const hasRule = (app: ApplicationSummary) => app.manuallyBlocked || app.dailyLimitSeconds !== null;
+  const hasRule = (app: ApplicationSummary) =>
+    app.manuallyBlocked || app.dailyLimitSeconds !== null || app.scheduleConfigured;
   // A parent who typed a name is looking for that thing, so a search shows everything it matched.
   // Answering "nothing found" for an application the switch is hiding would be a dead end.
   const visible = applications.filter(
@@ -90,7 +92,7 @@ export function ApplicationList({
               <TableHead className="pl-4">Application</TableHead>
               <TableHead>Device</TableHead>
               <TableHead>Today</TableHead>
-              <TableHead>Limit</TableHead>
+              <TableHead>Rules</TableHead>
               <TableHead className="pr-4">Status</TableHead>
             </TableRow>
           </TableHeader>
@@ -113,11 +115,16 @@ export function ApplicationList({
                 </TableCell>
                 <TableCell className="text-muted-foreground">{app.deviceName}</TableCell>
                 <TableCell className="font-medium tabular-nums">{formatDuration(app.todayActiveSeconds)}</TableCell>
-                <TableCell className="text-muted-foreground tabular-nums">{formatDuration(app.dailyLimitSeconds)}</TableCell>
+                {/*
+                  A schedule is the rule most of these applications carry, and a column of "No
+                  limit" said nothing about it. An application with no rule at all shows a dash
+                  rather than a sentence.
+                */}
+                <TableCell className="text-muted-foreground tabular-nums">{describeApplicationRules(app) ?? "—"}</TableCell>
                 <TableCell className="pr-4">
-                  <Badge variant={app.manuallyBlocked ? "destructive" : "secondary"}>
-                    {app.manuallyBlocked ? "Blocked" : "Allowed"}
-                  </Badge>
+                  {app.manuallyBlocked ? <Badge variant="destructive">Blocked</Badge>
+                    : app.scheduleConfigured && !app.withinSchedule ? <Badge variant="outline" className="text-muted-foreground">Off schedule</Badge>
+                    : <Badge variant="secondary" className="text-primary">Allowed</Badge>}
                 </TableCell>
               </TableRow>
             ))}

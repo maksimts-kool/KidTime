@@ -1,13 +1,15 @@
 import Link from "next/link";
 import { ArrowRight, Clock3, HandHelping, Monitor, Sparkles } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
-import { formatDuration } from "@/lib/format";
+import { formatDuration, formatSeen } from "@/lib/format";
+import { describeApplicationRules, describeSchedule, describeTodayWindows, deviceMinuteOfDay } from "@/lib/schedule";
 import type { ApplicationSummary, DeviceStatistics, DeviceSummary, TimeExtensionRequest } from "@/lib/types";
 import { ApplicationIcon } from "@/components/application-icon";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { EmptyDevices } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { QuickBlock } from "@/components/quick-block";
+import { ScheduleStrip } from "@/components/schedule-strip";
 import { StatCard } from "@/components/stat-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +31,10 @@ export default async function DashboardPage() {
   const percent = device.dailyLimitSeconds
     ? Math.min(100, device.todayActiveSeconds / device.dailyLimitSeconds * 100)
     : 0;
+  // The weekly schedule is the rule most households actually govern the PC with, so it gets the
+  // headline the daily limit used to hold twice over.
+  const schedule = describeSchedule(device);
+  const todayWindows = describeTodayWindows(device);
   const top = [...applications].sort((a, b) => b.todayActiveSeconds - a.todayActiveSeconds).slice(0, 5);
   const maxDay = Math.max(...statistics.daily.map(day => day.activeSeconds), 1);
 
@@ -62,21 +68,39 @@ export default async function DashboardPage() {
         <CardHeader className="border-b">
           <div className="flex items-center gap-2"><StatusBadge online={device.isOnline} /><span className="text-sm text-muted-foreground">{device.windowsVersion}</span></div>
           <CardTitle className="text-xl">{device.name}</CardTitle>
-          <CardDescription>{device.foregroundApplication ? <>Currently using <span className="font-medium text-foreground">{device.foregroundApplication}</span></> : "No active application reported"}</CardDescription>
+          {/* An offline PC reports nothing, so its last foreground application is a stale fact rather than a current one. */}
+          <CardDescription>{!device.isOnline ? `Last seen ${formatSeen(device.lastSeenUtc)}` : device.foregroundApplication ? <>Currently using <span className="font-medium text-foreground">{device.foregroundApplication}</span></> : "No active application reported"}</CardDescription>
           <CardAction><QuickBlock deviceId={device.id} blocked={device.manuallyBlocked} /></CardAction>
         </CardHeader>
         <CardContent className="grid gap-5 pt-1 md:grid-cols-[1fr_auto] md:items-end">
           <div>
-            <div className="mb-2 flex items-end justify-between gap-4">
-              <div><p className="text-xs text-muted-foreground">Screen time today</p><p className="mt-1 text-2xl font-semibold tabular-nums">{formatDuration(device.todayActiveSeconds)}</p></div>
-              <div className="text-right"><p className="text-xs text-muted-foreground">Daily limit</p><p className="mt-1 font-medium tabular-nums">{formatDuration(device.dailyLimitSeconds)}</p></div>
+            <p className="text-xs text-muted-foreground">Screen time today</p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums">{formatDuration(device.todayActiveSeconds)}</p>
+            {device.dailyLimitSeconds ? (
+              <>
+                <div className="mt-3 mb-2 flex justify-between text-xs text-muted-foreground tabular-nums">
+                  <span>Daily limit {formatDuration(device.dailyLimitSeconds)}</span>
+                  <span>{formatDuration(device.remainingSeconds)} left</span>
+                </div>
+                <Progress value={percent} aria-label={`${Math.round(percent)} percent of today's PC limit used`} />
+              </>
+            ) : <p className="mt-2 text-xs text-muted-foreground">No daily limit</p>}
+          </div>
+          <div className="min-w-44 rounded-xl border bg-muted/50 px-4 py-3 md:text-right">
+            <p className="text-xs text-muted-foreground">{schedule.label}</p>
+            <p className="mt-1 text-xl font-semibold tabular-nums">{schedule.value}</p>
+          </div>
+          {device.schedule.configured && (
+            <div className="md:col-span-2">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground tabular-nums">{todayWindows}</p>
+                <Badge variant={device.schedule.withinWindow ? "secondary" : "outline"} className={device.schedule.withinWindow ? "text-primary" : "text-muted-foreground"}>
+                  {device.schedule.withinWindow ? "Open now" : "Closed now"}
+                </Badge>
+              </div>
+              <ScheduleStrip windows={device.schedule.todayWindows} nowMinute={deviceMinuteOfDay(device.timeZoneId)} />
             </div>
-            <Progress value={percent} aria-label={`${Math.round(percent)} percent of today's PC limit used`} />
-          </div>
-          <div className="min-w-40 rounded-lg bg-muted/70 px-4 py-3 md:text-right">
-            <p className="text-xs text-muted-foreground">Remaining today</p>
-            <p className="mt-1 text-xl font-semibold tabular-nums">{formatDuration(device.remainingSeconds)}</p>
-          </div>
+          )}
         </CardContent>
       </Card>
 
@@ -101,7 +125,7 @@ export default async function DashboardPage() {
                   <ApplicationIcon applicationId={app.id} displayName={app.displayName} hasIcon={app.hasIcon} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{app.displayName}</p>
-                    <p className="truncate text-xs text-muted-foreground">{app.dailyLimitSeconds ? `${formatDuration(app.dailyLimitSeconds)} daily limit` : "No daily limit"}</p>
+                    <p className="truncate text-xs text-muted-foreground">{describeApplicationRules(app) ?? app.publisher ?? app.executableName}</p>
                   </div>
                   {app.manuallyBlocked && <Badge variant="destructive">Blocked</Badge>}
                   <span className="text-sm font-medium tabular-nums">{formatDuration(app.todayActiveSeconds)}</span>

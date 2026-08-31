@@ -47,9 +47,11 @@ public sealed class ApplicationsController(
             .OrderBy(item => ApplicationCatalogPolicy.GetFriendlyDisplayName(ToDescriptor(item)))
             .ToList();
         var result = new List<object>(applications.Count);
+        var now = timeProvider.GetUtcNow();
         foreach (var item in applications)
         {
-            var today = RuleEvaluator.GetLocalDate(timeProvider.GetUtcNow(), item.Device.TimeZoneId);
+            var today = RuleEvaluator.GetLocalDate(now, item.Device.TimeZoneId);
+            var schedule = RuleSnapshotFactory.DeserializeSchedule(item.Rule.ScheduleJson);
             var seconds = await dbContext.DailyApplicationUsages.AsNoTracking()
                 .Where(x => x.DeviceApplicationId == item.Id && x.LocalDate == today)
                 .Select(x => (int?)x.ActiveSeconds).SingleOrDefaultAsync(cancellationToken) ?? 0;
@@ -73,7 +75,12 @@ public sealed class ApplicationsController(
                 // and package family the decision is made from.
                 isMicrosoft = ApplicationCatalogPolicy.IsMicrosoftPublished(ToDescriptor(item)),
                 item.Rule.ManuallyBlocked,
-                item.Rule.DailyLimitSeconds
+                item.Rule.DailyLimitSeconds,
+                // A schedule is the rule most of these applications actually carry, so the list
+                // says whether one is set and whether it is open right now. Without it every row
+                // reads "Allowed" while the schedule has the application shut.
+                scheduleConfigured = schedule.IsConfigured,
+                withinSchedule = RuleEvaluator.IsWithinSchedule(schedule, now, item.Device.TimeZoneId)
             });
         }
 

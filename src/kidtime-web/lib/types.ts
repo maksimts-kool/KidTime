@@ -6,6 +6,18 @@ export const agentLanguages: { value: AgentLanguage; label: string }[] = [
   { value: "Russian", label: "Russian (Русский)" },
 ];
 
+/**
+ * What the weekly schedule means right now, as the server worked it out in the device's own
+ * timezone. Instants are UTC; the panel renders them in the child's clock time.
+ */
+export type ScheduleState = {
+  configured: boolean;
+  withinWindow: boolean;
+  closesAtUtc: string | null;
+  opensAtUtc: string | null;
+  todayWindows: string[];
+};
+
 export type DeviceSummary = {
   id: string;
   name: string;
@@ -26,6 +38,7 @@ export type DeviceSummary = {
   todayActiveSeconds: number;
   dailyLimitSeconds: number | null;
   remainingSeconds: number | null;
+  schedule: ScheduleState;
   manuallyBlocked: boolean;
   manualBlockUntilUtc: string | null;
   ruleRevision: number;
@@ -115,6 +128,8 @@ export type ApplicationSummary = {
   isMicrosoft: boolean;
   manuallyBlocked: boolean;
   dailyLimitSeconds: number | null;
+  scheduleConfigured: boolean;
+  withinSchedule: boolean;
 };
 
 export type DailyUsage = { date: string; activeSeconds: number };

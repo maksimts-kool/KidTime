@@ -61,6 +61,11 @@ export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSecond
       </Card>
 
       <Card>
+        <CardHeader><CardTitle>Weekly schedule</CardTitle><CardDescription>Add multiple non-overlapping access ranges. The application closes when its current allowed range ends.</CardDescription></CardHeader>
+        <CardContent><WeeklyScheduleEditor days={days} onChange={setDays} /><p className="mt-3 text-xs text-muted-foreground">Leave every day disabled to allow the application at all times.</p></CardContent>
+      </Card>
+
+      <Card>
         <CardHeader><CardTitle>Daily application limit</CardTitle><CardDescription>Only foreground active time is counted.</CardDescription></CardHeader>
         <CardContent>
           <FieldGroup>
@@ -76,11 +81,6 @@ export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSecond
             </div>
           </FieldGroup>
         </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Weekly schedule</CardTitle><CardDescription>Add multiple non-overlapping access ranges. The application closes when its current allowed range ends.</CardDescription></CardHeader>
-        <CardContent><WeeklyScheduleEditor days={days} onChange={setDays} /><p className="mt-3 text-xs text-muted-foreground">Leave every day disabled to allow the application at all times.</p></CardContent>
       </Card>
 
       <div className="flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-end">

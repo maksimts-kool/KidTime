@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
 using System.Text.Json;
 
 namespace KidTime.Server.Controllers;
@@ -72,6 +73,11 @@ public sealed class DevicesController(
                 todayActiveSeconds = today,
                 dailyLimitSeconds = device.Rule.DailyLimitSeconds,
                 remainingSeconds = device.Rule.DailyLimitSeconds is int limit ? Math.Max(0, limit - today) : (int?)null,
+                schedule = DescribeSchedule(
+                    RuleSnapshotFactory.DeserializeSchedule(device.Rule.ScheduleJson),
+                    device.TimeZoneId,
+                    localDate,
+                    now),
                 manuallyBlocked = device.Rule.ManuallyBlocked &&
                     (device.Rule.ManualBlockUntilUtc is null || device.Rule.ManualBlockUntilUtc > now),
                 device.Rule.ManualBlockUntilUtc,
@@ -189,6 +195,42 @@ public sealed class DevicesController(
         rule.ControlledUserName = selectedUser?.AccountName;
         await MarkRulesChangedAsync(rule, cancellationToken);
         return Ok(await snapshots.CreateAsync(deviceId, cancellationToken));
+    }
+
+    /// <summary>
+    /// What the weekly schedule means right now, in the shape the panel reads it: whether a window
+    /// is open, when the open one closes, when the next one opens, and the windows standing for
+    /// today. A household that governs the PC by schedule rather than by a daily total learns
+    /// nothing from "No limit", so the summary carries the schedule instead of leaving the panel
+    /// to walk the raw week itself. Instants stay in UTC - the panel already knows the device
+    /// timezone and renders them in the child's clock time.
+    /// </summary>
+    private static object DescribeSchedule(
+        WeeklySchedule schedule,
+        string timeZoneId,
+        DateOnly localDate,
+        DateTimeOffset now)
+    {
+        var withinWindow = RuleEvaluator.IsWithinSchedule(schedule, now, timeZoneId);
+        return new
+        {
+            configured = schedule.IsConfigured,
+            withinWindow,
+            closesAtUtc = withinWindow
+                ? RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, now, timeZoneId)
+                : null,
+            opensAtUtc = withinWindow
+                ? null
+                : RuleEvaluator.FindNextAllowanceStartUtc(schedule, now, timeZoneId),
+            todayWindows = schedule.Days
+                .Where(day => day.Day == localDate.DayOfWeek)
+                .SelectMany(day => day.Windows)
+                .OrderBy(window => window.Start)
+                .Select(window =>
+                    $"{window.Start.ToString("HH\\:mm", CultureInfo.InvariantCulture)}–" +
+                    $"{window.End.ToString("HH\\:mm", CultureInfo.InvariantCulture)}")
+                .ToList()
+        };
     }
 
     private static IReadOnlyList<WindowsUserAccount> DeserializeWindowsUsers(string? json)
