@@ -5,32 +5,34 @@ import { formatDuration } from "@/lib/format";
  * Schedule and limit wording for the panel.
  *
  * A household that governs the PC by a weekly schedule sees nothing useful in "No limit" repeated
- * down a page, so these helpers put the schedule first and let the daily limit be the smaller
- * fact it usually is. Clock times are rendered in the controlled PC's own timezone: 20:00 has to
- * mean 20:00 to the child, whichever timezone the parent is reading the panel from.
+ * down a page, so these helpers put the schedule first and let the daily limit be the smaller fact
+ * it usually is.
+ *
+ * Every time here is already the controlled PC's own wall clock, computed by the server: a Windows
+ * PC reports a Windows timezone id ("Russian Standard Time") which `Intl` cannot resolve, and
+ * quietly renders UTC instead - a window closing at 21:00 was shown to the parent as 18:00. So
+ * nothing in the panel converts timezones; it only reads the stamps it was given.
  */
 
-function deviceFormatter(timeZoneId: string, options: Intl.DateTimeFormatOptions) {
-  try {
-    return new Intl.DateTimeFormat("en-GB", { ...options, timeZone: timeZoneId });
-  } catch {
-    // An unknown timezone id falls back to the reader's own clock rather than throwing the page.
-    return new Intl.DateTimeFormat("en-GB", options);
-  }
+/** A device-local stamp, "2026-08-31T21:00", as "21:00" / "tomorrow 09:00" / "Mon 09:00". */
+export function formatDeviceClock(stamp: string, localDate: string) {
+  const [date, time] = stamp.split("T");
+  if (!time) return stamp;
+  if (date === localDate) return time;
+  if (date === addDays(localDate, 1)) return `tomorrow ${time}`;
+  return `${weekdayOf(date)} ${time}`;
 }
 
-/**
- * A UTC instant as the clock time on the controlled PC, qualified by day when it is not today's:
- * "20:00", "tomorrow 09:00", "Mon 09:00".
- */
-export function formatDeviceClock(utc: string, timeZoneId: string) {
-  const instant = new Date(utc);
-  const time = deviceFormatter(timeZoneId, { hour: "2-digit", minute: "2-digit", hour12: false }).format(instant);
-  const day = deviceFormatter(timeZoneId, { year: "numeric", month: "2-digit", day: "2-digit" });
-  const on = day.format(instant);
-  if (on === day.format(new Date())) return time;
-  if (on === day.format(new Date(Date.now() + 86_400_000))) return `tomorrow ${time}`;
-  return `${deviceFormatter(timeZoneId, { weekday: "short" }).format(instant)} ${time}`;
+/** Dates are compared as plain calendar days, so UTC is only a way to avoid a timezone at all. */
+function addDays(date: string, days: number) {
+  const shifted = new Date(`${date}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
+function weekdayOf(date: string) {
+  return new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "UTC" })
+    .format(new Date(`${date}T00:00:00Z`));
 }
 
 /** The one schedule fact worth a headline: what is open, and until or from when. */
@@ -38,20 +40,13 @@ export function describeSchedule(device: DeviceSummary): { label: string; value:
   const { schedule } = device;
   if (!schedule.configured) return { label: "Schedule", value: "Any time" };
   if (schedule.withinWindow) {
-    return schedule.closesAtUtc
-      ? { label: "Allowed until", value: formatDeviceClock(schedule.closesAtUtc, device.timeZoneId) }
+    return schedule.closesAtLocal
+      ? { label: "Allowed until", value: formatDeviceClock(schedule.closesAtLocal, schedule.localDate) }
       : { label: "Schedule", value: "Open" };
   }
-  return schedule.opensAtUtc
-    ? { label: "Allowed from", value: formatDeviceClock(schedule.opensAtUtc, device.timeZoneId) }
+  return schedule.opensAtLocal
+    ? { label: "Allowed from", value: formatDeviceClock(schedule.opensAtLocal, schedule.localDate) }
     : { label: "Schedule", value: "Closed" };
-}
-
-/** Where the controlled PC's own clock stands in the day, in minutes from its midnight. */
-export function deviceMinuteOfDay(timeZoneId: string) {
-  const now = deviceFormatter(timeZoneId, { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
-  const [hours, minutes] = now.split(":").map(Number);
-  return ((hours % 24) * 60 + minutes) % 1440;
 }
 
 /** Today's windows as the parent wrote them, or why there are none. */

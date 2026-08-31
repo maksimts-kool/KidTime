@@ -124,11 +124,17 @@ public static class RuleEvaluator
         return $"day:{GetLocalDate(utcNow, timeZoneId):yyyy-MM-dd}";
     }
 
-    public static DateOnly GetLocalDate(DateTimeOffset utcNow, string timeZoneId)
-    {
-        var localNow = TimeZoneInfo.ConvertTime(utcNow, ResolveTimeZone(timeZoneId));
-        return DateOnly.FromDateTime(localNow.DateTime);
-    }
+    public static DateOnly GetLocalDate(DateTimeOffset utcNow, string timeZoneId) =>
+        DateOnly.FromDateTime(ToLocalTime(utcNow, timeZoneId));
+
+    /// <summary>
+    /// An instant as the wall clock reads it on the controlled PC. The device reports a Windows
+    /// timezone id ("Russian Standard Time"), which .NET resolves on any platform - so anything
+    /// that has to speak in the child's clock time converts here rather than passing the id to
+    /// something that only understands IANA names.
+    /// </summary>
+    public static DateTime ToLocalTime(DateTimeOffset utcNow, string timeZoneId) =>
+        TimeZoneInfo.ConvertTime(utcNow, ResolveTimeZone(timeZoneId)).DateTime;
 
     public static DateTimeOffset? FindCurrentAllowanceEndUtc(
         WeeklySchedule schedule,

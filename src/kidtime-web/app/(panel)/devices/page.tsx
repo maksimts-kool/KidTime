@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ChevronRight, Monitor, TriangleAlert } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
 import { formatDuration, formatSeen } from "@/lib/format";
-import { describeSchedule, describeTodayWindows, deviceMinuteOfDay } from "@/lib/schedule";
+import { describeSchedule, describeTodayWindows } from "@/lib/schedule";
 import type { DeviceSummary } from "@/lib/types";
 import { EmptyDevices } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
@@ -76,7 +76,7 @@ export default async function DevicesPage() {
                           {device.schedule.withinWindow ? "Open now" : "Closed now"}
                         </Badge>
                       </div>
-                      <ScheduleStrip windows={device.schedule.todayWindows} nowMinute={deviceMinuteOfDay(device.timeZoneId)} />
+                      <ScheduleStrip windows={device.schedule.todayWindows} nowMinute={device.schedule.nowMinuteOfDay} />
                     </div>
                   )}
                 </CardContent>

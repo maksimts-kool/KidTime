@@ -202,8 +202,12 @@ public sealed class DevicesController(
     /// is open, when the open one closes, when the next one opens, and the windows standing for
     /// today. A household that governs the PC by schedule rather than by a daily total learns
     /// nothing from "No limit", so the summary carries the schedule instead of leaving the panel
-    /// to walk the raw week itself. Instants stay in UTC - the panel already knows the device
-    /// timezone and renders them in the child's clock time.
+    /// to walk the raw week itself.
+    ///
+    /// Times cross as the controlled PC's own wall clock, not as instants. The device reports a
+    /// Windows timezone id ("Russian Standard Time"), which .NET resolves and JavaScript's Intl
+    /// does not - handed a UTC instant and that id, the panel silently rendered UTC and told the
+    /// parent a window closed three hours before it does.
     /// </summary>
     private static object DescribeSchedule(
         WeeklySchedule schedule,
@@ -212,26 +216,36 @@ public sealed class DevicesController(
         DateTimeOffset now)
     {
         var withinWindow = RuleEvaluator.IsWithinSchedule(schedule, now, timeZoneId);
+        var localNow = RuleEvaluator.ToLocalTime(now, timeZoneId);
         return new
         {
             configured = schedule.IsConfigured,
             withinWindow,
-            closesAtUtc = withinWindow
-                ? RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, now, timeZoneId)
+            localDate = localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            nowMinuteOfDay = localNow.Hour * 60 + localNow.Minute,
+            closesAtLocal = withinWindow
+                ? ToLocalStamp(RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, now, timeZoneId), timeZoneId)
                 : null,
-            opensAtUtc = withinWindow
+            opensAtLocal = withinWindow
                 ? null
-                : RuleEvaluator.FindNextAllowanceStartUtc(schedule, now, timeZoneId),
+                : ToLocalStamp(RuleEvaluator.FindNextAllowanceStartUtc(schedule, now, timeZoneId), timeZoneId),
             todayWindows = schedule.Days
                 .Where(day => day.Day == localDate.DayOfWeek)
                 .SelectMany(day => day.Windows)
                 .OrderBy(window => window.Start)
-                .Select(window =>
-                    $"{window.Start.ToString("HH\\:mm", CultureInfo.InvariantCulture)}–" +
-                    $"{window.End.ToString("HH\\:mm", CultureInfo.InvariantCulture)}")
+                .Select(window => $"{ToClock(window.Start)}–{ToClock(window.End)}")
                 .ToList()
         };
     }
+
+    /// <summary>An instant as an unzoned device-local stamp, "2026-08-31T21:00".</summary>
+    private static string? ToLocalStamp(DateTimeOffset? instant, string timeZoneId) =>
+        instant is { } value
+            ? RuleEvaluator.ToLocalTime(value, timeZoneId).ToString("yyyy-MM-dd'T'HH':'mm", CultureInfo.InvariantCulture)
+            : null;
+
+    private static string ToClock(TimeOnly time) =>
+        time.ToString("HH':'mm", CultureInfo.InvariantCulture);
 
     private static IReadOnlyList<WindowsUserAccount> DeserializeWindowsUsers(string? json)
     {

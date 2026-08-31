@@ -708,9 +708,13 @@ design** — do not add them, and do not extend the contract to upload window ti
   when a limit is set, and an application with no rule shows a dash rather than a sentence about
   a limit it does not have. `DevicesController` computes the schedule state (open now, when it
   closes, when it next opens, today's windows) because only the server knows the device timezone
-  well enough; the instants cross as UTC and `lib/schedule.ts` renders them in the child's clock
-  time, since 21:30 has to mean 21:30 on the controlled PC whichever timezone the parent is
-  reading from.
+  well enough. **Those times cross as the device's own wall clock, never as instants**: a Windows
+  PC reports a Windows timezone id (`FLE Standard Time`, `Russian Standard Time`), which .NET
+  resolves on any platform and JavaScript's `Intl` does not - handed the id, `Intl` throws, the
+  panel fell back to its own clock, and a window closing at 21:00 was shown to the parent as
+  18:00. So `DevicesController` sends `"2026-08-31T21:00"`, today's date, and the minute of the
+  day the PC is standing at, and `lib/schedule.ts` only reads them. Do not convert a timezone in
+  the panel.
 - **An offline PC has no current application.** `ForegroundApplication` is the last thing that was
   reported, so a card for a device that is not reporting says so instead of naming a game the
   child closed hours ago.

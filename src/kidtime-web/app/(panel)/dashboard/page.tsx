@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ArrowRight, Clock3, HandHelping, Monitor, Sparkles } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
 import { formatDuration, formatSeen } from "@/lib/format";
-import { describeApplicationRules, describeSchedule, describeTodayWindows, deviceMinuteOfDay } from "@/lib/schedule";
+import { describeApplicationRules, describeSchedule, describeTodayWindows } from "@/lib/schedule";
 import type { ApplicationSummary, DeviceStatistics, DeviceSummary, TimeExtensionRequest } from "@/lib/types";
 import { ApplicationIcon } from "@/components/application-icon";
 import { AutoRefresh } from "@/components/auto-refresh";
@@ -98,7 +98,7 @@ export default async function DashboardPage() {
                   {device.schedule.withinWindow ? "Open now" : "Closed now"}
                 </Badge>
               </div>
-              <ScheduleStrip windows={device.schedule.todayWindows} nowMinute={deviceMinuteOfDay(device.timeZoneId)} />
+              <ScheduleStrip windows={device.schedule.todayWindows} nowMinute={device.schedule.nowMinuteOfDay} />
             </div>
           )}
         </CardContent>

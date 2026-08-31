@@ -13,8 +13,13 @@ export const agentLanguages: { value: AgentLanguage; label: string }[] = [
 export type ScheduleState = {
   configured: boolean;
   withinWindow: boolean;
-  closesAtUtc: string | null;
-  opensAtUtc: string | null;
+  /** The device's own calendar day, "2026-08-31". */
+  localDate: string;
+  /** Where the device's clock stands in that day, in minutes from its midnight. */
+  nowMinuteOfDay: number;
+  /** Device-local stamps, "2026-08-31T21:00" - never instants; see lib/schedule.ts. */
+  closesAtLocal: string | null;
+  opensAtLocal: string | null;
   todayWindows: string[];
 };
 
