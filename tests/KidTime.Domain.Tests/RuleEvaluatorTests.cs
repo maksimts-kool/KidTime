@@ -410,6 +410,98 @@ public sealed class RuleEvaluatorTests
         Assert.NotEqual(noon, tomorrow);
     }
 
+    [Fact]
+    public void Closing_schedule_window_is_pending_a_minute_before_it_closes()
+    {
+        var rule = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            Schedule = Schedule((DayOfWeek.Monday, "11:00", "22:00"))
+        };
+
+        var pending = RuleEvaluator.FindPendingDeviceRestriction(
+            rule, MondayNoonUtc.AddHours(9).AddMinutes(59), 0, countingActiveTime: true, AllowanceEnd(rule, MondayNoonUtc.AddHours(9).AddMinutes(59)));
+
+        Assert.NotNull(pending);
+        Assert.Equal(60, pending.Seconds);
+        Assert.Equal(BlockReason.OutsideAllowedSchedule, pending.Decision.Reason);
+    }
+
+    [Fact]
+    public void The_soonest_restriction_is_the_pending_one()
+    {
+        var rule = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            DailyLimitSeconds = 7200,
+            Schedule = Schedule((DayOfWeek.Monday, "11:00", "22:00"))
+        };
+
+        // An hour of the limit is left, and the window closes in a minute.
+        var pending = RuleEvaluator.FindPendingDeviceRestriction(
+            rule, MondayNoonUtc.AddHours(9).AddMinutes(59), 3600, countingActiveTime: true, AllowanceEnd(rule, MondayNoonUtc.AddHours(9).AddMinutes(59)));
+
+        Assert.NotNull(pending);
+        Assert.Equal(60, pending.Seconds);
+        Assert.Equal(BlockReason.OutsideAllowedSchedule, pending.Decision.Reason);
+    }
+
+    [Fact]
+    public void A_daily_limit_is_a_deadline_only_while_it_is_being_spent()
+    {
+        var rule = NewDeviceRule(dailyLimitSeconds: 3600);
+
+        var spending = RuleEvaluator.FindPendingDeviceRestriction(
+            rule, MondayNoonUtc, 3570, countingActiveTime: true, AllowanceEnd(rule, MondayNoonUtc));
+        var idle = RuleEvaluator.FindPendingDeviceRestriction(
+            rule, MondayNoonUtc, 3570, countingActiveTime: false, AllowanceEnd(rule, MondayNoonUtc));
+
+        Assert.NotNull(spending);
+        Assert.Equal(30, spending.Seconds);
+        Assert.Equal(BlockReason.DailyLimitReached, spending.Decision.Reason);
+        Assert.Null(idle);
+    }
+
+    [Fact]
+    public void A_window_a_grant_opened_over_a_block_is_pending_when_it_runs_out()
+    {
+        var rule = new DeviceRuleSnapshot
+        {
+            TimeZoneId = "UTC",
+            ManuallyBlocked = true,
+            Bonus = new TimeBonus(DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime), 1200, MondayNoonUtc.AddSeconds(45))
+        };
+
+        var pending = RuleEvaluator.FindPendingDeviceRestriction(
+            rule, MondayNoonUtc, 0, countingActiveTime: true, AllowanceEnd(rule, MondayNoonUtc));
+
+        Assert.NotNull(pending);
+        Assert.Equal(45, pending.Seconds);
+        Assert.Equal(BlockReason.ManualBlock, pending.Decision.Reason);
+    }
+
+    [Fact]
+    public void A_pc_that_is_already_blocked_has_no_seconds_left()
+    {
+        var pending = RuleEvaluator.FindPendingDeviceRestriction(
+            NewDeviceRule(dailyLimitSeconds: 3600), MondayNoonUtc, 3600, countingActiveTime: true, null);
+
+        Assert.NotNull(pending);
+        Assert.Equal(0, pending.Seconds);
+        Assert.Equal(BlockReason.DailyLimitReached, pending.Decision.Reason);
+    }
+
+    [Fact]
+    public void An_unrestricted_pc_has_nothing_pending()
+    {
+        Assert.Null(RuleEvaluator.FindPendingDeviceRestriction(
+            NewDeviceRule(), MondayNoonUtc, 3600, countingActiveTime: true, null));
+    }
+
+    /// <summary>The expensive scan the caller owns; see FindPendingDeviceRestriction.</summary>
+    private static DateTimeOffset? AllowanceEnd(DeviceRuleSnapshot rule, DateTimeOffset utcNow) =>
+        RuleEvaluator.FindCurrentAllowanceEndUtc(rule.Schedule, utcNow, rule.TimeZoneId);
+
     private static DeviceRuleSnapshot NewDeviceRule(int? dailyLimitSeconds = null) => new()
     {
         TimeZoneId = "UTC",

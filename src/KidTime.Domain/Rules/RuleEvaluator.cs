@@ -106,6 +106,68 @@ public static class RuleEvaluator
         dailyLimitSeconds is int limit ? limit + TimeBonus.SecondsOn(bonus, localDate) : null;
 
     /// <summary>
+    /// The restriction the PC is heading into, and how many seconds are left before it starts.
+    ///
+    /// The final warning belongs in the minute before screen time ends, not the minute after it:
+    /// a schedule closing at 22:00 should warn the child at 21:59 and sign the session out on the
+    /// hour. That is only possible for a deadline the rules can name ahead of time, which is what
+    /// this finds - the schedule window closing, and the window a grant opened over a block
+    /// running out. The daily limit is named too, but it counts down in active foreground time
+    /// rather than on the wall clock, so the caller says with <paramref name="countingActiveTime"/>
+    /// whether the child is actually spending it; while they are not, the limit is not a deadline
+    /// and predicting one would sign out a PC nobody was using.
+    ///
+    /// A PC that is already unavailable is reported as zero seconds with the decision in force, so
+    /// a caller does not have to evaluate twice.
+    ///
+    /// <paramref name="currentAllowanceEndUtc"/> is <see cref="FindCurrentAllowanceEndUtc"/> for
+    /// this rule, and it is the caller's to supply because it is the expensive one: it walks the
+    /// week a minute at a time, and this runs once a second on the household's weakest PC. The
+    /// answer only changes when the rules change or when the window it names actually closes, so
+    /// the caller that asks every second is the one in a position to keep it.
+    /// </summary>
+    public static PendingRestriction? FindPendingDeviceRestriction(
+        DeviceRuleSnapshot rule,
+        DateTimeOffset utcNow,
+        int activeSecondsToday,
+        bool countingActiveTime,
+        DateTimeOffset? currentAllowanceEndUtc)
+    {
+        var current = EvaluateDevice(rule, utcNow, activeSecondsToday);
+        if (!current.IsAllowed) return new PendingRestriction(0, current);
+
+        PendingRestriction? soonest = null;
+        void Consider(int seconds, RuleDecision decision)
+        {
+            var bounded = Math.Max(0, seconds);
+            if (soonest is null || bounded < soonest.Seconds)
+                soonest = new PendingRestriction(bounded, decision);
+        }
+
+        var localDate = GetLocalDate(utcNow, rule.TimeZoneId);
+        if (countingActiveTime
+            && EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Bonus, localDate) is int limit)
+        {
+            // Evaluating with the limit already spent is what produces the wording and the
+            // available-at instant the child will be shown when it actually is.
+            Consider(limit - activeSecondsToday, EvaluateDevice(rule, utcNow, limit));
+        }
+
+        // The two instants at which a rule that is not blocking now starts to. Each is taken only
+        // when the rules really do block there, so a window that closes into another one, or a
+        // grant that outlives the schedule it was lifting, is not warned about for nothing.
+        foreach (var instant in new[] { currentAllowanceEndUtc, rule.Bonus?.LiftedUntilUtc })
+        {
+            if (instant is not { } deadline || deadline <= utcNow) continue;
+            var decision = EvaluateDevice(rule, deadline, activeSecondsToday);
+            if (decision.IsAllowed) continue;
+            Consider((int)Math.Ceiling((deadline - utcNow).TotalSeconds), decision);
+        }
+
+        return soonest;
+    }
+
+    /// <summary>
     /// Identifies the allowance period in force: the schedule window currently open, or the
     /// device-local day when no schedule is configured.
     ///

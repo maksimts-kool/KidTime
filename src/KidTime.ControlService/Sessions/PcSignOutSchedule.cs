@@ -44,6 +44,16 @@ public sealed class PcSignOutSchedule
     /// <summary>True while a warning is standing, so the loop knows there is one to withdraw.</summary>
     public bool IsWarned => _sessionId is not null;
 
+    /// <summary>
+    /// Seconds left on a standing warning, or null when none is counting down. A warning issued
+    /// before the restriction arrived is measured against this to notice that the deadline it was
+    /// drawn for has moved - a parent granting time, or a child stopping short of a limit.
+    /// </summary>
+    public int? SecondsRemaining(long nowTimestamp) =>
+        _sessionId is null || _issuedAtTimestamp is not null
+            ? null
+            : (int)Math.Ceiling(Math.Max(0, Stopwatch.GetElapsedTime(nowTimestamp, _signOutAtTimestamp).TotalSeconds));
+
     public SignOutStep Next(uint sessionId, string user, long nowTimestamp)
     {
         if (_sessionId != sessionId || !string.Equals(_user, user, StringComparison.OrdinalIgnoreCase))

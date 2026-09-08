@@ -138,12 +138,33 @@ export type ApplicationSummary = {
 };
 
 export type DailyUsage = { date: string; activeSeconds: number };
+
+/** One application's share of a statistics period, with the days it was spent across. */
+export type StatisticsApplication = {
+  identityKey: string;
+  /** The row an icon and a rule page are addressed by. */
+  deviceApplicationId: string;
+  displayName: string;
+  publisher: string | null;
+  hasIcon: boolean;
+  activeSeconds: number;
+  /** The same stretch of days immediately before this one, so a total can be judged. */
+  previousActiveSeconds: number;
+  daily: DailyUsage[];
+};
+
 export type DeviceStatistics = {
   from: string;
   to: string;
+  /** Days in the range, including the ones with nothing on them. */
+  days: number;
   totalActiveSeconds: number;
+  previousTotalActiveSeconds: number;
+  dailyAverageSeconds: number;
+  /** How many applications the server expects to be given a colour of their own. */
+  chartedApplications: number;
   daily: DailyUsage[];
-  applications: { displayName: string; identityKey: string; activeSeconds: number }[];
+  applications: StatisticsApplication[];
 };
 
 /** One child's request for extra time, and what was decided about it. */

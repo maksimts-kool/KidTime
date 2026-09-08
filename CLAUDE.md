@@ -536,12 +536,30 @@ is held in the untracked environment file.
 
 When a PC rule blocks access, the LocalSystem service queues a final warning stating the reason,
 usage where applicable, and the next available time - drawn as the countdown card, or as a tagged
-native Windows notification when the card cannot be drawn. The first
-warning in a PC restriction episode lasts 60 seconds; signing in again while the same restriction is
-active gets 20 seconds. That grace state is persisted locally across service restarts. The service
-owns the monotonic deadline and then calls `WTSLogoffSession`; **notification delivery is never
-trusted for enforcement.** The warning carries an explicit expiration, and the card cannot strand
-itself either - the constraints below are what guarantee that.
+native Windows notification when the card cannot be drawn. The service owns the monotonic deadline
+and then calls `WTSLogoffSession`; **notification delivery is never trusted for enforcement.** The
+warning carries an explicit expiration, and the card cannot strand itself either - the constraints
+below are what guarantee that.
+
+**The warning ends where the screen time does, rather than starting there.** A schedule closing at
+22:00 warns the child at 21:59 and signs the session out on the hour; warning on the hour and
+signing out at 22:01 gives away a minute the rule did not. `RuleEvaluator.FindPendingDeviceRestriction`
+is what makes that possible: it names the restriction the PC is heading into and the seconds left
+before it starts. Two of those deadlines are wall-clock facts - the schedule window closing, and
+the window a grant opened over a block running out. The third, the daily limit, counts down in
+active foreground time, so the coordinator says whether the child is actually spending it and the
+limit is a deadline only while they are; a PC left idle at four minutes remaining is not about to
+close, and predicting that it is would sign out a PC nobody was using. When a standing warning's
+deadline moves more than ten seconds - a parent granting time, a child stopping short - the card is
+withdrawn and, if something is still closing, redrawn against the new one.
+
+How long the warning lasts is decided by whether the child was there to be warned. A restriction
+that arrived while they were signed in - a parent locking the PC from the panel, which has no
+deadline to count down to - is worth the full 60 seconds. **Finding one already in force on the way
+in is worth 20**, because there is no work in progress to save and the PC is meant to be shut: that
+covers signing in during a closed window, signing in again after a forced sign-out, and a service
+restart, which cannot know what came before it. The 60-second grace is also spent once per
+restriction episode and persisted locally, so a restart mid-warning cannot hand out another.
 
 **An enforcement action is granted for one attempt and spent when it is issued, never latched onto
 what it acted on.** `PcSignOutSchedule` and `ApplicationBlockLeases` both encode that. A session
@@ -638,6 +656,19 @@ administrators, the service control ACL denies stop/configure rights to interact
 recovery is enabled, and the SessionAgent process DACL prevents a Standard User from terminating or
 injecting into it.
 
+**A session that is going away is not a crash loop.** `WTSLogoffSession` does not wait, and for
+several seconds afterwards the session still exists and still answers for its user while everything
+in it is being torn down - so an agent launched into it dies immediately, five times in a row, and
+the supervisor used to report that to the parent as a fault on a PC doing exactly what it was told.
+Every forced sign-out produced one. `SessionAgentSupervisor` therefore neither launches into nor
+counts a session that `WindowsSession.IsSessionActive` says is not running its desktop, or one this
+service has just signed out (`PcSignOutState`, a shorter window than `PcSignOutSchedule.SettlePeriod`
+so a sign-out that never takes effect does not cost the child their tray agent for as long as the
+failure lasts). A session that cannot be asked counts as active: a child with an interface and a
+false report is a better failure than a child with none. When the loop is real, the error now
+carries the agent's exit code - `0xE0434352` is a .NET exception that escaped, which is the
+difference between the agent crashing and something killing it.
+
 ### Automatic agent updates
 
 Releases are served only to enrolled device credentials over the same certificate-pinned HTTPS
@@ -669,6 +700,12 @@ child is using it. Recurring work is kept off the hot path deliberately:
   ten minutes, not on every sample, and usage totals are buffered as described above.
 - `ProcessMonitor` sweeps every two seconds rather than every second. Blocked applications get a
   20-60 second save period, so a slower sweep changes nothing a child can notice.
+- `RuleEvaluator.FindCurrentAllowanceEndUtc` walks the week a minute at a time, and the lockout
+  loop needs it every second to warn the child before screen time ends. The answer is an absolute
+  instant that only moves when the rules change or when the window it names has passed, so
+  `EnforcementCoordinator` keeps it and hands it to `FindPendingDeviceRestriction` and
+  `BuildRestriction` rather than each of them scanning again. **The scan belongs to the caller
+  that can keep the answer**, which is why it is a parameter there and not a call.
 
 **Prefer removing recurring work over making it faster**, and keep enforcement timing decisions -
 sign-out deadlines, close deadlines - on the monotonic clock in the service, where interval changes
@@ -735,6 +772,32 @@ design** — do not add them, and do not extend the contract to upload window ti
   `useSyncExternalStore`, never through an effect that calls `setState` — the server render cannot
   see localStorage, and the lint rule that forbids the effect is there because the alternative is a
   second render pass fighting the first. `components/application-list.tsx` is the pattern.
+- **A page is named for everything on it.** The dashboard carries today *and* the week behind it,
+  so it is called Dashboard rather than Today with a seven-day card sitting under the heading.
+  Statistics is one PC at a time over 7, 14, or 30 days, and its filters are one row above
+  everything they scope, so both charts and every number below read the same slice.
+- **Settings earns its tab by telling the parent what to do next.** `lib/suggestions.ts` works the
+  list out from what the installation already knows - a PC enforcing nothing because no account was
+  chosen, a game that took hours this week with no rule on it, faults waiting, a child waiting on an
+  answer - and each one is a sentence and a link to the page that fixes it. **Nothing there changes
+  anything by itself**; a settings page that acts on its own suggestions is a settings page nobody
+  can predict.
+- **Charts are Recharts, in `components/charts/`, and they follow two colour rules.** One series
+  wears the brand primary, because a second colour would mean a second thing and there isn't one;
+  several wear `--chart-1` to `--chart-6` in the order they are declared, with everything past them
+  folded into one `--chart-other` band rather than given a seventh hue nobody can tell from the
+  first six. **That order is the safety mechanism, not a preference** - it was validated for
+  colour-vision deficiency against the white card, and three of its steps sit under 3:1 there, so
+  any chart drawing them also ships the written breakdown beside it (`ApplicationUsageTable` is the
+  one for `ApplicationUsageChart`). Gridlines are solid hairlines; only the average and limit
+  annotations are dashed, because a dashed line should mean a threshold.
+- **A chart's dates are formatted in a named locale (`en-GB`), never the reader's.** The panel is
+  English and says so, and a chart is a client component: rendered once on the server and once in
+  the browser, `toLocaleDateString(undefined, …)` disagrees with itself and fails hydration.
+- **A statistics range crosses as a day count, not a start date.** Only the server knows which day
+  the PC is standing in, and `lib/schedule.ts` exists because the panel must not resolve a Windows
+  timezone; `?days=` keeps that true. The server fills every day in the range, including the empty
+  ones - a chart drawn only from the days something ran makes an occasional application look daily.
 - Commit messages are plain imperative sentences describing the change ("Match the documented Caddy
   matcher to the deployed one"), with no conventional-commit prefixes.
 
@@ -783,6 +846,10 @@ a digit are kept, Microsoft-published applications recognized as such while the 
 are not, a runtime host filtered despite reporting the family it hosts, package identities shown as
 readable names, rule-change notifications, urgent running-out reminders, a delayed final
 warning restated in the seconds actually left, an expired final warning dropped rather than shown,
+a closing schedule window reported as pending a minute before it closes, the soonest of several
+restrictions winning, a daily limit counted as a deadline only while it is being spent, the window
+a grant opened over a block reported as pending when it runs out, a standing warning reporting what
+is left of it so a moved deadline can be noticed,
 persisted first-block grace, granted extra time raising a daily limit for its own date only,
 minutes alone never lifting a manual block or a schedule while the window a grant opens lifts both
 from the decision until it expires, per scope and without handing over a spent daily limit, extra
@@ -825,33 +892,40 @@ rules:
 11. manually block the PC, confirm the countdown card appears with the 60-second grace period and
     no duplicate native toast beside it, expires instead of leaving a topmost window behind, and
     confirm Windows signs the session out;
-12. sign in again while the rule is active and confirm the warning/sign-out cycle repeats;
-13. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
+12. sign in again while the rule is active and confirm the warning/sign-out cycle repeats, this
+    time with 20 seconds rather than 60 - the child was not there when the block arrived;
+13. set a schedule window closing a few minutes out, sit in it, and confirm the countdown card
+    appears at exactly one minute before the close and the session is signed out on the boundary,
+    not a minute past it; then confirm the parent's error log has no "SessionAgent has exited
+    within ..." entry from that sign-out, which is what a session being torn down used to produce;
+14. do the same with a daily limit a minute from running out, then leave the PC idle at under a
+    minute remaining and confirm no card appears and nothing signs out until the child resumes;
+15. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
     enforcement remains independent;
-14. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
+16. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
     instead, with the device, component, and stack trace, and repeats raise the count rather than
     adding rows - including a fault that stops the tray agent starting at all, which arrives both
     as the agent's own report and as the service's crash-loop error;
-15. let a PC limit run down to under five minutes and confirm the Today panel offers extra time,
+17. let a PC limit run down to under five minutes and confirm the Today panel offers extra time,
     that the 5-minute reminder toast and the sign-out countdown card both carry the button, and
     that pressing any of them opens the same card; confirm the slider moves only between 5 and 30
     in steps of five and that its label follows it, ask for 30 minutes, approve 20 in the panel's
     Requests page, and confirm the sign-out is cancelled, the child is told once, and the ring
     shows the new total — then deny a second request and confirm the child is told that too;
-16. set a one-minute Notepad limit, let it run out, ask for extra time from the countdown card,
+18. set a one-minute Notepad limit, let it run out, ask for extra time from the countdown card,
     and confirm the popup opens on Notepad rather than the PC, then check the Apps tab shows the
     same button on Notepad's own card and nowhere else;
-17. deny that request and confirm the child cannot ask again for it while the same schedule window
+19. deny that request and confirm the child cannot ask again for it while the same schedule window
     is open, that the card says when they may, and that the PC's own button still works — then
     let the next window open and confirm the button comes back on its own;
-18. confirm a granted 30 minutes is gone the next day without anything being sent to remove it;
-19. manually block the PC, and confirm the child can still ask: the countdown card carries the
+20. confirm a granted 30 minutes is gone the next day without anything being sent to remove it;
+21. manually block the PC, and confirm the child can still ask: the countdown card carries the
     small button beside "Got it" while "Got it" is the accented one, the request reaches the
     Requests page, and approving 20 minutes signs nothing out and lets the child back in from the
     moment of the decision — then watch those twenty minutes run out on the wall clock and confirm
     the block returns with the ordinary warning; do the same with a blocked application and confirm
     only that application comes back;
-20. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
+22. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
     screen-time window, the next notification, and the countdown card all change without
     reinstalling or signing out, then block the PC and confirm the card counts down in the corner,
     never takes focus, does not overlap its own buttons with the longer Russian labels, and
@@ -890,11 +964,23 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   `ApplicationCatalogReconciler` folds its rules and usage into the principal at server start, so
   restart the server container once after deploying rather than re-creating the rule.
 - **Usage is lower than elapsed login time:** expected — only non-idle foreground time counts.
+- **The sign-out countdown did not start a minute early:** only a deadline the rules can name in
+  advance can be counted down to. A schedule close and a grant's window running out are named; a
+  daily limit is named only while the child is actually spending it, so an idle PC gets the warning
+  when the block arrives instead. A manual block has no deadline at all and is warned about after
+  the fact, with the full minute.
 - **The child has no tray icon, window, or notifications while rules still apply:** the tray agent
   is failing to start and the service is relaunching it every two seconds. The error log carries
   both the agent's own fault and a "SessionAgent has exited within ... times in a row" error from
   the service; `%LOCALAPPDATA%\KidTime\logs\session-agent-faults.ndjson` on the PC has the stack
   trace either way. Enforcement is unaffected, which is why this can go unnoticed.
+- **A "SessionAgent has exited within 1s of starting 5 times in a row" error with nothing else
+  beside it:** on agents before this was fixed, that was usually a forced sign-out rather than a
+  fault. The session survives `WTSLogoffSession` by several seconds while it is torn down, and the
+  agent relaunched into it died every two seconds until it went away. The current service does not
+  count those, so a report that still appears is a real one - and it now carries the agent's exit
+  code, with `0xE0434352` meaning a .NET exception escaped, which the agent's own fault report on
+  the same PC will name.
 - **The error log stays empty after a crash:** reports ride the next synchronization, so a PC that
   is offline delivers them when it reconnects. Check `LastSeenUtc`, then
   `%LOCALAPPDATA%\KidTime\logs\session-agent-faults.ndjson` (queued in the child's session) and

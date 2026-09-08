@@ -8,10 +8,16 @@ using KidTime.Domain.Rules;
 
 namespace KidTime.ControlService.Enforcement;
 
+/// <summary>
+/// The PC as the rules see it right now. <c>Pending</c> is what it is heading into, so the final
+/// warning can be shown in the minute before screen time ends rather than the minute after; it is
+/// null when nothing in the rules names a deadline the service could count down to.
+/// </summary>
 public sealed record PcEnforcementStatus(
     RuleDecision Decision,
     int TodayActiveSeconds,
-    int? DailyLimitSeconds);
+    int? DailyLimitSeconds,
+    PendingRestriction? Pending);
 
 public sealed record ApplicationEnforcementStatus(
     string IdentityKey,
@@ -26,6 +32,14 @@ public sealed class EnforcementCoordinator(
     ILogger<EnforcementCoordinator> logger)
 {
     private static readonly int[] WarningThresholdSeconds = [15 * 60, 5 * 60, 2 * 60];
+
+    /// <summary>
+    /// How long an accepted sample keeps the daily limit counting down. Samples arrive every two
+    /// seconds, so this tolerates a hiccup while still knowing within a few seconds that the child
+    /// has stopped spending the allowance - which is what makes a limit a deadline or not.
+    /// </summary>
+    private static readonly TimeSpan ActiveTimeFreshness = TimeSpan.FromSeconds(15);
+
     private static readonly TimeSpan UsageFlushInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ApplicationRefreshInterval = TimeSpan.FromMinutes(10);
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -53,6 +67,20 @@ public sealed class EnforcementCoordinator(
     private readonly Dictionary<UsageKey, int> _unflushedUsage = [];
     private readonly Dictionary<string, DateTimeOffset> _applicationRefreshed = new(StringComparer.Ordinal);
     private long _lastUsageFlushTimestamp = Stopwatch.GetTimestamp();
+    private long _lastCountedUsageTimestamp;
+
+    /// <summary>
+    /// When the PC's own schedule window closes, kept rather than worked out again.
+    /// <see cref="RuleEvaluator.FindCurrentAllowanceEndUtc"/> walks the week a minute at a time,
+    /// and the lockout loop now asks for it every second so it can warn the child before screen
+    /// time ends rather than after. The answer is an absolute instant: it changes when the rules
+    /// change, and when the window it names has passed. Nothing else can move it, so a kept one is
+    /// exact rather than merely fresh.
+    /// </summary>
+    private (long Revision, DateTimeOffset ComputedAtUtc, DateTimeOffset? End)? _deviceAllowanceEnd;
+
+    /// <summary>How long a "the schedule never closes" answer is trusted before being re-checked.</summary>
+    private static readonly TimeSpan AllowanceEndRecheckInterval = TimeSpan.FromMinutes(1);
 
     public DeviceRuleSnapshot Rules => _rules;
 
@@ -189,6 +217,7 @@ public sealed class EnforcementCoordinator(
             var isIdle = sample.IdleSeconds >= rules.IdleThresholdSeconds;
             if (!isIdle && sample.ProcessId > 0 && deltaMilliseconds > 0)
             {
+                _lastCountedUsageTimestamp = Stopwatch.GetTimestamp();
                 _millisecondRemainder += deltaMilliseconds;
                 var seconds = (int)(_millisecondRemainder / 1000);
                 _millisecondRemainder %= 1000;
@@ -216,7 +245,7 @@ public sealed class EnforcementCoordinator(
             _lastPcBlocked = !pcDecision.IsAllowed;
             var offers = new List<TimeExtensionOffer>(2);
             if (pcDecision.IsAllowed && BuildRestriction(
-                    pcLimit, pcUsage, rules.Schedule, utcNow, rules.TimeZoneId, localDate) is { } pcRestriction)
+                    pcLimit, pcUsage, CurrentDeviceAllowanceEnd(rules, utcNow), utcNow, localDate) is { } pcRestriction)
             {
                 // The display name reaches only the application wording and the log line, so the
                 // PC path keeps the stable English label.
@@ -239,7 +268,9 @@ public sealed class EnforcementCoordinator(
                     appRule.DailyLimitSeconds, appRule.Bonus, localDate);
                 appDecision = RuleEvaluator.EvaluateApplication(appRule, utcNow, rules.TimeZoneId, appUsage, rules.Language);
                 if (appDecision.IsAllowed && BuildRestriction(
-                             appLimit, appUsage, appRule.Schedule, utcNow, rules.TimeZoneId, localDate) is { } appRestriction)
+                             appLimit, appUsage,
+                             RuleEvaluator.FindCurrentAllowanceEndUtc(appRule.Schedule, utcNow, rules.TimeZoneId),
+                             utcNow, localDate) is { } appRestriction)
                 {
                     var scope = $"app:{identity}";
                     if (foregroundChanged
@@ -284,10 +315,36 @@ public sealed class EnforcementCoordinator(
             return new PcEnforcementStatus(
                 RuleEvaluator.EvaluateDevice(rules, utcNow, usage),
                 usage,
-                RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Bonus, localDate));
+                RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Bonus, localDate),
+                RuleEvaluator.FindPendingDeviceRestriction(
+                    rules, utcNow, usage, IsSpendingActiveTime, CurrentDeviceAllowanceEnd(rules, utcNow)));
         }
         finally { _gate.Release(); }
     }
+
+    /// <summary>Caller holds the gate.</summary>
+    private DateTimeOffset? CurrentDeviceAllowanceEnd(DeviceRuleSnapshot rules, DateTimeOffset utcNow)
+    {
+        if (_deviceAllowanceEnd is { } kept
+            && kept.Revision == rules.Revision
+            && (kept.End is { } end
+                ? end > utcNow
+                : utcNow - kept.ComputedAtUtc < AllowanceEndRecheckInterval))
+            return kept.End;
+
+        var computed = RuleEvaluator.FindCurrentAllowanceEndUtc(rules.Schedule, utcNow, rules.TimeZoneId);
+        _deviceAllowanceEnd = (rules.Revision, utcNow, computed);
+        return computed;
+    }
+
+    /// <summary>
+    /// Whether the child is spending the daily allowance right now. A limit only counts down while
+    /// accepted foreground samples are arriving, so it is a deadline while they are and no
+    /// deadline at all while the PC sits idle.
+    /// </summary>
+    private bool IsSpendingActiveTime =>
+        _lastCountedUsageTimestamp != 0
+        && Stopwatch.GetElapsedTime(_lastCountedUsageTimestamp) < ActiveTimeFreshness;
 
     public async Task<SessionStatusSnapshot> GetUserStatusAsync(
         ServerConnectionStatus server,
@@ -623,13 +680,11 @@ public sealed class EnforcementCoordinator(
     private static TimeRestriction? BuildRestriction(
         int? dailyLimitSeconds,
         int activeSeconds,
-        WeeklySchedule schedule,
+        DateTimeOffset? scheduleEnd,
         DateTimeOffset utcNow,
-        string timeZoneId,
         DateOnly localDate)
     {
         int? activeRemaining = dailyLimitSeconds is int limit ? Math.Max(0, limit - activeSeconds) : null;
-        var scheduleEnd = RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, utcNow, timeZoneId);
         int? scheduleRemaining = scheduleEnd is { } end
             ? Math.Max(0, (int)Math.Ceiling((end - utcNow).TotalSeconds))
             : null;

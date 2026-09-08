@@ -8,6 +8,7 @@ namespace KidTime.ControlService.Sessions;
 
 public sealed class SessionAgentSupervisor(
     Enforcement.EnforcementCoordinator coordinator,
+    PcSignOutState signOutState,
     ILogger<SessionAgentSupervisor> logger) : BackgroundService
 {
     /// <summary>
@@ -21,6 +22,7 @@ public sealed class SessionAgentSupervisor(
     private const int CrashLoopLaunches = 5;
 
     private int _agentProcessId = -1;
+    private Process? _agent;
     private long _launchedTimestamp;
     private int _shortLivedLaunches;
     private bool _crashLoopReported;
@@ -36,19 +38,34 @@ public sealed class SessionAgentSupervisor(
             if (activeUser is null || !WindowsSession.IsActiveUserControlled(coordinator.Rules))
             {
                 StopAgent();
-                Volatile.Write(ref _agentProcessId, -1);
+                ForgetAgent();
                 // Signing out is not a crash, so the run of short lives starts over.
                 ResetCrashLoop();
                 continue;
             }
             var activeSessionId = activeUser.SessionId;
             if (IsAgentHealthy((int)activeSessionId)) continue;
+
+            // A session that is signing out or otherwise not running its desktop kills whatever is
+            // started in it. Those deaths are the system doing its job - a forced sign-out is the
+            // ordinary end of a blocked session - so the loop neither relaunches into them nor
+            // counts them towards a crash loop the parent would be asked to act on.
+            if (signOutState.IsSigningOut || !WindowsSession.IsSessionActive(activeSessionId))
+            {
+                ForgetAgent();
+                ResetCrashLoop();
+                continue;
+            }
+
             NoteAgentExited();
-            Volatile.Write(ref _agentProcessId, -1);
+            ForgetAgent();
             try
             {
                 var processId = Launch(activeSessionId);
                 Volatile.Write(ref _agentProcessId, processId);
+                // The handle keeps the exit code readable after the process is gone, which is the
+                // one fact that says why a start-up failure failed.
+                _agent = TryOpen(processId);
                 _launchedTimestamp = Stopwatch.GetTimestamp();
                 logger.LogInformation("SessionAgent started with a hardened process ACL in session {SessionId} as process {ProcessId}.", activeSessionId, processId);
             }
@@ -83,9 +100,43 @@ public sealed class SessionAgentSupervisor(
         if (_shortLivedLaunches < CrashLoopLaunches || _crashLoopReported) return;
         _crashLoopReported = true;
         logger.LogError(
-            "SessionAgent has exited within {LifetimeSeconds:F0}s of starting {Attempts} times in a row; the controlled user has no KidTime interface or notifications. Enforcement is unaffected.",
+            "SessionAgent has exited within {LifetimeSeconds:F0}s of starting {Attempts} times in a row (last exit code {ExitCode}); the controlled user has no KidTime interface or notifications. Enforcement is unaffected.",
             lifetime.TotalSeconds,
-            _shortLivedLaunches);
+            _shortLivedLaunches,
+            DescribeExitCode());
+    }
+
+    /// <summary>
+    /// The last agent's exit code as the panel should read it. 0xE0434352 is a .NET exception that
+    /// escaped, which is the difference between "the agent crashed" and "something killed it".
+    /// </summary>
+    private string DescribeExitCode()
+    {
+        try
+        {
+            if (_agent is not { HasExited: true } process) return "unknown";
+            var code = process.ExitCode;
+            return code == unchecked((int)0xE0434352)
+                ? "0xE0434352 (unhandled .NET exception)"
+                : $"0x{code:X8}";
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            return "unknown";
+        }
+    }
+
+    private static Process? TryOpen(int processId)
+    {
+        try { return Process.GetProcessById(processId); }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException) { return null; }
+    }
+
+    private void ForgetAgent()
+    {
+        Volatile.Write(ref _agentProcessId, -1);
+        _agent?.Dispose();
+        _agent = null;
     }
 
     private void ResetCrashLoop()
@@ -138,10 +189,15 @@ public sealed class SessionAgentSupervisor(
         if (processId <= 0) return false;
         try
         {
-            using var process = Process.GetProcessById(processId);
+            // The open handle is asked first: a dead agent's process id can be reused by something
+            // else, while the handle keeps answering for the process this service started. It is
+            // only ever missing if opening it failed, and then the id is all there is.
+            using var reopened = _agent is null ? Process.GetProcessById(processId) : null;
+            var process = _agent ?? reopened!;
             return !process.HasExited && process.SessionId == sessionId;
         }
-        catch (ArgumentException) { return false; }
+        catch (Exception exception)
+            when (exception is ArgumentException or InvalidOperationException or Win32Exception) { return false; }
     }
 
     private static int Launch(uint sessionId)

@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { ArrowRight, Clock3, HandHelping, Monitor, Sparkles } from "lucide-react";
+import { ArrowRight, CalendarRange, Clock3, HandHelping, Sparkles } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
 import { formatDuration, formatSeen } from "@/lib/format";
+import { changeAgainst } from "@/lib/chart";
 import { describeApplicationRules, describeSchedule, describeTodayWindows } from "@/lib/schedule";
 import type { ApplicationSummary, DeviceStatistics, DeviceSummary, TimeExtensionRequest } from "@/lib/types";
 import { ApplicationIcon } from "@/components/application-icon";
 import { AutoRefresh } from "@/components/auto-refresh";
+import { DailyUsageChart } from "@/components/charts/daily-usage-chart";
 import { EmptyDevices } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { QuickBlock } from "@/components/quick-block";
@@ -36,7 +38,7 @@ export default async function DashboardPage() {
   const schedule = describeSchedule(device);
   const todayWindows = describeTodayWindows(device);
   const top = [...applications].sort((a, b) => b.todayActiveSeconds - a.todayActiveSeconds).slice(0, 5);
-  const maxDay = Math.max(...statistics.daily.map(day => day.activeSeconds), 1);
+  const weekTrend = changeAgainst(statistics.totalActiveSeconds, statistics.previousTotalActiveSeconds);
 
   return (
     <>
@@ -106,7 +108,13 @@ export default async function DashboardPage() {
 
       <section className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard label="Today’s active time" value={formatDuration(device.todayActiveSeconds)} detail="Idle time excluded" icon={Clock3} />
-        <StatCard label="Last 7 days" value={formatDuration(statistics.totalActiveSeconds)} detail="Across this PC" icon={Monitor} />
+        <StatCard
+          label="Last 7 days"
+          value={formatDuration(statistics.totalActiveSeconds)}
+          icon={CalendarRange}
+          trend={weekTrend}
+          trendLabel={weekTrend == null ? "Across this PC" : "vs the 7 days before"}
+        />
         <StatCard label="Most used today" value={top[0]?.displayName ?? "Nothing yet"} detail={top[0] ? formatDuration(top[0].todayActiveSeconds) : "Usage will appear here"} icon={Sparkles} />
       </section>
 
@@ -138,20 +146,17 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle>Daily active time</CardTitle>
-            <CardDescription>Last 7 days</CardDescription>
+            <CardDescription>Last 7 days, with this week&rsquo;s average marked</CardDescription>
             <CardAction><Button variant="ghost" size="sm" render={<Link href="/statistics" />}>Details <ArrowRight data-icon="inline-end" /></Button></CardAction>
           </CardHeader>
           <CardContent>
             {statistics.daily.length ? (
-              <div className="flex h-56 items-end gap-3 pt-8">
-                {statistics.daily.map(day => (
-                  <div className="flex h-full flex-1 flex-col justify-end gap-2 text-center" key={day.date}>
-                    <span className="text-[10px] text-muted-foreground tabular-nums">{formatDuration(day.activeSeconds)}</span>
-                    <span className="mx-auto w-full max-w-9 rounded-t-md bg-primary/80" style={{ height: `${Math.max(3, day.activeSeconds / maxDay * 100)}%` }} />
-                    <span className="text-[10px] text-muted-foreground">{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2)}</span>
-                  </div>
-                ))}
-              </div>
+              <DailyUsageChart
+                daily={statistics.daily}
+                limitSeconds={device.dailyLimitSeconds}
+                today={device.schedule.localDate}
+                height={232}
+              />
             ) : <p className="py-12 text-center text-sm text-muted-foreground">No usage has been synchronized yet.</p>}
           </CardContent>
         </Card>
@@ -161,5 +166,7 @@ export default async function DashboardPage() {
 }
 
 function Heading() {
-  return <PageHeader eyebrow="Overview" title="Today" description="Screen time, app usage, and device status at a glance." />;
+  // The page carries both today and the week behind it, so it is named for neither in particular:
+  // a heading that says "Today" over a seven-day chart is a question the reader has to resolve.
+  return <PageHeader eyebrow="Overview" title="Dashboard" description="Today at a glance, and the week behind it." />;
 }

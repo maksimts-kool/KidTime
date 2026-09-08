@@ -75,6 +75,25 @@ public sealed class PcSignOutScheduleTests
     }
 
     [Fact]
+    public void A_standing_warning_reports_what_is_left_of_it()
+    {
+        var schedule = new PcSignOutSchedule();
+        var start = Stopwatch.GetTimestamp();
+
+        // Nothing standing, nothing to compare a moved deadline against.
+        Assert.Null(schedule.SecondsRemaining(start));
+
+        schedule.Warn(SessionId, User, 60, start);
+        Assert.Equal(60, schedule.SecondsRemaining(start));
+        Assert.Equal(45, schedule.SecondsRemaining(start + Seconds(15)));
+        Assert.Equal(0, schedule.SecondsRemaining(start + Seconds(75)));
+
+        // A warning already spent on a sign-out is not counting down to anything.
+        schedule.SignOutIssued(start + Seconds(60));
+        Assert.Null(schedule.SecondsRemaining(start + Seconds(61)));
+    }
+
+    [Fact]
     public void Clearing_withdraws_the_warning()
     {
         var schedule = new PcSignOutSchedule();

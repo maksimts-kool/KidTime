@@ -34,6 +34,28 @@ public static class WindowsSession
 
     public static bool TryLogoff(uint sessionId) => WTSLogoffSession(IntPtr.Zero, sessionId, wait: false);
 
+    /// <summary>
+    /// Whether the session is connected and running its desktop. A session that is signing out,
+    /// disconnecting, or coming up is still reported by <see cref="ActiveSessionId"/> and still
+    /// answers for its user, but nothing started in it survives - so this is what tells an
+    /// ordinary transition apart from an agent that cannot start.
+    ///
+    /// A session that cannot be asked is treated as active. This gates whether the tray agent is
+    /// launched at all, and a machine where the query behaves unexpectedly should get a child with
+    /// an interface and a false crash-loop report rather than a child with no interface at all.
+    /// </summary>
+    public static bool IsSessionActive(uint sessionId)
+    {
+        if (sessionId == uint.MaxValue) return false;
+        if (!WTSQuerySessionInformation(IntPtr.Zero, sessionId, WtsInfoClass.ConnectState, out var buffer, out var bytes)
+            || buffer == IntPtr.Zero)
+            return true;
+        try { return bytes < sizeof(int) || Marshal.ReadInt32(buffer) == WtsActive; }
+        finally { WTSFreeMemory(buffer); }
+    }
+
+    private const int WtsActive = 0;
+
     private static string? Query(uint sessionId, WtsInfoClass infoClass)
     {
         if (!WTSQuerySessionInformation(IntPtr.Zero, sessionId, infoClass, out var buffer, out _) || buffer == IntPtr.Zero)
@@ -55,7 +77,7 @@ public static class WindowsSession
         catch (IdentityNotMappedException) { return null; }
     }
 
-    private enum WtsInfoClass { UserName = 5, DomainName = 7 }
+    private enum WtsInfoClass { UserName = 5, DomainName = 7, ConnectState = 8 }
 
     [DllImport("kernel32.dll")]
     private static extern uint WTSGetActiveConsoleSessionId();

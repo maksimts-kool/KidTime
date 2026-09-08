@@ -128,6 +128,12 @@ public enum BlockReason
     OutsideAllowedSchedule
 }
 
+/// <summary>
+/// A restriction that has not started yet, and the seconds left before it does. Zero seconds
+/// means it is in force now.
+/// </summary>
+public sealed record PendingRestriction(int Seconds, RuleDecision Decision);
+
 public sealed record RuleDecision(
     bool IsAllowed,
     BlockReason Reason,
