@@ -120,6 +120,68 @@ public sealed class LocalStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task An_application_in_a_call_counts_from_the_background_even_while_the_keyboard_is_idle()
+    {
+        // A child in a Discord call behind a game is using Discord the whole time. Holding the
+        // microphone is the call itself, so it counts without input; PC time keeps its idle rule.
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var clock = new TrustedClock();
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+        coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 1, TimeZoneId = "UTC", IdleThresholdSeconds = 300 });
+        var game = Descriptor();
+        var call = CallDescriptor();
+        var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
+        AudibleApplication[] inCall = [new(call, IsCapturing: true)];
+
+        await coordinator.HandleSampleAsync(Sample(1, 0, 0, game) with { AudibleApplications = inCall }, CancellationToken.None);
+        await coordinator.HandleSampleAsync(Sample(2, 5_000, 0, game) with { AudibleApplications = inCall }, CancellationToken.None);
+        await coordinator.HandleSampleAsync(Sample(3, 10_000, 600, game) with { AudibleApplications = inCall }, CancellationToken.None);
+        await coordinator.FlushUsageAsync(CancellationToken.None);
+
+        Assert.Equal(5, await store.GetUsageAsync(date, null, CancellationToken.None));
+        Assert.Equal(5, await store.GetUsageAsync(date, ApplicationIdentity.CreateKey(game), CancellationToken.None));
+        Assert.Equal(10, await store.GetUsageAsync(date, ApplicationIdentity.CreateKey(call), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Sound_alone_counts_only_while_somebody_is_at_the_pc_and_never_twice()
+    {
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var clock = new TrustedClock();
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+        coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 1, TimeZoneId = "UTC", IdleThresholdSeconds = 300 });
+        var game = Descriptor();
+        var music = CallDescriptor();
+        var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
+        AudibleApplication[] playing =
+        [
+            new(music, IsCapturing: false),
+            // The foreground application playing its own sound is still one application.
+            new(game, IsCapturing: false),
+            // Anything the catalog would refuse from the foreground is refused here too.
+            new(new ApplicationDescriptor
+            {
+                DisplayName = "Microsoft Edge WebView2",
+                ExecutableName = "msedgewebview2.exe",
+                ExecutablePath = @"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\msedgewebview2.exe"
+            }, IsCapturing: true)
+        ];
+
+        await coordinator.HandleSampleAsync(Sample(1, 0, 0, game) with { AudibleApplications = playing }, CancellationToken.None);
+        await coordinator.HandleSampleAsync(Sample(2, 5_000, 0, game) with { AudibleApplications = playing }, CancellationToken.None);
+        await coordinator.HandleSampleAsync(Sample(3, 10_000, 600, game) with { AudibleApplications = playing }, CancellationToken.None);
+        await coordinator.FlushUsageAsync(CancellationToken.None);
+
+        Assert.Equal(5, await store.GetUsageAsync(date, null, CancellationToken.None));
+        Assert.Equal(5, await store.GetUsageAsync(date, ApplicationIdentity.CreateKey(game), CancellationToken.None));
+        Assert.Equal(5, await store.GetUsageAsync(date, ApplicationIdentity.CreateKey(music), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Counted_seconds_are_buffered_between_flushes_and_survive_a_restart()
     {
         Directory.CreateDirectory(_directory);
@@ -626,6 +688,16 @@ public sealed class LocalStoreTests : IDisposable
         ProductName = "Test app",
         OriginalFilename = "test.exe",
         SignaturePublisher = "Test Publisher"
+    };
+
+    private static ApplicationDescriptor CallDescriptor() => new()
+    {
+        DisplayName = "Call app",
+        ExecutableName = "call.exe",
+        ExecutablePath = @"C:\Apps\call.exe",
+        ProductName = "Call app",
+        OriginalFilename = "call.exe",
+        SignaturePublisher = "Call Publisher"
     };
 
     private static SessionUsageSample Sample(long sequence, long elapsedMs, int idleSeconds, ApplicationDescriptor app) =>

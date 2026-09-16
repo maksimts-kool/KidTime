@@ -40,6 +40,9 @@ public sealed class EnforcementCoordinator(
     /// </summary>
     private static readonly TimeSpan ActiveTimeFreshness = TimeSpan.FromSeconds(15);
 
+    /// <summary>Matches the agent's own bound on one sample.</summary>
+    private const int MaximumAudibleApplications = 16;
+
     private static readonly TimeSpan UsageFlushInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ApplicationRefreshInterval = TimeSpan.FromMinutes(10);
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -215,17 +218,25 @@ public sealed class EnforcementCoordinator(
             _lastSequence = sample.Sequence;
             _lastMonotonicMilliseconds = sample.MonotonicElapsedMilliseconds;
             var isIdle = sample.IdleSeconds >= rules.IdleThresholdSeconds;
-            if (!isIdle && sample.ProcessId > 0 && deltaMilliseconds > 0)
+            var countsPc = !isIdle && sample.ProcessId > 0;
+            var countedApplications = new HashSet<string>(StringComparer.Ordinal);
+            if (countsPc && identity is not null) countedApplications.Add(identity);
+            var audible = ResolveAudibleApplications(sample.AudibleApplications, isIdle);
+            countedApplications.UnionWith(audible.Keys);
+            if (deltaMilliseconds > 0 && (countsPc || countedApplications.Count > 0))
             {
-                _lastCountedUsageTimestamp = Stopwatch.GetTimestamp();
+                if (countsPc) _lastCountedUsageTimestamp = Stopwatch.GetTimestamp();
                 _millisecondRemainder += deltaMilliseconds;
                 var seconds = (int)(_millisecondRemainder / 1000);
                 _millisecondRemainder %= 1000;
                 if (seconds > 0)
                 {
-                    await AddUsageAsync(localDate, null, seconds, cancellationToken);
-                    if (identity is not null)
-                        await AddUsageAsync(localDate, identity, seconds, cancellationToken);
+                    // PC time keeps its input-based idle rule; only an application's own time is
+                    // extended to what it is doing out of sight. Each application counts once per
+                    // sample however many ways it was seen.
+                    if (countsPc) await AddUsageAsync(localDate, null, seconds, cancellationToken);
+                    foreach (var counted in countedApplications)
+                        await AddUsageAsync(localDate, counted, seconds, cancellationToken);
                 }
             }
 
@@ -295,12 +306,54 @@ public sealed class EnforcementCoordinator(
                     Enqueue(changedNotification);
             }
 
+            // An application running down out of sight gets the same 15-, 5-, and 2-minute
+            // reminders: a child in a call behind a game is exactly the child who would otherwise
+            // learn about the limit from the call being closed.
+            foreach (var (audibleIdentity, _) in audible)
+            {
+                if (audibleIdentity == identity
+                    || rules.Applications.FirstOrDefault(x => x.IdentityKey == audibleIdentity) is not { } audibleRule)
+                    continue;
+                var audibleUsage = await ReadUsageAsync(localDate, audibleIdentity, cancellationToken);
+                var audibleDecision = RuleEvaluator.EvaluateApplication(
+                    audibleRule, utcNow, rules.TimeZoneId, audibleUsage, rules.Language);
+                if (audibleDecision.IsAllowed && BuildRestriction(
+                        RuleEvaluator.EffectiveDailyLimitSeconds(audibleRule.DailyLimitSeconds, audibleRule.Bonus, localDate),
+                        audibleUsage,
+                        RuleEvaluator.FindCurrentAllowanceEndUtc(audibleRule.Schedule, utcNow, rules.TimeZoneId),
+                        utcNow, localDate) is { } audibleRestriction)
+                    QueueThresholdWarnings($"app:{audibleIdentity}", audibleRule.DisplayName, audibleRestriction, signsOut: false);
+            }
+
             var remaining = pcLimit is int limit ? Math.Max(0, limit - pcUsage) : -1;
             return new EnforcementState(!pcDecision.IsAllowed, pcDecision, appDecision, pcUsage,
                 pcLimit, remaining, DrainNotifications(), Language: rules.Language,
                 ExtensionOffers: offers);
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// The applications a sample heard, keyed by identity, that count as in use this sample. The
+    /// agent is unelevated, so everything it names is re-checked here exactly as the foreground
+    /// application is. Holding the microphone is a call and counts even while nobody touches the
+    /// keyboard; merely playing sound counts only while somebody is at the PC, so a game left
+    /// humming in a menu does not spend its limit on an empty room.
+    /// </summary>
+    private static Dictionary<string, ApplicationDescriptor> ResolveAudibleApplications(
+        IReadOnlyList<AudibleApplication>? reported,
+        bool isIdle)
+    {
+        var resolved = new Dictionary<string, ApplicationDescriptor>(StringComparer.Ordinal);
+        if (reported is null) return resolved;
+        foreach (var audible in reported.Take(MaximumAudibleApplications))
+        {
+            if (audible?.Application is null || (isIdle && !audible.IsCapturing)) continue;
+            if (!ApplicationCatalogPolicy.IsUserManageable(audible.Application)) continue;
+            var descriptor = ApplicationCatalogPolicy.NormalizeForCatalog(audible.Application);
+            resolved.TryAdd(ApplicationIdentity.CreateKey(descriptor), descriptor);
+        }
+        return resolved;
     }
 
     public async Task<PcEnforcementStatus> GetPcStatusAsync(CancellationToken cancellationToken)

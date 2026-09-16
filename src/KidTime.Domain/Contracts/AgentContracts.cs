@@ -107,7 +107,18 @@ public sealed record SessionUsageSample(
     int ProcessId,
     string? WindowTitle,
     ApplicationDescriptor? ForegroundApplication,
-    bool StatusRequested = true);
+    bool StatusRequested = true,
+    IReadOnlyList<AudibleApplication>? AudibleApplications = null);
+
+/// <summary>
+/// An application holding an active Windows audio session, whether or not it is in front. A
+/// child in a Discord call while playing a game is using Discord the whole time, and the
+/// foreground window alone would never see it. <paramref name="IsCapturing"/> means the
+/// application holds the microphone open - which is what a call is, so it counts even while
+/// nobody touches the keyboard. Only the fact of the session crosses the pipe: no audio is ever
+/// read, which is the same thing Windows' own microphone-in-use indicator shows.
+/// </summary>
+public sealed record AudibleApplication(ApplicationDescriptor Application, bool IsCapturing);
 
 /// <summary>
 /// One agent-side fault worth showing the parent. Reports are diagnostics only: they never

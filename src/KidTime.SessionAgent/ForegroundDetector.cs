@@ -33,6 +33,22 @@ internal static class ForegroundDetector
         }
     }
 
+    /// <summary>Describes any process in this session, for the applications heard rather than seen.</summary>
+    public static ApplicationDescriptor? DescribeProcess(uint processId)
+    {
+        try
+        {
+            var path = ReadProcessPath(processId);
+            return string.IsNullOrWhiteSpace(path) ? null : DescribeApplication(path, processId);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException
+                                          or IOException or UnauthorizedAccessException
+                                          or System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// Reading version metadata and parsing an Authenticode signature costs file I/O and a
     /// certificate parse. The same executable stays in the foreground for minutes at a time and

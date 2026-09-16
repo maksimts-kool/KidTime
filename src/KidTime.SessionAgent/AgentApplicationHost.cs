@@ -156,7 +156,8 @@ internal sealed class AgentApplicationHost : IDisposable
                 foreground.ProcessId,
                 foreground.WindowTitle,
                 foreground.Application,
-                ShouldRequestStatus(sequence));
+                ShouldRequestStatus(sequence),
+                AudioSessionDetector.GetAudibleApplications());
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(4));
             var state = await _client.ExchangeAsync(sample, reports, timeout.Token);
             delivered = true;

@@ -328,7 +328,25 @@ and the previous weekday.
 
 `SessionAgent` samples the foreground window/process and `GetLastInputInfo` every two seconds.
 `ControlService` applies the configured idle threshold and counts only accepted foreground samples,
-so usage is always lower than elapsed login time.
+so PC usage is always lower than elapsed login time.
+
+**An application is also in use when it is heard rather than seen.** A child in a Discord or
+Telegram call behind a game is using the call application the whole time, and the foreground
+window never shows it. Each sample therefore also carries `AudibleApplications`: what
+`AudioSessionDetector` finds holding an active Windows audio session on any active endpoint (a
+headset set as the communications device is where calls live). A session owned by a helper the
+catalog refuses - WebView2 behind Teams or WhatsApp - is walked up to the process that started it.
+The service re-checks every entry through `ApplicationCatalogPolicy` exactly like the foreground
+application, and counts it toward **that application's own time only**, once per sample however
+many ways it was seen:
+
+- holding the microphone (a capture session) is a call and counts even while the keyboard is idle;
+- merely playing sound counts only while somebody is at the PC, so a game left humming in its menu
+  does not spend its limit on an empty room.
+
+PC time keeps the input-based idle rule, so an application's total can exceed the PC's on a day
+spent on a call. Background applications get the 15-, 5-, and 2-minute reminders too; closing one
+needs nothing new, because `ProcessMonitor` already evaluates every running application.
 
 `EnforcementCoordinator` is the only writer of local usage, so it keeps the running totals in
 memory and writes them back at most every ten seconds, before a usage batch is cut, and while the
@@ -715,7 +733,9 @@ cannot move them.
 
 No component contains web filtering, browser hooks, DNS proxying, URL capture, HTTPS interception,
 packet inspection, keylogging, screen capture, camera/microphone access, message collection, or
-location tracking. Foreground window titles travel locally for diagnostics but are not persisted or
+location tracking. Reading which process holds an audio session is not microphone access: no stream
+is opened and no audio is read, which is the same fact Windows' own volume mixer and
+microphone-in-use indicator show. Foreground window titles travel locally for diagnostics but are not persisted or
 uploaded by the current server contract. **Features that would cross this line are out of scope by
 design** — do not add them, and do not extend the contract to upload window titles.
 
@@ -865,7 +885,8 @@ cached offline rules, durable pending usage, buffered usage that survives a rest
 queueing and fingerprinting, in-batch fault collapsing, spent application close leases that a
 relaunch cannot inherit, a sign-out that is warned about and retried when the session outlives it,
 complete English and Russian catalogs with Russian plural agreement, language-scoped rule messages,
-idle exclusion, and cached app-limit evaluation.
+idle exclusion, a background application in a call counted while idle and one merely playing sound
+counted only while the PC is in use, and cached app-limit evaluation.
 
 Integration checks on a VM should use a harmless executable such as Notepad before testing game
 rules:
@@ -887,45 +908,48 @@ rules:
 8. start Steam and confirm one card named Steam appears in the panel — no `steamwebhelper`, no crash
    handler, no `Internet Explorer` from a downloaded `KidTimeSetup.exe` — then block Steam and
    confirm the window the child is looking at is what closes;
-9. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
-10. reconnect and confirm pending statistics upload;
-11. manually block the PC, confirm the countdown card appears with the 60-second grace period and
+9. join a Discord call, put a game in front, stop touching the keyboard for longer than the idle
+   threshold, and confirm Discord's time keeps rising while PC time stops; then leave the call with
+   a game playing music in the background and idle again, and confirm the game stops counting;
+10. disconnect only the VM from the server, launch a cached-blocked app, and confirm it stays blocked;
+11. reconnect and confirm pending statistics upload;
+12. manually block the PC, confirm the countdown card appears with the 60-second grace period and
     no duplicate native toast beside it, expires instead of leaving a topmost window behind, and
     confirm Windows signs the session out;
-12. sign in again while the rule is active and confirm the warning/sign-out cycle repeats, this
+13. sign in again while the rule is active and confirm the warning/sign-out cycle repeats, this
     time with 20 seconds rather than 60 - the child was not there when the block arrived;
-13. set a schedule window closing a few minutes out, sit in it, and confirm the countdown card
+14. set a schedule window closing a few minutes out, sit in it, and confirm the countdown card
     appears at exactly one minute before the close and the session is signed out on the boundary,
     not a minute past it; then confirm the parent's error log has no "SessionAgent has exited
     within ..." entry from that sign-out, which is what a session being torn down used to produce;
-14. do the same with a daily limit a minute from running out, then leave the PC idle at under a
+15. do the same with a daily limit a minute from running out, then leave the PC idle at under a
     minute remaining and confirm no card appears and nothing signs out until the child resumes;
-15. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
+16. end SessionAgent as the Standard User and confirm the service restarts it, while PC sign-out
     enforcement remains independent;
-16. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
+17. confirm the child never sees a Windows error dialog: any fault appears in the panel's error log
     instead, with the device, component, and stack trace, and repeats raise the count rather than
     adding rows - including a fault that stops the tray agent starting at all, which arrives both
     as the agent's own report and as the service's crash-loop error;
-17. let a PC limit run down to under five minutes and confirm the Today panel offers extra time,
+18. let a PC limit run down to under five minutes and confirm the Today panel offers extra time,
     that the 5-minute reminder toast and the sign-out countdown card both carry the button, and
     that pressing any of them opens the same card; confirm the slider moves only between 5 and 30
     in steps of five and that its label follows it, ask for 30 minutes, approve 20 in the panel's
     Requests page, and confirm the sign-out is cancelled, the child is told once, and the ring
     shows the new total — then deny a second request and confirm the child is told that too;
-18. set a one-minute Notepad limit, let it run out, ask for extra time from the countdown card,
+19. set a one-minute Notepad limit, let it run out, ask for extra time from the countdown card,
     and confirm the popup opens on Notepad rather than the PC, then check the Apps tab shows the
     same button on Notepad's own card and nowhere else;
-19. deny that request and confirm the child cannot ask again for it while the same schedule window
+20. deny that request and confirm the child cannot ask again for it while the same schedule window
     is open, that the card says when they may, and that the PC's own button still works — then
     let the next window open and confirm the button comes back on its own;
-20. confirm a granted 30 minutes is gone the next day without anything being sent to remove it;
-21. manually block the PC, and confirm the child can still ask: the countdown card carries the
+21. confirm a granted 30 minutes is gone the next day without anything being sent to remove it;
+22. manually block the PC, and confirm the child can still ask: the countdown card carries the
     small button beside "Got it" while "Got it" is the accented one, the request reaches the
     Requests page, and approving 20 minutes signs nothing out and lets the child back in from the
     moment of the decision — then watch those twenty minutes run out on the wall clock and confirm
     the block returns with the ordinary warning; do the same with a blocked application and confirm
     only that application comes back;
-22. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
+23. switch the device language to Russian in the panel and confirm the tray tooltip and menu, the
     screen-time window, the next notification, and the countdown card all change without
     reinstalling or signing out, then block the PC and confirm the card counts down in the corner,
     never takes focus, does not overlap its own buttons with the longer Russian labels, and
