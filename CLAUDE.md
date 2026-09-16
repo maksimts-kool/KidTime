@@ -683,9 +683,15 @@ counts a session that `WindowsSession.IsSessionActive` says is not running its d
 service has just signed out (`PcSignOutState`, a shorter window than `PcSignOutSchedule.SettlePeriod`
 so a sign-out that never takes effect does not cost the child their tray agent for as long as the
 failure lasts). A session that cannot be asked counts as active: a child with an interface and a
-false report is a better failure than a child with none. When the loop is real, the error now
-carries the agent's exit code - `0xE0434352` is a .NET exception that escaped, which is the
-difference between the agent crashing and something killing it.
+false report is a better failure than a child with none. **The child ending the session
+themselves looks the same** - signing out, restarting, or shutting down - and the service is told
+nothing, so the agent says it: WPF's `SessionEnding` makes it exit with
+`SessionAgentExitCodes.SessionEnded`, and the supervisor stands down until the session loses its
+user (at most a minute, so a cancelled shutdown gets its tray agent back). When the loop is real,
+the error carries the agent's exit code - read from the handle `CreateProcessAsUser` returned,
+because an agent that dies within milliseconds is gone before it can be reopened by id -
+and `0xE0434352` is a .NET exception that escaped, which is the difference between the agent
+crashing and something killing it.
 
 ### Automatic agent updates
 

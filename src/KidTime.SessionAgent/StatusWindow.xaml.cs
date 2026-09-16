@@ -579,7 +579,9 @@ public partial class StatusWindow : FluentWindow
     public void CloseForExit()
     {
         _allowClose = true;
-        if (IsLoaded) SystemThemeWatcher.UnWatch(this);
+        // When Windows ends the session the window handle is already gone and UnWatch throws.
+        if (IsLoaded && new System.Windows.Interop.WindowInteropHelper(this).Handle != IntPtr.Zero)
+            SystemThemeWatcher.UnWatch(this);
         Close();
     }
 

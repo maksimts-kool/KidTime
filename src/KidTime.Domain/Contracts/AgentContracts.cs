@@ -142,6 +142,19 @@ public static class DiagnosticComponents
     public const string SessionAgent = "SessionAgent";
 }
 
+/// <summary>
+/// What a SessionAgent exit code tells the service that supervises it.
+/// </summary>
+public static class SessionAgentExitCodes
+{
+    /// <summary>
+    /// Windows ended the session - the child signed out, restarted, or shut down. The session
+    /// keeps existing for several seconds while it is torn down and kills anything started in it,
+    /// so the service must not relaunch into it and read those deaths as a crash loop.
+    /// </summary>
+    public const int SessionEnded = 0x4B540001;
+}
+
 public static class DiagnosticSeverities
 {
     public const string Warning = "Warning";

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using KidTime.Domain.Contracts;
 using Microsoft.Win32.SafeHandles;
 
 namespace KidTime.ControlService.Sessions;
@@ -21,8 +22,19 @@ public sealed class SessionAgentSupervisor(
     /// <summary>How many of those in a row before the parent is told. Ten seconds of looping.</summary>
     private const int CrashLoopLaunches = 5;
 
+    /// <summary>
+    /// The longest the loop stands down after the agent reports Windows ending its session. It
+    /// normally ends sooner, when the session loses its user; the cap only matters if the child
+    /// cancels a shutdown, and then they get their tray agent back.
+    /// </summary>
+    private static readonly TimeSpan SessionEndingWindow = TimeSpan.FromSeconds(60);
+
+    private const uint StillActive = 259;
+    private const uint WaitTimeout = 0x102;
+
     private int _agentProcessId = -1;
-    private Process? _agent;
+    private SafeProcessHandle? _agent;
+    private long _sessionEndedTimestamp;
     private long _launchedTimestamp;
     private int _shortLivedLaunches;
     private bool _crashLoopReported;
@@ -41,19 +53,23 @@ public sealed class SessionAgentSupervisor(
                 ForgetAgent();
                 // Signing out is not a crash, so the run of short lives starts over.
                 ResetCrashLoop();
+                _sessionEndedTimestamp = 0;
                 continue;
             }
             var activeSessionId = activeUser.SessionId;
             if (IsAgentHealthy((int)activeSessionId)) continue;
+            NoteSessionEnded();
 
             // A session that is signing out or otherwise not running its desktop kills whatever is
             // started in it. Those deaths are the system doing its job - a forced sign-out is the
-            // ordinary end of a blocked session - so the loop neither relaunches into them nor
-            // counts them towards a crash loop the parent would be asked to act on.
-            if (signOutState.IsSigningOut || !WindowsSession.IsSessionActive(activeSessionId))
+            // ordinary end of a blocked session, and the child restarting the PC the ordinary end
+            // of any other - so the loop neither relaunches into them nor counts them towards a
+            // crash loop the parent would be asked to act on.
+            if (signOutState.IsSigningOut || IsSessionEnding || !WindowsSession.IsSessionActive(activeSessionId))
             {
                 ForgetAgent();
                 ResetCrashLoop();
+                _launchedTimestamp = 0;
                 continue;
             }
 
@@ -61,11 +77,11 @@ public sealed class SessionAgentSupervisor(
             ForgetAgent();
             try
             {
-                var processId = Launch(activeSessionId);
+                // The creation handle keeps the exit code readable after the process is gone, which
+                // is the one fact that says why a start-up failure failed. Reopening the process by
+                // id cannot: an agent that dies within milliseconds is gone before it is opened.
+                _agent = Launch(activeSessionId, out var processId);
                 Volatile.Write(ref _agentProcessId, processId);
-                // The handle keeps the exit code readable after the process is gone, which is the
-                // one fact that says why a start-up failure failed.
-                _agent = TryOpen(processId);
                 _launchedTimestamp = Stopwatch.GetTimestamp();
                 logger.LogInformation("SessionAgent started with a hardened process ACL in session {SessionId} as process {ProcessId}.", activeSessionId, processId);
             }
@@ -112,25 +128,31 @@ public sealed class SessionAgentSupervisor(
     /// </summary>
     private string DescribeExitCode()
     {
-        try
-        {
-            if (_agent is not { HasExited: true } process) return "unknown";
-            var code = process.ExitCode;
-            return code == unchecked((int)0xE0434352)
-                ? "0xE0434352 (unhandled .NET exception)"
-                : $"0x{code:X8}";
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or Win32Exception or NotSupportedException)
-        {
-            return "unknown";
-        }
+        if (ReadExitCode() is not { } code) return "unknown";
+        return code == unchecked((int)0xE0434352)
+            ? "0xE0434352 (unhandled .NET exception)"
+            : $"0x{code:X8}";
     }
 
-    private static Process? TryOpen(int processId)
+    private int? ReadExitCode() =>
+        _agent is { IsInvalid: false } handle && GetExitCodeProcess(handle, out var code) && code != StillActive
+            ? unchecked((int)code)
+            : null;
+
+    /// <summary>
+    /// The agent exits with <see cref="SessionAgentExitCodes.SessionEnded"/> when Windows ends the
+    /// session. That session still answers for its user for several seconds afterwards and every
+    /// copy launched into it dies at once, so the loop stands down until the user is gone.
+    /// </summary>
+    private void NoteSessionEnded()
     {
-        try { return Process.GetProcessById(processId); }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException) { return null; }
+        if (ReadExitCode() != SessionAgentExitCodes.SessionEnded) return;
+        _sessionEndedTimestamp = Stopwatch.GetTimestamp();
+        logger.LogInformation("SessionAgent exited because Windows is ending the session; it is not relaunched into it.");
     }
+
+    private bool IsSessionEnding =>
+        _sessionEndedTimestamp != 0 && Stopwatch.GetElapsedTime(_sessionEndedTimestamp) < SessionEndingWindow;
 
     private void ForgetAgent()
     {
@@ -189,18 +211,17 @@ public sealed class SessionAgentSupervisor(
         if (processId <= 0) return false;
         try
         {
-            // The open handle is asked first: a dead agent's process id can be reused by something
-            // else, while the handle keeps answering for the process this service started. It is
-            // only ever missing if opening it failed, and then the id is all there is.
-            using var reopened = _agent is null ? Process.GetProcessById(processId) : null;
-            var process = _agent ?? reopened!;
-            return !process.HasExited && process.SessionId == sessionId;
+            // The handle is asked rather than the id: while it is held the id cannot be reused by
+            // something else, so the session check below still describes the agent.
+            if (_agent is not { IsInvalid: false } handle || WaitForSingleObject(handle, 0) != WaitTimeout) return false;
+            using var process = Process.GetProcessById(processId);
+            return process.SessionId == sessionId;
         }
         catch (Exception exception)
             when (exception is ArgumentException or InvalidOperationException or Win32Exception) { return false; }
     }
 
-    private static int Launch(uint sessionId)
+    private static SafeProcessHandle Launch(uint sessionId, out int processId)
     {
         var executable = Path.Combine(AppContext.BaseDirectory, "SessionAgent", "KidTime.SessionAgent.exe");
         if (!File.Exists(executable)) executable = Path.Combine(AppContext.BaseDirectory, "KidTime.SessionAgent.exe");
@@ -208,8 +229,11 @@ public sealed class SessionAgentSupervisor(
 
         if (Environment.UserInteractive && Process.GetCurrentProcess().SessionId == sessionId)
         {
-            return Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true })?.Id
+            using var started = Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true })
                 ?? throw new InvalidOperationException("Process.Start returned no process.");
+            processId = started.Id;
+            var opened = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, processId);
+            return opened.IsInvalid ? throw new Win32Exception(Marshal.GetLastWin32Error()) : opened;
         }
 
         if (!WTSQueryUserToken(sessionId, out var token)) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -223,15 +247,18 @@ public sealed class SessionAgentSupervisor(
                 if (!CreateProcessAsUser(token, executable, commandLine, IntPtr.Zero, IntPtr.Zero, false,
                         0x00000400, environment, Path.GetDirectoryName(executable), ref startup, out var processInfo))
                     throw new Win32Exception(Marshal.GetLastWin32Error());
+                CloseHandle(processInfo.Thread);
+                var process = new SafeProcessHandle(processInfo.Process, ownsHandle: true);
                 try
                 {
                     HardenProcessAccess(processInfo.Process);
-                    return processInfo.ProcessId;
+                    processId = processInfo.ProcessId;
+                    return process;
                 }
-                finally
+                catch
                 {
-                    CloseHandle(processInfo.Thread);
-                    CloseHandle(processInfo.Process);
+                    process.Dispose();
+                    throw;
                 }
             }
             finally { DestroyEnvironmentBlock(environment); }
@@ -309,4 +336,17 @@ public sealed class SessionAgentSupervisor(
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr LocalFree(IntPtr memory);
+
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+    private const uint Synchronize = 0x00100000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, int processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(SafeProcessHandle process, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
 }

@@ -14,10 +14,12 @@ public partial class App : Application
 
     private Mutex? _singleInstance;
     private AgentApplicationHost? _host;
+    private bool _sessionEnding;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        SessionEnding += (_, _) => _sessionEnding = true;
 
         // The control service restarts this process every two seconds, so one unhandled
         // exception used to become an endless stack of Windows error dialogs on the child's
@@ -91,6 +93,8 @@ public partial class App : Application
     {
         _host?.Dispose();
         _singleInstance?.Dispose();
+        // Tells the supervising service this exit was the session ending, not a crash.
+        if (_sessionEnding) e.ApplicationExitCode = SessionAgentExitCodes.SessionEnded;
         base.OnExit(e);
     }
 
