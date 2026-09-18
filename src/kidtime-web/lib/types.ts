@@ -183,3 +183,38 @@ export type TimeExtensionRequest = {
   requestedAtUtc: string;
   decidedAtUtc: string | null;
 };
+
+/**
+ * What the household's DNS filter is doing, read by the server from the Technitium DNS server the
+ * parent runs. The panel only reports it and hands the parent over to that server's own console:
+ * KidTime does not filter the web and holds no write access to anything that does.
+ */
+export type DnsFilteringState = "NotConfigured" | "Unreachable" | "Inactive" | "Active";
+
+export type DnsFilterCategoryKind =
+  | "Ads"
+  | "Trackers"
+  | "Adult"
+  | "Gambling"
+  | "Malware"
+  | "Social"
+  | "Other";
+
+export type DnsFiltering = {
+  /** The DNS console's address as the parent's browser reaches it, or null when there is none. */
+  consoleUrl: string | null;
+  state: DnsFilteringState;
+  groupName: string | null;
+  retrievedAtUtc: string | null;
+  /** The last read failed; everything else here is the answer before it. */
+  isStale: boolean;
+  categories: { kind: DnsFilterCategoryKind; listCount: number }[];
+  siteGroups: {
+    name: string;
+    siteCount: number;
+    isBlockedNow: boolean;
+    changesAtUtc: string | null;
+    /** Wall-clock in the timezone the rule was written in; days are 0 = Sunday. */
+    windows: { startTime: string; endTime: string; days: number[] }[];
+  }[];
+};

@@ -57,11 +57,18 @@ public sealed record DiscoveredApplicationRequest(
     DateTimeOffset FirstSeenUtc,
     DateTimeOffset LastSeenUtc);
 
+/// <summary>
+/// One synchronization's worth of everything the PC needs. <paramref name="DnsFiltering"/> rides
+/// here beside the rules rather than inside them because it is not a rule: KidTime enforces none
+/// of it, the parent changes it in the DNS server's own console, and a revision bump would be
+/// claiming otherwise. It refreshes on each sync like the clock does.
+/// </summary>
 public sealed record AgentSyncResponse(
     DeviceRuleSnapshot Rules,
     IReadOnlyList<AgentCommand> Commands,
     DateTimeOffset ServerUtcNow,
-    IReadOnlyList<TimeExtensionDecision>? TimeExtensions = null);
+    IReadOnlyList<TimeExtensionDecision>? TimeExtensions = null,
+    DnsFilteringSnapshot? DnsFiltering = null);
 
 /// <summary>
 /// One child's request for more time, on its way to the parent. The agent mints the id, so an
@@ -297,7 +304,13 @@ public sealed record SessionStatusSnapshot(
     long RuleRevision,
     ServerConnectionStatus Server,
     TimeAllowanceStatus ScreenTime,
-    IReadOnlyList<ApplicationTimeStatus> Applications);
+    IReadOnlyList<ApplicationTimeStatus> Applications,
+    /// <summary>
+    /// What the household's DNS filter is doing, for the Internet tab to draw. It is the last
+    /// answer the server gave, kept across restarts and shown with its age when the PC is
+    /// offline, and it is never consulted by anything that decides an allow or a block.
+    /// </summary>
+    DnsFilteringSnapshot? DnsFiltering = null);
 
 /// <summary>
 /// The answer to one foreground sample. <paramref name="Language"/> rides on every exchange, not

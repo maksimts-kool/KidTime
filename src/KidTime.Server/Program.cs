@@ -5,6 +5,7 @@ using KidTime.Server.Data;
 using KidTime.Server.Hubs;
 using KidTime.Server.Security;
 using KidTime.Server.Services;
+using KidTime.Server.Services.Dns;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
@@ -41,6 +42,13 @@ builder.Services.AddDbContext<KidTimeDbContext>(options => options.UseNpgsql(con
 builder.Services.AddScoped<RuleSnapshotFactory>();
 builder.Services.AddScoped<ApplicationCatalogReconciler>();
 builder.Services.AddSingleton<AgentUpdateCatalog>();
+// The household's DNS filter. It is optional and read-only: with nothing configured the panel
+// says so and the child's window never draws the tab, and nothing on the enforcement path ever
+// waits on it - the snapshot is a cache the sync reads, never a call the sync makes.
+builder.Services.AddSingleton(_ =>
+    builder.Configuration.GetSection(DnsFilteringOptions.SectionName).Get<DnsFilteringOptions>()
+    ?? new DnsFilteringOptions());
+builder.Services.AddSingleton<DnsFilteringService>();
 builder.Services.AddScoped<JwtTokenService>();
 builder.Services.AddSingleton<DatabaseInitializer>();
 builder.Services.AddControllers().AddJsonOptions(options =>

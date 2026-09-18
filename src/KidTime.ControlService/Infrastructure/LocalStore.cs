@@ -43,6 +43,11 @@ public sealed class LocalStore
                     payload_json TEXT NOT NULL,
                     received_at_utc TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS dns_cache (
+                    id INTEGER PRIMARY KEY CHECK(id = 1),
+                    payload_json TEXT NOT NULL,
+                    received_at_utc TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS daily_usage (
                     local_date TEXT NOT NULL,
                     identity_key TEXT NOT NULL,
@@ -145,6 +150,51 @@ public sealed class LocalStore
                 ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload_json=excluded.payload_json,received_at_utc=excluded.received_at_utc
                 """;
             command.Parameters.AddWithValue("$revision", rules.Revision);
+            command.Parameters.AddWithValue("$json", json);
+            command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// The last picture of the household's DNS filtering. It is kept for the same reason the rule
+    /// snapshot is: a PC that cannot reach the server should still be able to tell the child what
+    /// the filtering is, with its age attached, rather than showing an empty tab.
+    /// </summary>
+    public async Task<DnsFilteringSnapshot?> LoadDnsFilteringAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT payload_json FROM dns_cache WHERE id=1";
+            var json = await command.ExecuteScalarAsync(cancellationToken) as string;
+            return json is null ? null : JsonSerializer.Deserialize<DnsFilteringSnapshot>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            // Written by an older agent whose shape has since changed. An unreadable cache is a
+            // missing tab, never a failed synchronization.
+            return null;
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task SaveDnsFilteringAsync(DnsFilteringSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(snapshot, JsonOptions);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO dns_cache(id,payload_json,received_at_utc)
+                VALUES(1,$json,$now)
+                ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json,received_at_utc=excluded.received_at_utc
+                """;
             command.Parameters.AddWithValue("$json", json);
             command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
             await command.ExecuteNonQueryAsync(cancellationToken);

@@ -87,6 +87,15 @@ public sealed class EnforcementCoordinator(
 
     public DeviceRuleSnapshot Rules => _rules;
 
+    /// <summary>
+    /// The household's DNS filtering, as the server last described it. It is held here only so
+    /// the status snapshot can carry it to the child's window: nothing in this class reads it,
+    /// and <see cref="RuleEvaluator"/> never sees it. KidTime does not filter the web and does
+    /// not pretend to - the DNS server does, for every device on the network at once, and this
+    /// is a description of what it is doing.
+    /// </summary>
+    private volatile DnsFilteringSnapshot? _dnsFiltering;
+
     /// <summary>Wording for the language the parent chose for this PC.</summary>
     private AgentStrings Text => AgentStrings.For(_rules.Language);
 
@@ -148,6 +157,13 @@ public sealed class EnforcementCoordinator(
 
     public string? ForegroundName => _foregroundName;
     public string? ForegroundIdentity => _foregroundIdentity;
+
+    /// <summary>
+    /// Takes the DNS picture the sync brought back. It is not a rule and bumps no revision: it
+    /// changes nothing that is enforced, so a change in it is not something the child is told
+    /// about - it is something they can look up.
+    /// </summary>
+    public void UpdateDnsFiltering(DnsFilteringSnapshot? snapshot) => _dnsFiltering = snapshot;
 
     public void UpdateRules(DeviceRuleSnapshot rules)
     {
@@ -458,7 +474,8 @@ public sealed class EnforcementCoordinator(
                 rules.Revision,
                 server,
                 screenTime,
-                applications);
+                applications,
+                _dnsFiltering);
         }
         finally { _gate.Release(); }
     }

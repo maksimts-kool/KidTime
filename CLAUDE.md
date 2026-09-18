@@ -592,8 +592,9 @@ from Notification Center, and cancels sign-out. When the rule
 ends, a normal notification says the PC is available and repeats the prior reason.
 
 The tray window is a four-panel view - Today, Apps, Connection, About - switched by a button strip
-rather than a `TabControl`, because only the visible panel then stays in the visual tree. About
-carries the installed version, the privacy summary in the child's own words, and the removal flow.
+rather than a `TabControl`, because only the visible panel then stays in the visual tree. A fifth,
+Internet, appears only where a DNS filter is configured. About carries the installed version, the
+privacy summary in the child's own words, and the removal flow.
 
 Notifications are native Windows toasts. SessionAgent emits them marked with the supported urgent
 scenario, high priority, and explicit reminder audio — the Windows-supported way to break through
@@ -707,6 +708,63 @@ Enrollment credentials, cached rules, usage, and logs stay in ProgramData. The A
 heartbeat-reported assembly version with the published manifest and exposes current, outdated,
 downloading, installing, or failed state to the parent UI.
 
+### Web filtering (Technitium DNS)
+
+A household that governs a PC also governs what that PC can reach, and the two are not the same
+job. **KidTime does not filter the web and must not start.** Filtering is DNS-level, covers every
+device on the network at once, and is already solved by the
+[Technitium DNS Companion](https://github.com/fail-safe/technitium-dns-companion) the household
+runs. What KidTime adds is the part neither of those two does: telling the child what is in force,
+in the window they already have open, in their own language.
+
+So the whole integration is **read-only, one-way, and optional**. It is configured in the `Dns`
+section (`Dns__ApiUrl`, `Dns__Username`, `Dns__Password`, and optionally `Dns__ConsoleUrl`,
+`Dns__NodeId`, `Dns__GroupName`, `Dns__PinnedCertificateSha256`, `Dns__AllowInvalidCertificate`,
+`Dns__RefreshSeconds`); with `Dns__ApiUrl` empty the feature is absent from the panel and the child's
+PC alike, which is the case for most installations.
+
+1. `TechnitiumCompanionClient` signs in once with the configured credentials and keeps the session
+   cookie the companion issues, renewing it silently on a 401. Every other call is a GET:
+   `advanced-blocking/{node}`, `nodes/dns-schedules/rules`, and the domain groups.
+   **Do not add a write.** A second editor for the same setting is a second way for it to be wrong,
+   and the panel's button already puts the parent in the console that owns it. Ordinary chain and
+   hostname validation runs first and the configured SHA-256 pin is consulted only when it fails -
+   the same order the Windows agent uses against this server, which is what makes the companion's
+   self-signed certificate usable without trusting everything.
+2. `DnsFilteringService` caches one normalized `DnsFilteringSnapshot` for `RefreshSeconds`
+   (120 by default). **Synchronization must never wait on a third-party service**, so the sync reads
+   a cache rather than making a call. A read that fails after an earlier success keeps that answer
+   whole - its state, its contents and its timestamp - and only sets `IsStale`, so the panel and the
+   child's tab go on describing the filtering that is in force instead of going blank; that is the
+   same shape as cached rules being enforced offline, and it is why staleness is a flag rather than a
+   state. `Unreachable` is only for a configuration that has never been read at all. A failure is
+   retried after 30 seconds rather than on the next sync.
+3. `DnsFilterPolicy` in the domain turns the configuration into the two things a person can read.
+   `Summarize` folds block lists into named categories, narrowest evidence first: an AdGuard
+   registry number, then the file name, then the rest of the path, and **never the host** - AdGuard
+   serves every list it registers from `adguardteam.github.io`, so reading the publisher labelled a
+   real household's gambling, adult and tracker lists all as "Ads". HaGeZi's malware list is called
+   `tif.txt` and is served out of a directory called `adblock`, which is why the file name outweighs
+   the directory. An address that says nothing is `Other` rather than guessed at.
+   `Evaluate` merges the schedule windows and answers whether a set of sites is closed now and when
+   that turns over, in the timezone the rule was written in.
+4. The snapshot rides on `AgentSyncResponse.DnsFiltering`, **beside the rules and not inside them**.
+   It is not a rule: KidTime enforces none of it, so it bumps no revision and queues no command, and
+   `EnforcementCoordinator` holds it only to hand to the status snapshot. **`RuleEvaluator` never
+   sees it.** `LocalStore` caches it in `dns_cache` so an offline PC still has the tab, with its age
+   attached.
+5. The child's window grows an **Internet** tab: whether filtering is on, the categories blocked at
+   every hour, and each named set of sites with the time it comes back. It has no controls at all,
+   because nothing on it is KidTime's to change. Where nothing is configured the tab button is not
+   drawn - an empty tab would suggest something is being done that is not.
+6. The panel's **Web filtering** page is a status line and a button to the DNS console, and that is
+   deliberately all it is.
+
+Which filtering group a household falls in is **named in configuration, not inferred**. The
+companion maps groups to networks, but the address the KidTime server sees is whatever the last
+proxy hop presents rather than the PC's own, so guessing would silently describe the wrong rules.
+`Dns__GroupName` names it; a DNS server with one group needs no name.
+
 ### Cost on a slow PC
 
 The controlled PC is often the household's weakest machine, and everything here runs while the
@@ -744,6 +802,13 @@ is opened and no audio is read, which is the same fact Windows' own volume mixer
 microphone-in-use indicator show. Foreground window titles travel locally for diagnostics but are not persisted or
 uploaded by the current server contract. **Features that would cross this line are out of scope by
 design** — do not add them, and do not extend the contract to upload window titles.
+
+Reading a DNS server's **configuration** does not cross it, and reading its **query log** would.
+KidTime can be pointed at a Technitium DNS server the household already runs and will report what
+that server is set up to block; it never asks for, stores, or forwards a single lookup. A tab that
+listed the sites a child tried to open would be browsing history under another name, and the
+companion's query-log endpoints are therefore deliberately never called. See
+[Web filtering](#web-filtering-technitium-dns).
 
 ## Conventions
 
@@ -876,7 +941,11 @@ a closing schedule window reported as pending a minute before it closes, the soo
 restrictions winning, a daily limit counted as a deadline only while it is being spent, the window
 a grant opened over a block reported as pending when it runs out, a standing warning reporting what
 is left of it so a moved deadline can be noticed,
-persisted first-block grace, granted extra time raising a daily limit for its own date only,
+persisted first-block grace, DNS block lists read as categories by their file name rather than by
+the publisher that serves them, an unrecognized list named rather than guessed at, an overnight DNS
+timetable read in its own timezone with the instant it turns over, windows that meet merged into one
+stretch and a day-restricted one skipping the days it does not cover,
+granted extra time raising a daily limit for its own date only,
 minutes alone never lifting a manual block or a schedule while the window a grant opens lifts both
 from the decision until it expires, per scope and without handing over a spent daily limit, extra
 time offered only once an allowance is nearly spent and still offered after it has run out, offered
@@ -959,7 +1028,18 @@ rules:
     screen-time window, the next notification, and the countdown card all change without
     reinstalling or signing out, then block the PC and confirm the card counts down in the corner,
     never takes focus, does not overlap its own buttons with the longer Russian labels, and
-    disappears on its own when the countdown ends or the parent lifts the block.
+    disappears on its own when the countdown ends or the parent lifts the block;
+24. with no `Dns__*` configured, confirm the panel's Web filtering page says so and the child's
+    window has no Internet tab at all; then point `Dns__ApiUrl`, `Dns__Username` and `Dns__Password`
+    at the household's DNS companion and confirm the page reports filtering on, its button opens
+    the DNS console, and the Internet tab appears on the PC within one sync;
+25. check the categories on that tab against the DNS server's own block lists - a gambling or adult
+    list served from `adguardteam.github.io` must not read as "Ads" - then enable a schedule that
+    blocks a site group in the evening and confirm the tab names it, says whether it is open now,
+    and gives the time it changes, in the child's language;
+26. stop the DNS companion and confirm nothing about KidTime's own enforcement changes: rules still
+    apply, synchronization still succeeds, and both the panel and the Internet tab show the last
+    answer with its age rather than an error or an empty tab.
 
 On a disposable PC, verify enrollment end to end (Connect stays disabled until server URL,
 enrollment code, and child account are all valid; an expired code is rejected; the panel switches to
@@ -1039,5 +1119,24 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
 - **The PC is still speaking English after switching the language:** the language is part of the
   rules, so it lands with the next sync. Check `LastSeenUtc` and that the rule revision on the
   device page has caught up.
+- **The Internet tab is missing on the child's PC:** it is drawn only where the server has a DNS
+  server configured, so check the panel's Web filtering page first. If that page says filtering is
+  on, the PC simply has not synchronized yet - the snapshot rides the ordinary sync, so check
+  `LastSeenUtc`.
+- **The Web filtering page says the DNS server did not answer:** filtering itself is unaffected, it
+  runs on the DNS server and not here, and a page that had read it before goes on showing that
+  reading with its age. The usual cause is the certificate: the companion self-signs,
+  so `Dns__PinnedCertificateSha256` has to carry its SHA-256, which
+  `openssl s_client -connect HOST:8095 </dev/null | openssl x509 -noout -fingerprint -sha256` prints.
+  After that, check that `Dns__ApiUrl` is reachable from the server container and that the
+  credentials are the ones the DNS console takes.
+- **A category on the Internet tab reads wrong:** the subject is worked out from the block list's
+  address, and an address that says nothing lands in "Other" on purpose. A list that is genuinely
+  mislabelled belongs in `DnsFilterPolicy` - `KnownListNames` for a file name like `tif.txt`,
+  `AdGuardRegistryLists` for one of AdGuard's numbered lists.
+- **A site group the parent defined is not on the Internet tab:** only sets that actually restrict
+  something are listed. A domain group with no enabled blocking schedule and no binding to the
+  filtering group restricts nothing, and showing it would be a rule the child would act on that does
+  not exist.
 - **Changing the `.env` admin password has no effect:** those variables seed only the first parent
   account. Do not delete PostgreSQL data merely to rotate a password.

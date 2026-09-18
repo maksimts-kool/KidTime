@@ -142,6 +142,7 @@ internal sealed class RussianAgentStrings : AgentStrings
 
     public override string TabToday => "Сегодня";
     public override string TabApps => "Приложения";
+    public override string TabInternet => "Интернет";
     public override string TabConnection => "Связь";
     public override string TabAbout => "О программе";
 
@@ -258,4 +259,45 @@ internal sealed class RussianAgentStrings : AgentStrings
         $"Родители отказали в дополнительном времени. Для чего: {scope}.";
 
     public override string ExtraTimeAddedToday(int minutes) => $"Добавлено сегодня: +{minutes} мин";
+
+    // ---------------------------------------------------------------- web filtering
+
+    public override string WebFilterOnTitle => "Фильтрация сайтов включена";
+    public override string WebFilterOnDetail =>
+        "Домашняя сеть блокирует часть сайтов до того, как они откроются. Это работает одинаково на всех устройствах дома, не только на этом компьютере.";
+    public override string WebFilterOffTitle => "Фильтрация сайтов выключена";
+    public override string WebFilterOffDetail =>
+        "Сейчас для домашней сети не настроена фильтрация сайтов.";
+    public override string BadgeFilterOn => "Фильтр включён";
+    public override string BadgeFilterOff => "Фильтр выключен";
+    public override string WebFilterLastChecked(string relative) => $"Последняя проверка: {relative}";
+
+    public override string WebFilterAlwaysBlocked => "Блокируется всегда";
+    public override string WebFilterNothingBlocked => "Сейчас ничего не заблокировано.";
+
+    public override string FilterCategoryAds => "Реклама";
+    public override string FilterCategoryTrackers => "Трекеры слежки";
+    public override string FilterCategoryAdult => "Сайты для взрослых";
+    public override string FilterCategoryGambling => "Азартные игры";
+    public override string FilterCategoryMalware => "Опасные сайты";
+    public override string FilterCategorySocial => "Соцсети";
+    public override string FilterCategoryOther => "Другие списки защиты";
+
+    public override string WebFilterListCount(int count) =>
+        $"{count} {Pick(count, "список", "списка", "списков")}";
+
+    public override string WebFilterSiteGroups => "Сайты со своим расписанием";
+    public override string WebFilterSiteCount(int count) =>
+        $"{count} {Pick(count, "сайт", "сайта", "сайтов")}";
+    public override string BadgeSitesBlocked => "Заблокировано";
+    public override string BadgeSitesAvailable => "Доступно";
+    public override string WebFilterBackAt(string deadline) => $"Снова откроется: {deadline}";
+    public override string WebFilterClosesAt(string deadline) => $"Закроется: {deadline}";
+    public override string WebFilterBlockedAlways => "Заблокировано, пока родитель не изменит";
+    public override string WebFilterNoScheduleYet => "Расписание не задано";
+    public override string WebFilterEveryDay => "каждый день";
+
+    public override string WebFilterExplainTitle => "Как это работает";
+    public override string WebFilterExplainDetail =>
+        "Родители настроили фильтр для всей домашней сети. Заблокированный сайт просто не открывается — ни в браузере, ни в приложении. KidTime не видит, какие сайты ты открываешь, и никуда их не отправляет.";
 }

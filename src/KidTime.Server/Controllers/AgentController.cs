@@ -3,6 +3,7 @@ using KidTime.Domain.Contracts;
 using KidTime.Server.Data;
 using KidTime.Server.Security;
 using KidTime.Server.Services;
+using KidTime.Server.Services.Dns;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -17,6 +18,7 @@ public sealed class AgentController(
     KidTimeDbContext dbContext,
     RuleSnapshotFactory snapshots,
     AgentUpdateCatalog updates,
+    DnsFilteringService dnsFiltering,
     TimeProvider timeProvider,
     ILogger<AgentController> logger) : ControllerBase
 {
@@ -144,7 +146,11 @@ public sealed class AgentController(
             await snapshots.CreateAsync(DeviceId, cancellationToken),
             commands,
             now,
-            decisions.Select(ToDecision).ToList()));
+            decisions.Select(ToDecision).ToList(),
+            // A cached read of the household's DNS filter, for the Internet tab to draw. It is
+            // never a rule and never blocks this response: with no DNS server configured it is
+            // the "not configured" snapshot and nothing is asked of anybody.
+            await dnsFiltering.GetAsync(cancellationToken)));
     }
 
     /// <summary>

@@ -17,7 +17,10 @@ public partial class StatusWindow : FluentWindow
     private readonly Func<ParentRemovalRequest, CancellationToken, Task<DeviceRemovalResult>> _removeKidTime;
     private readonly Func<TimeExtensionSubmission, CancellationToken, Task<TimeExtensionSubmissionResult>> _requestExtraTime;
     private readonly ObservableCollection<ApplicationCardViewModel> _applications = [];
+    private readonly ObservableCollection<FilterCategoryViewModel> _filterCategories = [];
+    private readonly ObservableCollection<FilterSiteGroupViewModel> _filterSiteGroups = [];
     private string? _lastRenderedSignature;
+    private string _selectedTab = "Today";
     private bool _allowClose;
     private bool _removalDialogOpen;
 
@@ -38,6 +41,8 @@ public partial class StatusWindow : FluentWindow
         _requestExtraTime = requestExtraTime;
         InitializeComponent();
         ApplicationsItems.ItemsSource = _applications;
+        FilterCategoryItems.ItemsSource = _filterCategories;
+        FilterSiteGroupItems.ItemsSource = _filterSiteGroups;
         SystemThemeWatcher.Watch(this, WindowBackdropType.Mica, updateAccents: true);
         ApplyLanguage();
         Closing += WindowClosing;
@@ -54,6 +59,7 @@ public partial class StatusWindow : FluentWindow
         HeadlineTitle.Text = text.HeadlineToday;
         TodayTabText.Text = text.TabToday;
         AppsTabText.Text = text.TabApps;
+        InternetTabText.Text = text.TabInternet;
         StatusTabText.Text = text.TabConnection;
         AboutTabText.Text = text.TabAbout;
         DailyScreenTimeTitle.Text = text.DailyScreenTime;
@@ -66,6 +72,10 @@ public partial class StatusWindow : FluentWindow
         ProfileCaptionText.Text = text.ProfileCaption;
         VersionText.Text = text.VersionWithNumber(SessionLogger.Version);
         UpdateChannelText.Text = text.UpdatesInBackground;
+        FilterCategoriesTitle.Text = text.WebFilterAlwaysBlocked;
+        FilterSiteGroupsTitle.Text = text.WebFilterSiteGroups;
+        FilterExplainTitle.Text = text.WebFilterExplainTitle;
+        FilterExplainDetail.Text = text.WebFilterExplainDetail;
         PrivacySeesTitle.Text = text.WhatKidTimeSees;
         PrivacySeesDetail.Text = text.WhatKidTimeSeesDetail;
         PrivacyNeverSeesTitle.Text = text.WhatKidTimeNeverSees;
@@ -102,12 +112,15 @@ public partial class StatusWindow : FluentWindow
 
     private void SelectTab(string tab)
     {
+        _selectedTab = tab;
         TodayPanel.Visibility = tab == "Today" ? Visibility.Visible : Visibility.Collapsed;
         AppsPanel.Visibility = tab == "Apps" ? Visibility.Visible : Visibility.Collapsed;
+        InternetPanel.Visibility = tab == "Internet" ? Visibility.Visible : Visibility.Collapsed;
         StatusPanel.Visibility = tab == "Status" ? Visibility.Visible : Visibility.Collapsed;
         AboutPanel.Visibility = tab == "About" ? Visibility.Visible : Visibility.Collapsed;
         TodayTabButton.Appearance = Selected(tab, "Today");
         AppsTabButton.Appearance = Selected(tab, "Apps");
+        InternetTabButton.Appearance = Selected(tab, "Internet");
         StatusTabButton.Appearance = Selected(tab, "Status");
         AboutTabButton.Appearance = Selected(tab, "About");
     }
@@ -511,7 +524,127 @@ public partial class StatusWindow : FluentWindow
         AppsCountBadge.Content = cards.Count.ToString(text.Culture);
         EmptyAppsCard.Visibility = cards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ApplicationsItems.Visibility = cards.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+        RenderWebFiltering(text, status.DnsFiltering);
     }
+
+    /// <summary>
+    /// Draws the Internet tab, and decides whether there is a tab at all. A household with no DNS
+    /// filter gets no tab: an empty one would suggest something is being done that is not.
+    ///
+    /// Everything here is a description. The tab has no controls, because the thing it describes
+    /// is not KidTime's to change - it belongs to the household's DNS server and to the parent.
+    /// </summary>
+    private void RenderWebFiltering(AgentStrings text, DnsFilteringSnapshot? filtering)
+    {
+        var available = filtering is not null && filtering.State != DnsFilteringState.NotConfigured;
+        InternetTabButton.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+        if (!available)
+        {
+            // The parent can remove the DNS server while the window is open on this tab.
+            if (_selectedTab == "Internet") SelectTab("Today");
+            return;
+        }
+
+        var snapshot = filtering!;
+        var isOn = snapshot.State == DnsFilteringState.Active;
+        FilterStateIcon.Symbol = isOn ? SymbolRegular.GlobeShield24 : SymbolRegular.GlobeOff24;
+        FilterStateTitle.Text = isOn ? text.WebFilterOnTitle : text.WebFilterOffTitle;
+        FilterStateDetail.Text = isOn ? text.WebFilterOnDetail : text.WebFilterOffDetail;
+        FilterStateBadge.Content = isOn ? text.BadgeFilterOn : text.BadgeFilterOff;
+        FilterStateBadge.Appearance = isOn ? ControlAppearance.Success : ControlAppearance.Secondary;
+
+        // Only said when what is on screen is not current: this PC is offline, or the server itself
+        // could not reach the DNS server. Saying it always would be noise on a working PC.
+        FilterCheckedText.Visibility = snapshot.IsStale ? Visibility.Visible : Visibility.Collapsed;
+        if (snapshot.IsStale)
+            FilterCheckedText.Text = text.WebFilterLastChecked(text.Relative(snapshot.RetrievedAtUtc));
+
+        _filterCategories.Clear();
+        foreach (var category in snapshot.Categories)
+        {
+            _filterCategories.Add(new FilterCategoryViewModel(
+                text.FilterCategoryName(category.Kind),
+                text.WebFilterListCount(category.ListCount),
+                CategoryIcon(category.Kind)));
+        }
+
+        FilterCategoriesCard.Visibility = isOn ? Visibility.Visible : Visibility.Collapsed;
+        FilterCategoriesEmpty.Visibility = _filterCategories.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        FilterCategoriesEmpty.Text = text.WebFilterNothingBlocked;
+        FilterCategoryItems.Visibility = _filterCategories.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+        _filterSiteGroups.Clear();
+        foreach (var group in snapshot.SiteGroups)
+            _filterSiteGroups.Add(BuildSiteGroupCard(text, group));
+        FilterSiteGroupsCard.Visibility = isOn && _filterSiteGroups.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        // "Your parent set up a filter for the whole home network" is only true while there is
+        // one, so the explanation goes with it rather than standing over an empty tab.
+        FilterExplainCard.Visibility = isOn ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static FilterSiteGroupViewModel BuildSiteGroupCard(AgentStrings text, DnsSiteGroup group)
+    {
+        // The DNS server's own name for a set of sites is whatever the parent typed, usually
+        // lower case ("roblox"). It is a proper name on the child's screen, so it is capitalized
+        // here rather than in the contract - the server has no business deciding how it reads.
+        var name = group.Name.Length > 0
+            ? char.ToUpper(group.Name[0], text.Culture) + group.Name[1..]
+            : group.Name;
+        var detail = group.IsBlockedNow
+            ? group.ChangesAtUtc is { } backAt
+                ? text.WebFilterBackAt(text.Deadline(backAt))
+                : text.WebFilterBlockedAlways
+            : group.ChangesAtUtc is { } closesAt
+                ? text.WebFilterClosesAt(text.Deadline(closesAt))
+                : text.WebFilterNoScheduleYet;
+        var hours = string.Join("   ·   ", group.Windows.Select(window => text.WebFilterWindowOnDays(
+            text.WebFilterWindow(window.StartTime, window.EndTime),
+            FormatDays(text, window.Days))));
+        if (group.SiteCount > 0)
+        {
+            var sites = text.WebFilterSiteCount(group.SiteCount);
+            hours = hours.Length == 0 ? sites : $"{hours}   ·   {sites}";
+        }
+
+        return new FilterSiteGroupViewModel(
+            name,
+            detail,
+            hours,
+            group.IsBlockedNow ? text.BadgeSitesBlocked : text.BadgeSitesAvailable,
+            group.IsBlockedNow ? ControlAppearance.Danger : ControlAppearance.Success,
+            group.IsBlockedNow ? SymbolRegular.GlobeProhibited24 : SymbolRegular.GlobeClock24);
+    }
+
+    private static string FormatDays(AgentStrings text, IReadOnlyList<DayOfWeek> days) =>
+        days.Count is 0 or 7
+            ? text.WebFilterEveryDay
+            : string.Join(", ", days
+                .OrderBy(day => ((int)day + 6) % 7)
+                .Select(day => text.Culture.DateTimeFormat.GetAbbreviatedDayName(day)));
+
+    private static SymbolRegular CategoryIcon(DnsFilterCategoryKind kind) => kind switch
+    {
+        DnsFilterCategoryKind.Ads => SymbolRegular.Megaphone24,
+        DnsFilterCategoryKind.Trackers => SymbolRegular.EyeOff24,
+        DnsFilterCategoryKind.Adult => SymbolRegular.PersonProhibited24,
+        DnsFilterCategoryKind.Gambling => SymbolRegular.MoneyDismiss24,
+        DnsFilterCategoryKind.Malware => SymbolRegular.ShieldError24,
+        DnsFilterCategoryKind.Social => SymbolRegular.PeopleCommunity24,
+        _ => SymbolRegular.ShieldCheckmark24
+    };
+
+    private sealed record FilterCategoryViewModel(string Name, string Detail, SymbolRegular Icon);
+
+    private sealed record FilterSiteGroupViewModel(
+        string Name,
+        string Detail,
+        string Hours,
+        string StatusText,
+        ControlAppearance StatusAppearance,
+        SymbolRegular Icon);
 
     /// <summary>
     /// Replacing the item source rebuilds every card template. Matching on identity and writing
@@ -564,7 +697,8 @@ public partial class StatusWindow : FluentWindow
             .Append(status.Server.State).Append('|')
             .Append(status.Server.LastSynchronizationError).Append('|')
             .Append(text.Relative(status.Server.LastSuccessfulSynchronizationUtc)).Append('|')
-            .Append(text.Relative(status.Server.LastSuccessfulContactUtc)).Append('|');
+            .Append(text.Relative(status.Server.LastSuccessfulContactUtc)).Append('|')
+            .Append(DnsSignature(text, status.DnsFiltering)).Append('|');
         foreach (var card in cards)
         {
             builder.Append(card.IdentityKey).Append(':')
@@ -573,6 +707,32 @@ public partial class StatusWindow : FluentWindow
                 .Append(card.ScheduleSummary).Append(':')
                 .Append(card.ExtraTimeVisibility).Append(';');
         }
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Enough of the DNS picture to tell one rendering from another. A site group whose deadline
+    /// only moves by seconds must not repaint the window, so the deadline enters the signature as
+    /// the wording the child would read rather than as an instant.
+    /// </summary>
+    private static string DnsSignature(AgentStrings text, DnsFilteringSnapshot? filtering)
+    {
+        if (filtering is null) return "none";
+        var builder = new StringBuilder();
+        builder.Append(filtering.State).Append(':')
+            .Append(filtering.IsStale).Append(':')
+            .Append(text.Relative(filtering.RetrievedAtUtc)).Append(':');
+        foreach (var category in filtering.Categories)
+            builder.Append(category.Kind).Append('=').Append(category.ListCount).Append(',');
+        foreach (var group in filtering.SiteGroups)
+        {
+            builder.Append(group.Name).Append('=')
+                .Append(group.IsBlockedNow).Append('=')
+                .Append(group.SiteCount).Append('=')
+                .Append(group.ChangesAtUtc is { } change ? text.Deadline(change) : string.Empty)
+                .Append(',');
+        }
+
         return builder.ToString();
     }
 

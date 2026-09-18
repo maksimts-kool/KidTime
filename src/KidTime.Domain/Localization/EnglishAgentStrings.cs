@@ -116,6 +116,7 @@ internal sealed class EnglishAgentStrings : AgentStrings
 
     public override string TabToday => "Today";
     public override string TabApps => "Apps";
+    public override string TabInternet => "Internet";
     public override string TabConnection => "Connection";
     public override string TabAbout => "About";
 
@@ -229,4 +230,43 @@ internal sealed class EnglishAgentStrings : AgentStrings
     public override string ExtraTimeDeniedMessage(string scope) => $"Your parent said no to more time on {scope}.";
 
     public override string ExtraTimeAddedToday(int minutes) => $"+{minutes} min added today";
+
+    // ---------------------------------------------------------------- web filtering
+
+    public override string WebFilterOnTitle => "Web filtering is on";
+    public override string WebFilterOnDetail =>
+        "Your home network blocks some websites before they can open. It works the same on every device in the house, not just this PC.";
+    public override string WebFilterOffTitle => "Web filtering is off";
+    public override string WebFilterOffDetail =>
+        "No website filtering is set up for your home network right now.";
+    public override string BadgeFilterOn => "Filtering on";
+    public override string BadgeFilterOff => "Filtering off";
+    public override string WebFilterLastChecked(string relative) => $"Last checked {relative}";
+
+    public override string WebFilterAlwaysBlocked => "Always blocked";
+    public override string WebFilterNothingBlocked => "Nothing is blocked right now.";
+
+    public override string FilterCategoryAds => "Ads";
+    public override string FilterCategoryTrackers => "Trackers";
+    public override string FilterCategoryAdult => "Adult sites";
+    public override string FilterCategoryGambling => "Gambling";
+    public override string FilterCategoryMalware => "Dangerous sites";
+    public override string FilterCategorySocial => "Social networks";
+    public override string FilterCategoryOther => "Other protection lists";
+
+    public override string WebFilterListCount(int count) => count == 1 ? "1 list" : $"{count} lists";
+
+    public override string WebFilterSiteGroups => "Sites with their own hours";
+    public override string WebFilterSiteCount(int count) => count == 1 ? "1 site" : $"{count} sites";
+    public override string BadgeSitesBlocked => "Blocked";
+    public override string BadgeSitesAvailable => "Available";
+    public override string WebFilterBackAt(string deadline) => $"Back {deadline}";
+    public override string WebFilterClosesAt(string deadline) => $"Closes {deadline}";
+    public override string WebFilterBlockedAlways => "Blocked until your parent changes it";
+    public override string WebFilterNoScheduleYet => "No hours set";
+    public override string WebFilterEveryDay => "every day";
+
+    public override string WebFilterExplainTitle => "How this works";
+    public override string WebFilterExplainDetail =>
+        "Your parent set up a filter for the whole home network. A blocked site simply does not open, in any browser and in any app. KidTime does not see which sites you visit and never sends them anywhere.";
 }

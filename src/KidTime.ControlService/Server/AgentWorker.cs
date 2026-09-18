@@ -33,6 +33,9 @@ public sealed class AgentWorker(
             logger.LogWarning("No cached rules exist yet; enroll and synchronize this device.");
         }
 
+        if (await store.LoadDnsFilteringAsync(stoppingToken) is { } cachedFiltering)
+            coordinator.UpdateDnsFiltering(cachedFiltering);
+
         await discovery.DiscoverAsync(stoppingToken);
         try
         {
@@ -139,6 +142,15 @@ public sealed class AgentWorker(
         // given, so this only decides what the child is told - and it runs after UpdateRules so a
         // "30 minutes added" message can never arrive before the minutes themselves.
         coordinator.UpdateRules(sync.Rules);
+        // Not a rule: the household's DNS filter is the parent's to change in its own console,
+        // and this is only the description the Internet tab draws. It is cached locally so that
+        // description survives a restart and a night offline, like the rules themselves.
+        if (sync.DnsFiltering is { } filtering)
+        {
+            await store.SaveDnsFilteringAsync(filtering, cancellationToken);
+            coordinator.UpdateDnsFiltering(filtering);
+        }
+
         await AnnounceTimeExtensionDecisionsAsync(sync.TimeExtensions ?? [], cancellationToken);
         foreach (var command in sync.Commands)
             await api.AcknowledgeCommandAsync(command.Id, cancellationToken);

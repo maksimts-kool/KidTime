@@ -54,7 +54,7 @@
                       Content="Connecting" />
         </Grid>
 
-        <!-- A four-button strip instead of a TabControl: only the visible panel stays in the
+        <!-- A button strip instead of a TabControl: only the visible panel stays in the
              visual tree, so the window costs nothing to keep open on a slow PC. -->
         <StackPanel Grid.Row="2" Margin="30,16,30,0" Orientation="Horizontal">
             <ui:Button x:Name="TodayTabButton" Margin="0,0,8,0" Padding="14,7" Appearance="Primary" Click="TabButton_Click" Tag="Today">
@@ -68,6 +68,16 @@
                     <ui:SymbolIcon Margin="0,0,8,0" Symbol="AppsList24" FontSize="17" />
                     <TextBlock x:Name="AppsTabText" Text="Apps" />
                     <ui:Badge x:Name="AppsCountBadge" Margin="8,0,0,0" Padding="7,1" Appearance="Secondary" Content="0" />
+                </StackPanel>
+            </ui:Button>
+            <!--
+                Drawn only when the household actually has a DNS filter. A tab that opens on
+                "nothing here" is worse than no tab, and most installations have no DNS server.
+            -->
+            <ui:Button x:Name="InternetTabButton" Margin="0,0,8,0" Padding="14,7" Appearance="Secondary" Click="TabButton_Click" Tag="Internet" Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal">
+                    <ui:SymbolIcon Margin="0,0,8,0" Symbol="GlobeShield24" FontSize="17" />
+                    <TextBlock x:Name="InternetTabText" Text="Internet" />
                 </StackPanel>
             </ui:Button>
             <ui:Button x:Name="StatusTabButton" Margin="0,0,8,0" Padding="14,7" Appearance="Secondary" Click="TabButton_Click" Tag="Status">
@@ -336,6 +346,156 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                </StackPanel>
+
+                <!--
+                    Internet. Everything on this tab describes a filter KidTime does not run and
+                    cannot change: the household's DNS server answers for every device at once,
+                    and the parent edits it in that server's own console. Nothing here is a
+                    control, which is why there is not a single button on the tab.
+                -->
+                <StackPanel x:Name="InternetPanel" Visibility="Collapsed">
+                    <ui:Card Padding="24">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Width="52" Height="52" Margin="0,0,18,0"
+                                    Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
+                                    CornerRadius="12">
+                                <ui:SymbolIcon x:Name="FilterStateIcon" Symbol="GlobeShield24" FontSize="28" />
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock x:Name="FilterStateTitle" FontSize="18" FontWeight="SemiBold" Text="Web filtering is on" />
+                                <TextBlock x:Name="FilterStateDetail"
+                                           Margin="0,4,0,0"
+                                           Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap"
+                                           Text="" />
+                                <TextBlock x:Name="FilterCheckedText"
+                                           Margin="0,6,0,0"
+                                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                           FontSize="12"
+                                           Visibility="Collapsed"
+                                           Text="" />
+                            </StackPanel>
+                            <ui:Badge x:Name="FilterStateBadge"
+                                      Grid.Column="2"
+                                      Margin="16,0,0,0"
+                                      Padding="12,6"
+                                      VerticalAlignment="Center"
+                                      Appearance="Success"
+                                      Content="Filtering on" />
+                        </Grid>
+                    </ui:Card>
+
+                    <ui:Card x:Name="FilterCategoriesCard" Margin="0,14,0,0" Padding="20">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Margin="0,0,9,0" Symbol="ShieldCheckmark24" FontSize="19" />
+                                <TextBlock x:Name="FilterCategoriesTitle" FontSize="16" FontWeight="SemiBold" Text="Always blocked" />
+                            </StackPanel>
+                            <TextBlock x:Name="FilterCategoriesEmpty"
+                                       Margin="0,10,0,0"
+                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Visibility="Collapsed"
+                                       Text="" />
+                            <ItemsControl x:Name="FilterCategoryItems" Margin="0,12,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,10,10"
+                                                Padding="13,9"
+                                                Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
+                                                CornerRadius="10">
+                                            <StackPanel Orientation="Horizontal">
+                                                <ui:SymbolIcon Margin="0,0,9,0" Symbol="{Binding Icon}" FontSize="18" />
+                                                <StackPanel>
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                    <TextBlock Margin="0,1,0,0"
+                                                               Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                                               FontSize="12"
+                                                               Text="{Binding Detail}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card x:Name="FilterSiteGroupsCard" Margin="0,14,0,0" Padding="20" Visibility="Collapsed">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Margin="0,0,9,0" Symbol="CalendarClock24" FontSize="19" />
+                                <TextBlock x:Name="FilterSiteGroupsTitle" FontSize="16" FontWeight="SemiBold" Text="Sites with their own hours" />
+                            </StackPanel>
+                            <ItemsControl x:Name="FilterSiteGroupItems" Margin="0,8,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,10,0,0"
+                                                Padding="16"
+                                                Background="{ui:ThemeResource SubtleFillColorSecondaryBrush}"
+                                                CornerRadius="10">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="44" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+                                                <ui:SymbolIcon VerticalAlignment="Center" Symbol="{Binding Icon}" FontSize="22" />
+                                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                    <TextBlock FontSize="15" FontWeight="SemiBold" Text="{Binding Name}" />
+                                                    <TextBlock Margin="0,3,0,0"
+                                                               Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                                               TextWrapping="Wrap"
+                                                               Text="{Binding Detail}" />
+                                                </StackPanel>
+                                                <ui:Badge Grid.Column="2"
+                                                          Margin="12,0,0,0"
+                                                          Padding="10,5"
+                                                          VerticalAlignment="Center"
+                                                          Appearance="{Binding StatusAppearance}"
+                                                          Content="{Binding StatusText}" />
+                                                <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                                           Margin="0,9,0,0"
+                                                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                                           FontSize="12"
+                                                           TextWrapping="Wrap"
+                                                           Text="{Binding Hours}" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card x:Name="FilterExplainCard" Margin="0,14,0,0" Padding="20">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Margin="0,0,9,0" Symbol="Info24" FontSize="19" />
+                                <TextBlock x:Name="FilterExplainTitle" FontSize="16" FontWeight="SemiBold" Text="How this works" />
+                            </StackPanel>
+                            <TextBlock x:Name="FilterExplainDetail"
+                                       Margin="0,8,0,0"
+                                       Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="" />
+                        </StackPanel>
+                    </ui:Card>
                 </StackPanel>
 
                 <!-- Connection -->

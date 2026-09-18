@@ -5,7 +5,9 @@ panel run as Docker containers on an Ubuntu host, typically managed with Portain
 `ControlService` and an interactive `SessionAgent` run on the controlled Windows 11 PC.
 
 KidTime deliberately does **not** collect or filter websites, DNS queries, browser history,
-searches, messages, keystrokes, screenshots, camera/microphone data, or network traffic.
+searches, messages, keystrokes, screenshots, camera/microphone data, or network traffic. It can be
+pointed at a [Technitium DNS server](#web-filtering-optional) that does filter, and then reports
+what that server is configured to block - never what was looked up.
 
 ```text
 Parent browser ──> Next.js web proxy ──JWT──> ASP.NET Core API ──> PostgreSQL
@@ -81,6 +83,22 @@ This makes `KidTimeSetup.exe` and the automatic-update package available. Enroll
 version on their next update check; nothing has to be deployed to them, and the server does not need
 a restart.
 
+## Web filtering (optional)
+
+Website filtering is not KidTime's job and never becomes it. If the household already runs
+[Technitium DNS](https://technitium.com/dns/) with the
+[DNS Companion](https://github.com/fail-safe/technitium-dns-companion), fill in the `KIDTIME_DNS_*`
+variables in `.env` and KidTime will read that configuration - read only, and never the query logs:
+
+- the panel grows a **Web filtering** page: whether filtering is on, what it covers, and a button
+  that opens the DNS console, which is where it is actually set up;
+- the child's KidTime window grows an **Internet** tab listing what is blocked all the time and
+  which sites have hours of their own, with the time they come back.
+
+With the variables empty the page says so and the child's PC shows no such tab. Nothing about
+KidTime's own enforcement changes either way: a DNS block and a KidTime rule are separate things,
+and neither can stand in for the other.
+
 ## Add a PC
 
 Open **Devices → Add device** in the panel and follow the three steps: download `KidTimeSetup.exe`,
@@ -120,9 +138,10 @@ device under **Devices → device settings → Language on the PC**. It covers n
 countdown card, the tray menu, and the screen-time window, and takes effect on the next
 synchronization with no reinstall. The parent panel itself stays in English.
 
-The controlled user's tray icon opens a read-only screen-time window with four tabs: today's
+The controlled user's tray icon opens a read-only screen-time window with four tabs - today's
 allowance, the apps that have limits, connection state, and an About tab showing the installed
-version and what KidTime does and does not see. Its **Remove KidTime** button uninstalls the
-PC side, but only after the parent's KidTime email and password verify against the server, so it
-cannot be used offline or by a local administrator alone. **Devices → device settings → Remove
+version and what KidTime does and does not see - plus an **Internet** tab when a DNS filter is
+connected. Its **Remove KidTime** button uninstalls the PC side, but only after the parent's
+KidTime email and password verify against the server, so it cannot be used offline or by a local
+administrator alone. **Devices → device settings → Remove
 device** deletes only the server record and deliberately does not reach into the PC.

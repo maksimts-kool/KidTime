@@ -1,4 +1,5 @@
 using System.Globalization;
+using KidTime.Domain.Contracts;
 
 namespace KidTime.Domain.Localization;
 
@@ -202,6 +203,7 @@ public abstract class AgentStrings
 
     public abstract string TabToday { get; }
     public abstract string TabApps { get; }
+    public abstract string TabInternet { get; }
     public abstract string TabConnection { get; }
     public abstract string TabAbout { get; }
 
@@ -326,4 +328,77 @@ public abstract class AgentStrings
 
     /// <summary>Shown on the Today panel once extra time is part of the allowance.</summary>
     public abstract string ExtraTimeAddedToday(int minutes);
+
+    // ---------------------------------------------------------------- web filtering
+
+    /// <summary>
+    /// The Internet tab. It describes a filter KidTime does not run: the household's DNS server
+    /// answers for every device on the network, so the wording is about the home rather than
+    /// about this PC, and it never claims KidTime can see where the child went - it cannot, and
+    /// saying so plainly is the point of the last card.
+    /// </summary>
+    public abstract string WebFilterOnTitle { get; }
+
+    public abstract string WebFilterOnDetail { get; }
+    public abstract string WebFilterOffTitle { get; }
+    public abstract string WebFilterOffDetail { get; }
+    public abstract string BadgeFilterOn { get; }
+    public abstract string BadgeFilterOff { get; }
+
+    /// <summary>Said when the picture is the last one that arrived rather than a fresh one.</summary>
+    public abstract string WebFilterLastChecked(string relative);
+
+    public abstract string WebFilterAlwaysBlocked { get; }
+    public abstract string WebFilterNothingBlocked { get; }
+
+    /// <summary>One category of site the filter blocks at every hour of every day.</summary>
+    public abstract string FilterCategoryAds { get; }
+    public abstract string FilterCategoryTrackers { get; }
+    public abstract string FilterCategoryAdult { get; }
+    public abstract string FilterCategoryGambling { get; }
+    public abstract string FilterCategoryMalware { get; }
+    public abstract string FilterCategorySocial { get; }
+    public abstract string FilterCategoryOther { get; }
+
+    /// <summary>Names a category the child reads. Unknown kinds fall to the honest "other".</summary>
+    public string FilterCategoryName(DnsFilterCategoryKind kind) => kind switch
+    {
+        DnsFilterCategoryKind.Ads => FilterCategoryAds,
+        DnsFilterCategoryKind.Trackers => FilterCategoryTrackers,
+        DnsFilterCategoryKind.Adult => FilterCategoryAdult,
+        DnsFilterCategoryKind.Gambling => FilterCategoryGambling,
+        DnsFilterCategoryKind.Malware => FilterCategoryMalware,
+        DnsFilterCategoryKind.Social => FilterCategorySocial,
+        _ => FilterCategoryOther
+    };
+
+    /// <summary>How many block lists back one category: "2 lists".</summary>
+    public abstract string WebFilterListCount(int count);
+
+    public abstract string WebFilterSiteGroups { get; }
+
+    /// <summary>How many addresses a named set of sites covers: "26 sites".</summary>
+    public abstract string WebFilterSiteCount(int count);
+
+    public abstract string BadgeSitesBlocked { get; }
+    public abstract string BadgeSitesAvailable { get; }
+
+    /// <summary>When a closed set of sites opens again, and when an open one closes.</summary>
+    public abstract string WebFilterBackAt(string deadline);
+    public abstract string WebFilterClosesAt(string deadline);
+
+    /// <summary>A set with no timetable at all - off until the parent says otherwise.</summary>
+    public abstract string WebFilterBlockedAlways { get; }
+    public abstract string WebFilterNoScheduleYet { get; }
+
+    /// <summary>One stretch of the week, as the timetable was written: "21:00 - 12:00".</summary>
+    public string WebFilterWindow(string start, string end) => $"{start} - {end}";
+
+    public abstract string WebFilterEveryDay { get; }
+
+    /// <summary>Joins a window with the days it runs on: "21:00 - 12:00, every day".</summary>
+    public string WebFilterWindowOnDays(string window, string days) => $"{window}, {days}";
+
+    public abstract string WebFilterExplainTitle { get; }
+    public abstract string WebFilterExplainDetail { get; }
 }

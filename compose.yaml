@@ -33,6 +33,16 @@ services:
       Admin__Email: ${KIDTIME_ADMIN_EMAIL}
       Admin__Password: ${KIDTIME_ADMIN_PASSWORD}
       AgentEnrollment__PublicUrl: ${KIDTIME_AGENT_URL:-}
+      # Optional. Points the server at a Technitium DNS Companion so the panel can hand the
+      # parent over to it and the child's PC can show what the home network filters. KidTime
+      # only ever reads it; leave these empty and the feature is absent everywhere.
+      Dns__ApiUrl: ${KIDTIME_DNS_API_URL:-}
+      Dns__ConsoleUrl: ${KIDTIME_DNS_CONSOLE_URL:-}
+      Dns__Username: ${KIDTIME_DNS_USERNAME:-}
+      Dns__Password: ${KIDTIME_DNS_PASSWORD:-}
+      Dns__NodeId: ${KIDTIME_DNS_NODE_ID:-node1}
+      Dns__GroupName: ${KIDTIME_DNS_GROUP:-}
+      Dns__PinnedCertificateSha256: ${KIDTIME_DNS_CERT_PIN:-}
     volumes:
       # Absolute host paths so the stack behaves the same whether Portainer, a Git
       # checkout, or the Compose CLI decides the working directory.

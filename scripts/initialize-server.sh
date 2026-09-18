@@ -145,6 +145,17 @@ KIDTIME_BIND=$bind_address
 KIDTIME_SERVER_PORT=$server_port
 KIDTIME_WEB_PORT=$web_port
 KIDTIME_BASE_PATH=$base_path
+
+# Optional: a Technitium DNS Companion that filters this household's web traffic. Filling these
+# in adds the panel's Web filtering page and the Internet tab on the child's PC; KidTime only
+# reads the configuration and never its query logs. See .env.example for what each one is.
+KIDTIME_DNS_API_URL=
+KIDTIME_DNS_CONSOLE_URL=
+KIDTIME_DNS_USERNAME=
+KIDTIME_DNS_PASSWORD=
+KIDTIME_DNS_NODE_ID=node1
+KIDTIME_DNS_GROUP=
+KIDTIME_DNS_CERT_PIN=
 ENVIRONMENT
 umask 022
 
