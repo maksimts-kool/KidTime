@@ -126,15 +126,26 @@ public sealed record SessionUsageSample(
     BrowserPageError BrowserPage = BrowserPageError.None);
 
 /// <summary>
-/// How a page failed to open, as much as can be known without reading the address. The two
-/// failures are told apart because they are the two shapes a DNS filter's refusal takes: a name
-/// that resolves to nothing, and a name that resolves to an address nothing answers on.
+/// How a page failed to open, as much as can be known without reading the address. The failures
+/// are told apart because they are the shapes a DNS filter's refusal takes, and a filter takes
+/// whichever one it was configured for: a name that resolves to nothing, a name that resolves to
+/// an address nothing answers on, and a name pointed at a block page that cannot present a
+/// certificate for the site the child asked for.
 /// </summary>
 public enum BrowserPageError
 {
     None,
     NameNotResolved,
-    ConnectionFailed
+    ConnectionFailed,
+
+    /// <summary>
+    /// The browser refused the connection on security grounds. A DNS server set to answer blocked
+    /// names with an address of its own lands here rather than on
+    /// <see cref="ConnectionFailed"/> - something does answer, and what it serves is not the site
+    /// whose name was asked for. It is the one failure the child is shown a warning about, so the
+    /// explanation for it says not to click past that warning.
+    /// </summary>
+    SecureConnectionFailed
 }
 
 /// <summary>

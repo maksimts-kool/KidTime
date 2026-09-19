@@ -804,16 +804,31 @@ household blocks and lets the child draw the connection, which is also the answe
 needed.
 
 1. `BrowserPageErrorDetector` runs in the child's own session, on the foreground window title the
-   agent already samples, and answers one of three values: no error, a name that did not resolve,
-   or a connection that did not open - the two shapes a DNS refusal takes. **The title never
-   leaves the session**; only that value rides on `SessionUsageSample.BrowserPage`, which is inert
-   data exactly like a fault report and widens the pipe's privileges not at all.
+   agent already samples, and answers one of four values: no error, or one of the three shapes a
+   DNS refusal takes, which is decided by how the household's DNS server was told to answer a
+   blocked name. `NXDOMAIN` gives a name that did not resolve; `0.0.0.0` gives a connection that
+   did not open; **an address of the DNS server's own** - the commonest setting, and the one that
+   serves a block page - gives a security failure, because that block page cannot present a
+   certificate for the site whose name was asked for. The third was missed at first, and a real
+   household saw nothing at all. **The title never leaves the session**; only that value rides on
+   `SessionUsageSample.BrowserPage`, which is inert data exactly like a fault report and widens the
+   pipe's privileges not at all.
 2. Only Gecko browsers are read, and only because **Firefox titles its error page with a sentence**
-   (`neterror-dns-not-found-title`, `neterror-page-title`) rather than with the host. Chromium puts
-   the hostname in the title, so recognizing it there would mean reading the address - which is why
-   no Chromium browser is in `SupportedBrowsers` and adding one is not a fix. A browser whose
-   interface is in a third language simply produces no match, costing the child an explanation and
-   nothing else.
+   rather than with the host. Chromium puts the hostname in the title, so recognizing it there
+   would mean reading the address - which is why no Chromium browser is in `SupportedBrowsers` and
+   adding one is not a fix. A browser whose interface is in a third language simply produces no
+   match, costing the child an explanation and nothing else.
+
+   Two things about that sentence are worth knowing before touching the table. Only a **document**
+   title can appear in a window title: Firefox draws a second, more specific heading in the body
+   of the page ("Unable to connect", "Secure Connection Failed") that never reaches the title bar,
+   so adding one of those looks right and matches nothing. And there are **two generations of the
+   error page**, the newer behind a pref, so both wordings are in the wild and both are listed -
+   the newer card titles every network failure `neterror-page-title` (a name that did not resolve
+   included, where the older page used `neterror-dns-not-found-title`) and every security failure
+   `fp-certerror-page-title`. The ids, not the English, are what the table is checked against;
+   Firefox ships every translation in its own `omni.ja` and langpacks, which is where a new
+   language's strings come from rather than from a translator.
 3. `EnforcementCoordinator.QueueWebFilterExplanation` decides. It is silent unless all three hold:
    the page **just** failed (a transition, so an explanation follows the child arriving on the
    error page rather than repeating every two seconds while they read it); the service is reaching
@@ -828,14 +843,19 @@ needed.
    offline.
 5. It is an **ordinary toast**. Nothing is closing and nothing is counting down, so nothing
    interrupts; `AgentStrings.WebFilterBlockedMessage` composes the whole sentence per language,
-   because Russian declines a list of categories after a colon and English does not. The last line
-   tells the child to check the address, because a name that does not resolve is also what a typo
-   looks like and a child told only about the filter would retype nothing and wait.
+   because Russian declines a list of categories after a colon and English does not. **The closing
+   line is chosen by how the page failed, and it is the only part that is.** A name that did not
+   resolve is also what a typo looks like, so that one asks the child to check the address - told
+   only about the filter, they would retype nothing and wait. A security failure is the opposite
+   problem: the child is looking at a warning that also appears when a site is genuinely unsafe,
+   KidTime cannot tell the two apart, and an explanation that left them readier to click past it
+   would have done harm no blocked site is worth. So that one ends by saying not to.
 
-The honest limit: a connection that fails because a site is genuinely down looks the same as one
-refused with `0.0.0.0`, so an explanation can arrive for a page nothing blocked. That costs one
-toast stating true things about the household's rules, which is the cheapest of the failures
-available - the alternatives all start by reading where the child went.
+The honest limit: a page that fails because a site is genuinely down, or because the PC's clock is
+wrong, looks from outside the browser exactly like one the filter refused, so an explanation can
+arrive for a page nothing blocked. That costs one toast stating true things about the household's
+rules, which is the cheapest of the failures available - the alternatives all start by reading
+where the child went. It is also why neither ending claims that *this* page was blocked.
 
 ### Logging
 
@@ -927,8 +947,8 @@ design** — do not add them, and do not extend the contract to upload window ti
 
 Noticing that **a page did not open** does not cross it either, and it is the closest thing here to
 the line. The agent reads the foreground window title it already samples, answers one of three
-values - no error, a name that did not resolve, a connection that did not open - and sends only
-that. The title stays in the child's session, no address is parsed out of it, and the explanation
+values - no error, a name that did not resolve, a connection that did not open, a connection the
+browser refused on security grounds - and sends only that. The title stays in the child's session, no address is parsed out of it, and the explanation
 the service then queues describes the household's rules rather than the request. This is why only
 Firefox is read: it titles its error page with a sentence, while Chromium titles it with the host,
 and taking the host would be taking the URL. **Do not add a Chromium browser to that list**, and do
@@ -1083,11 +1103,14 @@ persisted first-block grace, DNS block lists read as categories by their file na
 the publisher that serves them, an unrecognized list named rather than guessed at, an overnight DNS
 timetable read in its own timezone with the instant it turns over, windows that meet merged into one
 stretch and a day-restricted one skipping the days it does not cover, a Firefox error page
-recognized in both languages while a Chromium browser that titles its error page with the host is
-never read at all, a refused page explained from the categories and from whichever shut set of
-sites comes back soonest, nothing explained where filtering is off or unread, a stale snapshot
-still explaining, one explanation per arrival on an error page rather than one per sample, and
-silence while the PC cannot reach the server,
+recognized in both languages and in both generations of that page - a block page whose certificate
+is for another site included - while a body heading that never reaches a window title is not, and
+while a Chromium browser that titles its error page with the host is never read at all, a refused
+page explained from the categories and from whichever shut set of sites comes back soonest, an
+explanation that closes by telling the child to check the address or to leave a security warning
+alone according to which of them they are looking at, nothing explained where filtering is off or
+unread, a stale snapshot still explaining, one explanation per arrival on an error page rather than
+one per sample, and silence while the PC cannot reach the server,
 granted extra time raising a daily limit for its own date only,
 minutes alone never lifting a manual block or a schedule while the window a grant opens lifts both
 from the decision until it expires, per scope and without handing over a spent daily limit, extra
@@ -1183,12 +1206,15 @@ rules:
 26. stop the DNS companion and confirm nothing about KidTime's own enforcement changes: rules still
     apply, synchronization still succeeds, and both the panel and the Internet tab show the last
     answer with its age rather than an error or an empty tab;
-27. in Firefox on the controlled PC, open a site the DNS server blocks and confirm one ordinary
-    toast appears naming what the home network blocks - and, if a site group is shut, when it comes
-    back - in the child's language; reload the page several times and confirm no second toast, then
-    confirm a site that is not blocked produces none at all. Unplug the network and open anything:
-    the same error page must produce **no** toast, because a home network that is down is not the
-    filter. Then confirm the whole thing stays quiet where no `Dns__*` is configured;
+27. in Firefox on the controlled PC, open a site the DNS server blocks over **https** and confirm
+    one ordinary toast appears naming what the home network blocks - and, if a site group is shut,
+    when it comes back - in the child's language. Check what the browser itself drew: a DNS server
+    answering with an address of its own produces a security warning ("Warning: Security Risk"),
+    not "Server Not Found", and the toast must end by telling the child to leave that warning alone
+    rather than to check the address. Reload the page several times and confirm no second toast,
+    then confirm a site that is not blocked produces none at all. Unplug the network and open
+    anything: the same error page must produce **no** toast, because a home network that is down is
+    not the filter. Then confirm the whole thing stays quiet where no `Dns__*` is configured;
 28. read the server's log with `docker compose logs -f server`: one line per request with the
     method, path, status, duration and either the parent's e-mail or the device's short id, the
     same `req=` id on the panel's line for the same click, and that id on the response's
@@ -1293,11 +1319,22 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   the PC. The service has to be reaching the server, so a PC that is offline stays quiet on
   purpose. And `Dns__*` has to be configured and blocking something - check the panel's Web
   filtering page. After a successful explanation there is ten minutes of quiet before another.
-- **The child was told about filtering for a site nothing blocks:** a connection that fails because
-  a site is genuinely down looks the same, from outside the browser, as one refused with `0.0.0.0`.
-  Nothing distinguishes them without reading the address, which KidTime does not do. The message is
-  written to survive this - it states what the household blocks and asks the child to check the
-  address, rather than claiming that page was blocked.
+
+  If all four hold and nothing appears, read the browser's **tab title**, which is the only thing
+  the detector sees. Firefox changes it between versions and between the two generations of its
+  error page, and a title not in `BrowserPageErrorDetector.ErrorTitles` is silence by design. The
+  authoritative strings are in Firefox's own `omni.ja` and its langpacks - on the machine itself,
+  `localization/<locale>/toolkit/neterror/{netError,certError}.ftl` - and the ids to look for are
+  `neterror-page-title`, `neterror-dns-not-found-title`, `fp-certerror-page-title` and
+  `certerror-page-title`. Do not add a body heading such as "Secure Connection Failed": Firefox
+  draws those inside the page and they never reach a window title.
+- **The child was told about filtering for a site nothing blocks:** a page that fails because the
+  site is genuinely down, or because the PC's clock is wrong, looks from outside the browser
+  exactly like one the filter refused. Nothing distinguishes them without reading the address,
+  which KidTime does not do. The message is written to survive this - it states what the household
+  blocks rather than claiming that page was blocked, and it closes either by asking the child to
+  check the address or, where they are looking at a security warning, by telling them not to click
+  past it.
 - **A category on the Internet tab reads wrong:** the subject is worked out from the block list's
   address, and an address that says nothing lands in "Other" on purpose. A list that is genuinely
   mislabelled belongs in `DnsFilterPolicy` - `KnownListNames` for a file name like `tif.txt`,

@@ -15,9 +15,39 @@ public class BrowserPageErrorDetectorTests
     [InlineData("Сервер не найден — Mozilla Firefox", BrowserPageError.NameNotResolved)]
     [InlineData("Problem loading page — Mozilla Firefox", BrowserPageError.ConnectionFailed)]
     [InlineData("Проблема при загрузке страницы — Mozilla Firefox", BrowserPageError.ConnectionFailed)]
-    [InlineData("Unable to connect — Mozilla Firefox", BrowserPageError.ConnectionFailed)]
     public void FirefoxErrorPagesAreRecognized(string title, BrowserPageError expected) =>
         Assert.Equal(expected, BrowserPageErrorDetector.Detect(Firefox(), title));
+
+    /// <summary>
+    /// What a DNS server that answers blocked names with an address of its own actually produces,
+    /// which is the commonest way a household runs one. The block page cannot present a
+    /// certificate for the site that was asked for, so the child is stopped by a security warning
+    /// and never sees "Server Not Found" at all - the case this feature originally missed.
+    ///
+    /// Both generations of Firefox's error page are here because the newer one is behind a pref,
+    /// so which wording a child sees is not something KidTime gets to decide.
+    /// </summary>
+    [Theory]
+    [InlineData("Warning: Security Risk — Mozilla Firefox")]
+    [InlineData("Предупреждение: Риск безопасности — Mozilla Firefox")]
+    [InlineData("Warning: Potential Security Risk Ahead — Mozilla Firefox")]
+    [InlineData("Предупреждение: Вероятная угроза безопасности — Mozilla Firefox")]
+    [InlineData("Did Not Connect: Potential Security Issue — Mozilla Firefox")]
+    [InlineData("Соединение не установлено: Вероятная угроза безопасности — Mozilla Firefox")]
+    public void ABlockPageWithTheWrongCertificateIsRecognized(string title) => Assert.Equal(
+        BrowserPageError.SecureConnectionFailed,
+        BrowserPageErrorDetector.Detect(Firefox(), title));
+
+    /// <summary>
+    /// The headings Firefox draws in the body of an error page, which never reach a window title.
+    /// Listing one as if it were a page title would look right and match nothing, so the table is
+    /// checked against the mistake rather than only against the titles that do work.
+    /// </summary>
+    [Theory]
+    [InlineData("Unable to connect — Mozilla Firefox")]
+    [InlineData("Secure Connection Failed — Mozilla Firefox")]
+    public void ABodyHeadingIsNotAPageTitle(string title) =>
+        Assert.Equal(BrowserPageError.None, BrowserPageErrorDetector.Detect(Firefox(), title));
 
     /// <summary>A private window adds a suffix, and the sentence the match needs is still in front.</summary>
     [Fact]

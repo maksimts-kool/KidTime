@@ -105,6 +105,30 @@ public sealed class WebFilterExplanationTests : IDisposable
         Assert.Empty(state.Notifications);
     }
 
+    /// <summary>
+    /// The shape a household's DNS server usually produces: blocked names are answered with an
+    /// address of its own, the block page has no certificate for the site that was asked for, and
+    /// the child is stopped by a security warning rather than by a missing name. This is the case
+    /// the feature missed on the first real deployment.
+    /// </summary>
+    [Fact]
+    public async Task A_block_page_with_the_wrong_certificate_is_explained()
+    {
+        var coordinator = await CoordinatorAsync(ConnectedStatus());
+        coordinator.UpdateDnsFiltering(Filtering());
+
+        var state = await coordinator.HandleSampleAsync(
+            Sample(1, 0, BrowserPageError.SecureConnectionFailed), CancellationToken.None);
+
+        var notification = Assert.Single(state.Notifications);
+        Assert.Contains("Roblox", notification.Message, StringComparison.Ordinal);
+        // The child is looking at a security warning, and the same warning appears on a site that
+        // is genuinely unsafe. Telling them to check the address they typed would read as
+        // permission to click through it.
+        Assert.DoesNotContain("check it", notification.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(notification.IsUrgent);
+    }
+
     [Fact]
     public async Task An_ordinary_page_says_nothing()
     {

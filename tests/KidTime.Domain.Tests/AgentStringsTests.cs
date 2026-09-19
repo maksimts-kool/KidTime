@@ -55,6 +55,7 @@ public class AgentStringsTests
         var type when type == typeof(DateTimeOffset) => DateTimeOffset.UtcNow.AddHours(3),
         var type when type == typeof(IReadOnlyList<DnsFilterCategoryKind>) =>
             new[] { DnsFilterCategoryKind.Adult, DnsFilterCategoryKind.Gambling },
+        var type when type == typeof(BrowserPageError) => BrowserPageError.NameNotResolved,
         _ => null
     };
 
@@ -188,18 +189,45 @@ public class AgentStringsTests
         var text = AgentStrings.For(language);
 
         var full = text.WebFilterBlockedMessage(
+            BrowserPageError.NameNotResolved,
             [DnsFilterCategoryKind.Adult, DnsFilterCategoryKind.Gambling], "Roblox", "18:00");
         Assert.Contains("Roblox", full, StringComparison.Ordinal);
         Assert.Contains("18:00", full, StringComparison.Ordinal);
 
         // Nothing shut on a timetable: the categories alone still have to make a sentence.
-        var categoriesOnly = text.WebFilterBlockedMessage([DnsFilterCategoryKind.Malware], null, null);
+        var categoriesOnly = text.WebFilterBlockedMessage(
+            BrowserPageError.NameNotResolved, [DnsFilterCategoryKind.Malware], null, null);
         Assert.False(string.IsNullOrWhiteSpace(categoriesOnly));
         Assert.DoesNotContain("Roblox", categoriesOnly, StringComparison.Ordinal);
 
         // A set shut until a parent says otherwise is named without a time attached to it.
-        var noDeadline = text.WebFilterBlockedMessage([], "Roblox", null);
+        var noDeadline = text.WebFilterBlockedMessage(BrowserPageError.NameNotResolved, [], "Roblox", null);
         Assert.Contains("Roblox", noDeadline, StringComparison.Ordinal);
         Assert.DoesNotContain("18:00", noDeadline, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A blocked site reached through a block page ends at a browser security warning, and that is
+    /// also what a genuinely unsafe site looks like. The explanation still has to describe the
+    /// household's rules, but it must close by telling the child to leave the warning alone rather
+    /// than by inviting them to retype the address - the sentence that fits every other failure is
+    /// the wrong one here.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(AllLanguages))]
+    public void ASecurityWarningIsNotExplainedAwayAsATypo(AgentLanguage language)
+    {
+        var text = AgentStrings.For(language);
+        var categories = new[] { DnsFilterCategoryKind.Adult };
+
+        var secure = text.WebFilterBlockedMessage(
+            BrowserPageError.SecureConnectionFailed, categories, null, null);
+        var resolved = text.WebFilterBlockedMessage(
+            BrowserPageError.NameNotResolved, categories, null, null);
+
+        Assert.NotEqual(resolved, secure);
+        // Both still say what the home blocks; only the closing line differs.
+        Assert.Contains(text.FilterCategoryName(DnsFilterCategoryKind.Adult), secure,
+            StringComparison.OrdinalIgnoreCase);
     }
 }

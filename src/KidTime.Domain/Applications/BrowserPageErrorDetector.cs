@@ -20,7 +20,7 @@ namespace KidTime.Domain.Applications;
 /// reading the address, and that is not a trade this feature is worth.
 ///
 /// Nothing here travels: <see cref="Detect"/> runs in the child's own session and only its answer,
-/// one of three values, crosses the pipe to the service.
+/// one of four values, crosses the pipe to the service.
 /// </summary>
 public static class BrowserPageErrorDetector
 {
@@ -35,20 +35,48 @@ public static class BrowserPageErrorDetector
     };
 
     /// <summary>
-    /// The error page titles, in the languages a KidTime household reads. They come from Firefox's
-    /// own <c>netError.ftl</c>: <c>neterror-dns-not-found-title</c> is the name that did not
-    /// resolve, and <c>neterror-page-title</c> is the connection that did not open. A browser
-    /// showing its interface in a third language simply produces no match, which costs the child
-    /// an explanation and nothing else - so the list can grow without anything else changing.
+    /// The error page titles, in the languages a KidTime household reads.
+    ///
+    /// Every one is a <em>document</em> title, which is the only thing that reaches a window title
+    /// - Firefox's error pages carry a second, more specific heading in the body ("Unable to
+    /// connect", "Secure Connection Failed") that never appears in the title bar, so putting one
+    /// here would look right and match nothing. The ids are Firefox's own, from
+    /// <c>netError.ftl</c> and <c>certError.ftl</c>.
+    ///
+    /// There are two generations of the page and both are in the wild, because the newer one is
+    /// behind a pref. The older sets <c>neterror-dns-not-found-title</c> for a name that did not
+    /// resolve and <c>neterror-page-title</c> for everything else that failed; the newer card
+    /// titles the whole network family with <c>neterror-page-title</c> - a blocked name included -
+    /// and everything it classes as a security failure with <c>fp-certerror-page-title</c>. Both
+    /// spellings are listed rather than one, since the child's browser decides which they see.
+    ///
+    /// A browser showing its interface in a third language simply produces no match, which costs
+    /// the child an explanation and nothing else - so the list can grow without anything else
+    /// changing.
     /// </summary>
     private static readonly (string Title, BrowserPageError Error)[] ErrorTitles =
     [
+        // neterror-dns-not-found-title
         ("Server Not Found", BrowserPageError.NameNotResolved),
         ("Сервер не найден", BrowserPageError.NameNotResolved),
+
+        // neterror-page-title
         ("Problem loading page", BrowserPageError.ConnectionFailed),
         ("Проблема при загрузке страницы", BrowserPageError.ConnectionFailed),
-        ("Unable to connect", BrowserPageError.ConnectionFailed),
-        ("Не удалось установить соединение", BrowserPageError.ConnectionFailed)
+
+        // fp-certerror-page-title. This is what a DNS server answering blocked names with an
+        // address of its own actually produces: the block page cannot present a certificate for
+        // the site that was asked for, so the browser stops at a security warning rather than at
+        // a missing name.
+        ("Warning: Security Risk", BrowserPageError.SecureConnectionFailed),
+        ("Предупреждение: Риск безопасности", BrowserPageError.SecureConnectionFailed),
+
+        // certerror-page-title, and certerror-sts-page-title for a site that asked not to be
+        // clicked past. Both are the older page's wording for the same thing.
+        ("Warning: Potential Security Risk Ahead", BrowserPageError.SecureConnectionFailed),
+        ("Предупреждение: Вероятная угроза безопасности", BrowserPageError.SecureConnectionFailed),
+        ("Did Not Connect: Potential Security Issue", BrowserPageError.SecureConnectionFailed),
+        ("Соединение не установлено: Вероятная угроза безопасности", BrowserPageError.SecureConnectionFailed)
     ];
 
     public static BrowserPageError Detect(ApplicationDescriptor? foreground, string? windowTitle)

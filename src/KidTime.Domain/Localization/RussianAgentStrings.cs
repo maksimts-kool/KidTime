@@ -305,6 +305,7 @@ internal sealed class RussianAgentStrings : AgentStrings
     public override string WebFilterBlockedTitle => "Здесь блокируются некоторые сайты";
 
     public override string WebFilterBlockedMessage(
+        BrowserPageError page,
         IReadOnlyList<DnsFilterCategoryKind> categories,
         string? closedSiteGroup,
         string? reopensAt)
@@ -323,8 +324,11 @@ internal sealed class RussianAgentStrings : AgentStrings
         }
 
         // Impersonal on purpose: "если ты вводил" would be addressed to a boy, and the catalog
-        // has no way of knowing whose PC this is.
-        sentences.Add("Проверь, правильно ли написан адрес.");
+        // has no way of knowing whose PC this is. The imperative carries no gender either way,
+        // which is why both endings are written as one.
+        sentences.Add(page == BrowserPageError.SecureConnectionFailed
+            ? "Не обходи предупреждение браузера о безопасности."
+            : "Проверь, правильно ли написан адрес.");
         return string.Join(" ", sentences);
     }
 }

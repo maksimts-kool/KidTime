@@ -222,7 +222,7 @@ public sealed class EnforcementCoordinator(
         // stacking beside it.
         Enqueue(new UserNotification(
             Text.WebFilterBlockedTitle,
-            Text.WebFilterBlockedMessage(refusal.Categories, refusal.ClosedSiteGroup, reopens),
+            Text.WebFilterBlockedMessage(sample.BrowserPage, refusal.Categories, refusal.ClosedSiteGroup, reopens),
             PersistentNotificationKey: "web-filter"));
         logger.LogInformation(
             "Explained the home network's web filtering after a {PageError} page in the browser.",

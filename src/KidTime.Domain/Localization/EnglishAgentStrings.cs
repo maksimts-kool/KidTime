@@ -274,6 +274,7 @@ internal sealed class EnglishAgentStrings : AgentStrings
     public override string WebFilterBlockedTitle => "Some sites are blocked here";
 
     public override string WebFilterBlockedMessage(
+        BrowserPageError page,
         IReadOnlyList<DnsFilterCategoryKind> categories,
         string? closedSiteGroup,
         string? reopensAt)
@@ -288,9 +289,14 @@ internal sealed class EnglishAgentStrings : AgentStrings
                 : $"{closedSiteGroup} is closed until {reopensAt}.");
         }
 
-        // The last line is the honest one: a name that does not resolve is also what a typo looks
-        // like, and a child told only about the filter would retype nothing and wait.
-        sentences.Add("If you typed the address, check it.");
+        // The last line is the honest one, and which honesty is needed depends on what the child
+        // is looking at. A missing name is also what a typo looks like, and a child told only
+        // about the filter would retype nothing and wait. A security warning is the opposite
+        // problem: it is also what an unsafe site looks like, so this must not read as permission
+        // to click through one.
+        sentences.Add(page == BrowserPageError.SecureConnectionFailed
+            ? "Do not click past the browser's security warning."
+            : "If you typed the address, check it.");
         return string.Join(" ", sentences);
     }
 

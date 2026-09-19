@@ -415,10 +415,19 @@ public abstract class AgentStrings
     /// </summary>
     public abstract string WebFilterBlockedTitle { get; }
 
+    /// <param name="page">
+    /// How the page failed, which decides only the closing line. A name that did not resolve is
+    /// also what a typo looks like, so that one ends by asking the child to check the address. A
+    /// security failure ends by telling them not to click past the browser's warning: the same
+    /// page appears when a site is genuinely unsafe, KidTime cannot tell the two apart, and an
+    /// explanation that left a child readier to dismiss that warning would have done harm no
+    /// blocked site was worth.
+    /// </param>
     /// <param name="categories">What this home blocks at every hour; may be empty.</param>
     /// <param name="closedSiteGroup">A named set of sites shut right now, or null.</param>
     /// <param name="reopensAt">When that set comes back, already a local clock time, or null.</param>
     public abstract string WebFilterBlockedMessage(
+        BrowserPageError page,
         IReadOnlyList<DnsFilterCategoryKind> categories,
         string? closedSiteGroup,
         string? reopensAt);
