@@ -30,8 +30,10 @@ dotnet build KidTime.slnx
 dotnet test KidTime.slnx
 ```
 
+The two cross-platform test projects run anywhere:
+
 ```bash
-dotnet test tests/KidTime.Domain.Tests
+dotnet test tests/KidTime.Domain.Tests && dotnet test tests/KidTime.Server.Tests
 ```
 
 Single test or class (xunit via VSTest):
@@ -648,6 +650,31 @@ Two decisions there are load-bearing:
   than a sentence, and a localized file name would have to be deleted and rewritten every time a
   parent changed the PC's language through an ordinary rule revision.
 
+A shortcut still has to be clicked, and a child who has never opened the window does not know
+there is anything in it. So a parent can ask for it to **open by itself when the child signs in**:
+`DeviceRule.OpenWindowAtSignIn` travels inside `DeviceRuleSnapshot` exactly as the language does,
+so switching it on bumps the revision and lands over the ordinary sync path. It is off by default,
+and it enforces nothing - the window can be closed straight away and no rule reads it.
+
+Two constraints make it once rather than often:
+
+- **The service decides, not the agent.** The agent cannot tell a sign-in from its own relaunch,
+  and the supervisor starts it again within two seconds of it dying - so an agent that opened its
+  window on startup would turn a crash loop into a window reopening every two seconds on a child
+  who can do nothing about it. `SessionAgentSupervisor` therefore tells
+  `EnforcementCoordinator.NoteAgentLaunchedAsync` which session it launched into, and the
+  coordinator answers once per sign-in.
+- **The answer is persisted, and a sign-in is not a session id.** `LocalStore` spends it like the
+  first-block grace, so a service restart mid-afternoon - which is what every automatic update
+  is - cannot open a window over what the child is doing. The key is the boot the session belongs
+  to as well as its id, because Windows hands the same id out again after a restart and that
+  restart is exactly the sign-in the window should open for.
+
+It reaches the agent as `EnforcementState.ShowWindow`, a single bit spent by the service as it is
+sent. That is deliberately the same vocabulary as the shortcut's signal in the other direction: it
+says "open the window" and can say nothing else, so **do not grow it into a channel for the server
+to drive the child's desktop**.
+
 Notifications are native Windows toasts. SessionAgent emits them marked with the supported urgent
 scenario, high priority, and explicit reminder audio — the Windows-supported way to break through
 Focus Assist without changing the user's global setting. Its tray dashboard composes maintained WPF
@@ -786,13 +813,29 @@ container name and port. Unset, they leave an ordinary empty network and change 
 most installations have no DNS server to reach.
 
 1. `TechnitiumCompanionClient` signs in once with the configured credentials and keeps the session
-   cookie the companion issues, renewing it silently on a 401. Every other call is a GET:
+   cookie the companion issues, renewing it silently when it is refused. Every other call is a GET:
    `advanced-blocking/{node}`, `nodes/dns-schedules/rules`, and the domain groups.
    **Do not add a write.** A second editor for the same setting is a second way for it to be wrong,
    and the panel's button already puts the parent in the console that owns it. Ordinary chain and
    hostname validation runs first and the configured SHA-256 pin is consulted only when it fails -
    the same order the Windows agent uses against this server, which is what makes the companion's
    self-signed certificate usable without trusting everything.
+
+   **"Refused" has two shapes here and only one of them is a 401.** The companion is a front for
+   the DNS node: it signs in to that node on our login and keeps the node's token in the session,
+   and a single moment of the node being unreachable is enough for the node to reject it
+   afterwards. The companion then drops the token and needs a fresh login to mint another - but
+   until it gets one it goes on answering **200**, because the request to the companion itself
+   succeeded, and simply leaves the node's half of the payload out. Read at face value that is a
+   household with no block lists and no site groups, and a filtered home was told for hours that
+   its filter was off, with a fresh timestamp and nothing in the log. So a 200 that carries no
+   `config` renews the session exactly as a 401 does, and if it comes back empty a second time the
+   read **fails** rather than answers.
+
+   That is the general rule here, and it is the whole reason this client throws: **a read that
+   half succeeded is a failed read.** Nothing may be defaulted to empty - not the schedules, not
+   the domain groups - because the caller cannot tell a configuration it could not fetch from one
+   that blocks nothing, and only one of those two is worth saying out loud.
 2. `DnsFilteringService` caches one normalized `DnsFilteringSnapshot` for `RefreshSeconds`
    (120 by default). **Synchronization must never wait on a third-party service**, so the sync reads
    a cache rather than making a call. A read that fails after an earlier success keeps that answer
@@ -800,7 +843,10 @@ most installations have no DNS server to reach.
    child's tab go on describing the filtering that is in force instead of going blank; that is the
    same shape as cached rules being enforced offline, and it is why staleness is a flag rather than a
    state. `Unreachable` is only for a configuration that has never been read at all. A failure is
-   retried after 30 seconds rather than on the next sync.
+   retried after 30 seconds rather than on the next sync. **`Inactive` is the DNS server saying it
+   blocks nothing for this household, never KidTime failing to ask** - every other way of reaching
+   it, a group the configured `Dns__GroupName` does not name included, is logged rather than shown
+   silently as a filter that is off.
 3. `DnsFilterPolicy` in the domain turns the configuration into the two things a person can read.
    `Summarize` folds block lists into named categories, narrowest evidence first: an AdGuard
    registry number, then the file name, then the rest of the path, and **never the host** - AdGuard
@@ -1152,7 +1198,11 @@ page explained from the categories and from whichever shut set of sites comes ba
 explanation that closes by telling the child to check the address or to leave a security warning
 alone according to which of them they are looking at, nothing explained where filtering is off or
 unread, a stale snapshot still explaining, one explanation per arrival on an error page rather than
-one per sample, and silence while the PC cannot reach the server,
+one per sample, and silence while the PC cannot reach the server, a DNS companion answering 200
+without the node's configuration signed in to again and believed on the retry, the same empty
+answer twice failing the whole read rather than reading as a household that filters nothing,
+schedules or domain groups that could not be read failing it too, and a household that has
+genuinely switched filtering off still read as an answer,
 granted extra time raising a daily limit for its own date only,
 minutes alone never lifting a manual block or a schedule while the window a grant opens lifts both
 from the decision until it expires, per scope and without handing over a spent daily limit, extra
@@ -1265,7 +1315,12 @@ rules:
     starting a second one. Close the window and open it again from the shortcut; then, as the
     child, try to delete the desktop icon and confirm Windows refuses. Finally remove KidTime from
     the screen-time window and confirm both the Start menu entry and the desktop icon go with it;
-29. read the server's log with `docker compose logs -f server`: one line per request with the
+29. turn on **Open it when the child signs in** on the device page, sign the child out and back
+    in, and confirm the screen-time window comes up by itself once. Close it, end
+    `KidTime.SessionAgent` from Task Manager, and confirm the service brings the agent back
+    without the window reopening — one window per sign-in, not one per agent. Then restart
+    `KidTimeControl` and confirm the same; only signing in again brings it back;
+30. read the server's log with `docker compose logs -f server`: one line per request with the
     method, path, status, duration and either the parent's e-mail or the device's short id, the
     same `req=` id on the panel's line for the same click, and that id on the response's
     `X-Request-Id` header in the browser's network tab. Sign in with the wrong password and confirm
@@ -1310,6 +1365,13 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   daily limit is named only while the child is actually spending it, so an idle PC gets the warning
   when the block arrives instead. A manual block has no deadline at all and is warned about after
   the fact, with the full minute.
+- **The window does not open when the child signs in:** it is a rule like any other, so check
+  first that the revision on the device page has caught up - the PC has to have synchronized
+  since the switch was turned on. After that, the opening is spent once per sign-in and the
+  answer is persisted, so signing out and in again is the only way to see it; restarting
+  `KidTimeControl`, or an automatic update doing so, deliberately does not bring it back. If it
+  still does not appear, no tray agent is running at all - see the tray-agent entries below,
+  because that is the same fault, and a child in that state has no window to open.
 - **The KidTime shortcut is missing from the Start menu or the desktop:** the service writes both
   when it starts, so restart `KidTimeControl` and they come back; they are not written by setup, and
   re-running setup on an enrolled PC is refused anyway. If they still do not appear, the service log
@@ -1377,6 +1439,15 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   it in a second; the answer is usually to reach the companion over its own Docker network - see
   [Web filtering](#web-filtering-technitium-dns) - rather than to open the port. Then check that
   the credentials are the ones the DNS console takes.
+- **The Web filtering page says filtering is off, and the DNS console says it is on:** on servers
+  before this was fixed that was the commonest thing this integration did wrong, and it had no
+  symptom at all - the page read "Off" with a timestamp from a minute ago and the server log was
+  clean. The cause is in the companion rather than in KidTime: `docker logs technitium-companion`
+  shows `Technitium rejected token for node "node1" ... re-login required` once, and then
+  `Failed to load Advanced Blocking config from node "node1": Authentication required` on every
+  read after it. The current server treats that answer as a failed read, logs it, keeps the last
+  good one and signs in again, which mints a new node token and recovers within a refresh. On an
+  older server the fix is to restart the `server` container, which logs in afresh.
 - **The child was not told why a blocked site would not open:** the explanation needs four things
   at once, and the first one it fails is the answer. It is drawn only in a Gecko browser, because
   Firefox titles its error page with a sentence and Chromium titles it with the host - a child

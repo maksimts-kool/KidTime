@@ -89,6 +89,9 @@ public sealed class SessionAgentSupervisor(
                 Volatile.Write(ref _agentProcessId, processId);
                 _launchedTimestamp = Stopwatch.GetTimestamp();
                 logger.LogInformation("SessionAgent started with a hardened process ACL in session {SessionId} as process {ProcessId}.", activeSessionId, processId);
+                // The coordinator decides whether this is a sign-in the child's window should
+                // open for; every relaunch into the same session asks and is told no.
+                await coordinator.NoteAgentLaunchedAsync(activeSessionId, stoppingToken);
             }
             catch (Exception exception)
             {

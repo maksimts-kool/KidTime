@@ -385,6 +385,13 @@ public sealed record SessionStatusSnapshot(
 /// exchange. Handing them out one at a time put every message behind a two-second sample, which
 /// a final warning cannot afford: its countdown was drawn from the moment it arrived while the
 /// service was already counting down from the moment it was queued.
+///
+/// <paramref name="ShowWindow"/> is the one thing here the agent acts on rather than displays,
+/// and it is deliberately the smallest thing it could be: a single bit meaning "open the
+/// screen-time window", spent by the service as it is sent. It says nothing about why and carries
+/// no payload, so it widens what the service can ask of the unelevated agent by exactly the
+/// vocabulary a tray click already has - see <c>AgentActivation</c>, which makes the same point
+/// about the shortcut signalling in the other direction.
 /// </summary>
 public sealed record EnforcementState(
     bool IsPcBlocked,
@@ -396,4 +403,5 @@ public sealed record EnforcementState(
     IReadOnlyList<UserNotification> Notifications,
     SessionStatusSnapshot? Status = null,
     AgentLanguage Language = AgentLanguage.English,
-    IReadOnlyList<TimeExtensionOffer>? ExtensionOffers = null);
+    IReadOnlyList<TimeExtensionOffer>? ExtensionOffers = null,
+    bool ShowWindow = false);

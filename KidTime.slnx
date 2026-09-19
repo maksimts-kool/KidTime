@@ -9,5 +9,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/KidTime.ControlService.Tests/KidTime.ControlService.Tests.csproj" />
     <Project Path="tests/KidTime.Domain.Tests/KidTime.Domain.Tests.csproj" />
+    <Project Path="tests/KidTime.Server.Tests/KidTime.Server.Tests.csproj" />
   </Folder>
 </Solution>

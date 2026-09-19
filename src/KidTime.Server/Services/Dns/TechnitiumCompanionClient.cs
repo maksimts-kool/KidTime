@@ -17,7 +17,8 @@ namespace KidTime.Server.Services.Dns;
 /// for it to be wrong.
 ///
 /// The companion authenticates with a session cookie rather than a header token, so one is kept
-/// and renewed when it is refused.
+/// and renewed when it is refused - and "refused" has two shapes here, only one of which is an
+/// HTTP status. See <see cref="GetAsync{T}"/>.
 /// </summary>
 public sealed class TechnitiumCompanionClient : IDisposable
 {
@@ -33,21 +34,40 @@ public sealed class TechnitiumCompanionClient : IDisposable
     private bool _signedIn;
 
     public TechnitiumCompanionClient(DnsFilteringOptions options, ILogger<TechnitiumCompanionClient> logger)
+        : this(options, logger, CreateHandler(options))
+    {
+    }
+
+    /// <summary>
+    /// The same client over a handler the caller supplies, so a test can answer as the companion
+    /// does. What is worth testing here is what KidTime makes of the answers, and reaching a real
+    /// DNS server to find out is not a test.
+    /// </summary>
+    internal TechnitiumCompanionClient(
+        DnsFilteringOptions options,
+        ILogger<TechnitiumCompanionClient> logger,
+        HttpMessageHandler handler)
     {
         _options = options;
         _logger = logger;
+        _http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri((options.ApiUrl ?? "https://localhost:3443").TrimEnd('/') + "/api/"),
+            Timeout = TimeSpan.FromSeconds(20)
+        };
+    }
+
+    private static SocketsHttpHandler CreateHandler(DnsFilteringOptions options)
+    {
         var handler = new SocketsHttpHandler
         {
             CookieContainer = new CookieContainer(),
             UseCookies = true,
             PooledConnectionLifetime = TimeSpan.FromMinutes(10)
         };
-        handler.SslOptions.RemoteCertificateValidationCallback = ValidateCertificate;
-        _http = new HttpClient(handler)
-        {
-            BaseAddress = new Uri((_options.ApiUrl ?? "https://localhost:3443").TrimEnd('/') + "/api/"),
-            Timeout = TimeSpan.FromSeconds(20)
-        };
+        handler.SslOptions.RemoteCertificateValidationCallback =
+            (_, certificate, _, errors) => ValidateCertificate(options, certificate, errors);
+        return handler;
     }
 
     /// <summary>
@@ -56,29 +76,49 @@ public sealed class TechnitiumCompanionClient : IDisposable
     /// with a real certificate keeps working across renewals while a self-signed one still needs
     /// to be named.
     /// </summary>
-    private bool ValidateCertificate(
-        object sender,
+    private static bool ValidateCertificate(
+        DnsFilteringOptions options,
         X509Certificate? certificate,
-        X509Chain? chain,
         SslPolicyErrors errors)
     {
         if (errors == SslPolicyErrors.None) return true;
-        if (_options.AllowInvalidCertificate) return true;
-        if (certificate is null || string.IsNullOrWhiteSpace(_options.PinnedCertificateSha256)) return false;
+        if (options.AllowInvalidCertificate) return true;
+        if (certificate is null || string.IsNullOrWhiteSpace(options.PinnedCertificateSha256)) return false;
         var actual = Convert.ToHexString(SHA256.HashData(certificate.GetRawCertData()));
-        var expected = _options.PinnedCertificateSha256.Replace(":", string.Empty, StringComparison.Ordinal).Trim();
+        var expected = options.PinnedCertificateSha256.Replace(":", string.Empty, StringComparison.Ordinal).Trim();
         return CryptographicOperations.FixedTimeEquals(
             Encoding.ASCII.GetBytes(actual.ToUpperInvariant()),
             Encoding.ASCII.GetBytes(expected.ToUpperInvariant()));
     }
 
+    /// <summary>
+    /// One complete read, or nothing. **A read that half succeeded is a failed read**, because the
+    /// caller cannot tell a configuration it could not fetch from one that blocks nothing, and the
+    /// second of those is a household being told its filter is off while the filter is running.
+    /// Whatever cannot be read throws, and <see cref="DnsFilteringService"/> then keeps the answer
+    /// before it.
+    /// </summary>
     public async Task<CompanionState> ReadAsync(CancellationToken cancellationToken)
     {
+        // The advanced-blocking configuration is the anchor of the whole read - it is what says
+        // whether this household is filtered at all - and it is also the one the companion serves
+        // out of the DNS node rather than out of itself, so it is where a stale node token shows.
         var blocking = await GetAsync<AdvancedBlockingResponse>(
-            $"advanced-blocking/{Uri.EscapeDataString(_options.NodeId)}", cancellationToken);
+            $"advanced-blocking/{Uri.EscapeDataString(_options.NodeId)}",
+            cancellationToken,
+            answer => answer?.Config is not null);
+        if (blocking?.Config is null)
+        {
+            throw new DnsCompanionException(
+                $"The DNS companion answered for node \"{_options.NodeId}\" without its Advanced Blocking "
+                + "configuration, which is what it does when the DNS node has rejected the token it holds. "
+                + "Signing in again did not mint a working one.");
+        }
+
         var schedules = await GetAsync<List<ScheduleRule>>("nodes/dns-schedules/rules", cancellationToken)
-                        ?? [];
-        var groups = await GetAsync<List<DomainGroupSummary>>("domain-groups", cancellationToken) ?? [];
+                        ?? throw new DnsCompanionException("The DNS companion did not return its blocking schedules.");
+        var groups = await GetAsync<List<DomainGroupSummary>>("domain-groups", cancellationToken)
+                     ?? throw new DnsCompanionException("The DNS companion did not return its domain groups.");
         var details = new List<DomainGroupDetail>();
         foreach (var group in groups.Where(item => !string.IsNullOrWhiteSpace(item.Id)).Take(50))
         {
@@ -87,30 +127,55 @@ public sealed class TechnitiumCompanionClient : IDisposable
             if (detail is not null) details.Add(detail);
         }
 
-        return new CompanionState(blocking?.Config, schedules, details);
+        return new CompanionState(blocking.Config, schedules, details);
     }
 
-    private async Task<T?> GetAsync<T>(string path, CancellationToken cancellationToken)
+    /// <param name="isUsable">
+    /// Whether the answer is one the companion could actually give, for the calls it serves out of
+    /// the DNS node rather than out of itself. **A rejected node token is not a 401.** The
+    /// companion signs in to the node once, on our own login, and keeps that token in the session;
+    /// when the node later rejects it - which one moment of the node being unreachable is enough to
+    /// cause - the companion drops it and needs a fresh login to mint another. Until then it goes
+    /// on answering 200, because the request to the companion itself succeeded, and simply leaves
+    /// the node's half of the payload out. Read at face value that says the household filters
+    /// nothing, which is why it is checked here and not left to the caller: it is the same fault as
+    /// an expired session and the same thing fixes it.
+    /// </param>
+    private async Task<T?> GetAsync<T>(
+        string path,
+        CancellationToken cancellationToken,
+        Func<T?, bool>? isUsable = null)
     {
         await EnsureSignedInAsync(cancellationToken);
-        var response = await _http.GetAsync(path, cancellationToken);
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        var (status, succeeded, value) = await SendAsync<T>(path, cancellationToken);
+        if (status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+            || (succeeded && isUsable is not null && !isUsable(value)))
         {
-            // The session lasts eight hours and the server outlives it. One silent renewal is the
-            // ordinary case, not a failure worth telling the parent about.
+            // The session lasts eight hours and the server outlives it; the node's token can be
+            // gone long before that. One silent renewal is the ordinary case either way, not a
+            // failure worth telling the parent about.
             _signedIn = false;
             await EnsureSignedInAsync(cancellationToken);
-            response = await _http.GetAsync(path, cancellationToken);
+            (status, succeeded, value) = await SendAsync<T>(path, cancellationToken);
         }
 
-        if (!response.IsSuccessStatusCode)
+        if (!succeeded)
         {
-            _logger.LogWarning(
-                "The DNS companion answered {Status} for {Path}.", (int)response.StatusCode, path);
+            _logger.LogWarning("The DNS companion answered {Status} for {Path}.", (int)status, path);
             return default;
         }
 
-        return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
+        return value;
+    }
+
+    private async Task<(HttpStatusCode Status, bool Succeeded, T? Value)> SendAsync<T>(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        using var response = await _http.GetAsync(path, cancellationToken);
+        return response.IsSuccessStatusCode
+            ? (response.StatusCode, true, await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken))
+            : (response.StatusCode, false, default);
     }
 
     private async Task EnsureSignedInAsync(CancellationToken cancellationToken)
@@ -146,9 +211,12 @@ public sealed class TechnitiumCompanionClient : IDisposable
         _loginGate.Dispose();
     }
 
-    /// <summary>Everything one read of the companion returns, before it means anything.</summary>
+    /// <summary>
+    /// Everything one read of the companion returns, before it means anything. Every part of it
+    /// was actually read: <see cref="ReadAsync"/> throws rather than hand over a gap.
+    /// </summary>
     public sealed record CompanionState(
-        AdvancedBlockingConfig? Blocking,
+        AdvancedBlockingConfig Blocking,
         List<ScheduleRule> Schedules,
         List<DomainGroupDetail> DomainGroups);
 

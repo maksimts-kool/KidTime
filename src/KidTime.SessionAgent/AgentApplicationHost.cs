@@ -263,6 +263,11 @@ internal sealed class AgentApplicationHost : IDisposable
         // Everything the service had waiting arrives together, so a final warning is never held
         // behind an earlier reminder while its deadline runs down.
         foreach (var notification in state.Notifications) Deliver(notification);
+
+        // The child has just signed in and the parent asked for the window to be there. The
+        // service spends this bit as it sends it, so a relaunched agent is not greeted again.
+        // Last, so the window is painted from the status this same reply carried.
+        if (state.ShowWindow) OpenStatusWindow();
     }
 
     private void Deliver(UserNotification notification)

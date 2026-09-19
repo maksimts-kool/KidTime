@@ -68,6 +68,13 @@ public sealed class DeviceRule
     /// </summary>
     public AgentLanguage Language { get; set; } = AgentLanguage.English;
 
+    /// <summary>
+    /// Whether the child's screen-time window opens by itself when they sign in to Windows. Like
+    /// the language, it rides with the rules, so a change increments the revision and reaches the
+    /// PC over the usual path. It enforces nothing.
+    /// </summary>
+    public bool OpenWindowAtSignIn { get; set; }
+
     public bool ManuallyBlocked { get; set; }
     public DateTimeOffset? ManualBlockUntilUtc { get; set; }
     public int? DailyLimitSeconds { get; set; } = 18_000;

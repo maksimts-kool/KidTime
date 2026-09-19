@@ -170,7 +170,10 @@ public sealed class WebFilterExplanationTests : IDisposable
         Categories = [new DnsFilterCategory(DnsFilterCategoryKind.Adult, 1)],
         SiteGroups =
         [
-            new DnsSiteGroup("Roblox", 12, true, DateTimeOffset.UtcNow.Date.AddDays(1).AddHours(9), [])
+            // Nine tomorrow, said in UTC because the rules under test are: DateTimeOffset.Date
+            // hands back an unspecified DateTime, which converts at the machine's own offset, and
+            // the assertion on "09:00" then only held on a build agent that happened to be on UTC.
+            new DnsSiteGroup("Roblox", 12, true, new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(9), TimeSpan.Zero), [])
         ]
     };
 

@@ -34,6 +34,7 @@ export type DeviceSummary = {
   foregroundApplication: string | null;
   controlledUserName: string | null;
   language: AgentLanguage;
+  openWindowAtSignIn: boolean;
   agentVersion: string | null;
   latestAgentVersion: string | null;
   agentUpdateStatus: string | null;
@@ -76,6 +77,8 @@ export type DeviceRule = {
   revision: number;
   timeZoneId: string;
   language: AgentLanguage;
+  /** Whether the child's screen-time window opens by itself when they sign in to Windows. */
+  openWindowAtSignIn: boolean;
   controlledUserSid: string | null;
   controlledUserName: string | null;
   idleThresholdSeconds: number;

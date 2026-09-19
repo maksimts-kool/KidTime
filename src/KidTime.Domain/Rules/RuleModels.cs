@@ -106,6 +106,18 @@ public sealed class DeviceRuleSnapshot
     /// </summary>
     public AgentLanguage Language { get; init; } = AgentLanguage.English;
 
+    /// <summary>
+    /// Whether the child's screen-time window opens by itself when they sign in to Windows.
+    ///
+    /// A tray icon is something you have to know is there, and the window is where the child reads
+    /// how much time they have, what the home network blocks, and how to ask for more minutes.
+    /// Opening it once at sign-in shows them, without anything being enforced by it: the window
+    /// can be closed straight away and nothing about the rules changes either way. It travels with
+    /// the rules like the language does, so switching it on bumps the revision and reaches the PC
+    /// over the ordinary path.
+    /// </summary>
+    public bool OpenWindowAtSignIn { get; init; }
+
     public string? ControlledUserSid { get; init; }
     public string? ControlledUserName { get; init; }
     public int IdleThresholdSeconds { get; init; } = 300;

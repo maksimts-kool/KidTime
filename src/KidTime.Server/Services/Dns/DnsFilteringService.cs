@@ -42,8 +42,9 @@ public sealed class DnsFilteringService(
             _nextRead = now.AddSeconds(Math.Clamp(options.RefreshSeconds, 15, 3_600));
             _snapshot = Build(await _client.ReadAsync(cancellationToken), now);
         }
-        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
-                                              or InvalidOperationException or UriFormatException)
+        catch (Exception exception) when (exception is DnsCompanionException or HttpRequestException
+                                              or OperationCanceledException or InvalidOperationException
+                                              or UriFormatException)
         {
             logger.LogWarning(exception, "The DNS filtering configuration could not be read.");
             // A failure after an earlier success keeps that answer whole - its state, its contents
@@ -72,10 +73,15 @@ public sealed class DnsFilteringService(
         return _snapshot;
     }
 
+    /// <summary>
+    /// What one read means. Everything here was actually read - <see cref="TechnitiumCompanionClient.ReadAsync"/>
+    /// throws rather than hand over a gap - so <see cref="DnsFilteringState.Inactive"/> below is
+    /// the DNS server saying it blocks nothing for this household, never KidTime failing to ask.
+    /// </summary>
     private DnsFilteringSnapshot Build(TechnitiumCompanionClient.CompanionState state, DateTimeOffset now)
     {
         var group = ResolveGroup(state);
-        if (state.Blocking is not { EnableBlocking: true } || group is null || !group.EnableBlocking)
+        if (!state.Blocking.EnableBlocking || group is null || !group.EnableBlocking)
         {
             return new DnsFilteringSnapshot
             {
@@ -108,10 +114,15 @@ public sealed class DnsFilteringService(
     private TechnitiumCompanionClient.AdvancedBlockingGroup? ResolveGroup(
         TechnitiumCompanionClient.CompanionState state)
     {
-        var groups = (state.Blocking?.Groups ?? [])
+        var groups = (state.Blocking.Groups ?? [])
             .Where(item => !string.IsNullOrWhiteSpace(item.Name))
             .ToList();
-        if (groups.Count == 0) return null;
+        if (groups.Count == 0)
+        {
+            logger.LogWarning("The DNS server has no advanced-blocking groups at all.");
+            return null;
+        }
+
         if (string.IsNullOrWhiteSpace(options.GroupName))
         {
             if (groups.Count == 1) return groups[0];
@@ -121,8 +132,20 @@ public sealed class DnsFilteringService(
             return null;
         }
 
-        return groups.FirstOrDefault(item =>
+        var named = groups.FirstOrDefault(item =>
             string.Equals(item.Name, options.GroupName, StringComparison.OrdinalIgnoreCase));
+        // Every way of ending up without a group is a mistake somebody has to be able to find, so
+        // none of them is silent: this one reads as "filtering is off" on the parent's page, and a
+        // page saying that with nothing in the log behind it is unanswerable.
+        if (named is null)
+        {
+            logger.LogWarning(
+                "Dns:GroupName is {Configured}, which is none of the DNS server's groups ({Groups}).",
+                options.GroupName,
+                string.Join(", ", groups.Select(item => item.Name)));
+        }
+
+        return named;
     }
 
     /// <summary>

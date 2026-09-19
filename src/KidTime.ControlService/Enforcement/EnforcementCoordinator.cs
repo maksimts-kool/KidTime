@@ -65,6 +65,14 @@ public sealed class EnforcementCoordinator(
     private long _notificationRuleRevision = -1;
 
     /// <summary>
+    /// Set when a sign-in has earned the child's window being opened, and spent by the very next
+    /// exchange. It is an int rather than a bool so it can be taken atomically: the supervisor
+    /// loop sets it and the pipe's sample handler takes it, and an exchange that read it twice
+    /// would open two windows.
+    /// </summary>
+    private int _showWindowPending;
+
+    /// <summary>
     /// The browser error page the last sample saw, so the explanation is queued when the child
     /// arrives on one rather than once every two seconds while they sit there reading it.
     /// </summary>
@@ -227,6 +235,53 @@ public sealed class EnforcementCoordinator(
         logger.LogInformation(
             "Explained the home network's web filtering after a {PageError} page in the browser.",
             sample.BrowserPage);
+    }
+
+    /// <summary>
+    /// A tray agent has just been launched into a Windows session. If the parent asked for the
+    /// screen-time window to open when the child signs in, and this sign-in has not had it yet,
+    /// the next exchange with that agent carries the request.
+    ///
+    /// The decision is the service's rather than the agent's because the agent cannot tell a
+    /// sign-in from its own relaunch: the supervisor starts it again within two seconds of it
+    /// dying, and a window that reopened every time would be the most visible possible symptom of
+    /// a crash loop the child can do nothing about. Here it is one window per sign-in, whatever
+    /// happens to the agent afterwards.
+    /// </summary>
+    public async Task NoteAgentLaunchedAsync(uint sessionId, CancellationToken cancellationToken)
+    {
+        if (!_rules.OpenWindowAtSignIn) return;
+        try
+        {
+            if (await store.TryConsumeSignInWindowOpeningAsync(SignInKey(sessionId), cancellationToken))
+                Interlocked.Exchange(ref _showWindowPending, 1);
+        }
+        catch (Exception exception)
+        {
+            // Opening a window is a courtesy, and nothing about enforcement depends on it. A
+            // failure here is worth a line and nothing more.
+            logger.LogWarning(exception, "Could not decide whether to open the screen-time window for this sign-in.");
+        }
+    }
+
+    /// <summary>
+    /// Names one sign-in: the Windows session, and the boot it belongs to. Session ids are handed
+    /// out again after a restart, so the id alone would suppress the opening on exactly the
+    /// occasion it is most wanted. Boot time is computed from monotonic uptime and rounded to the
+    /// minute, so every start of this service within one boot names the same one.
+    ///
+    /// Windows' uptime excludes sleep, so a PC that has slept computes a later boot than it had.
+    /// That only ever mints a key that has not been used before, never collides with one that
+    /// has, and it is read only when an agent is launched - which a resume does not do, since the
+    /// agent goes on running across one. The cost is at most one extra window, on a PC whose
+    /// agent or service restarted after waking.
+    /// </summary>
+    private static string SignInKey(uint sessionId)
+    {
+        var bootUtc = DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64);
+        var rounded = new DateTimeOffset(
+            bootUtc.Year, bootUtc.Month, bootUtc.Day, bootUtc.Hour, bootUtc.Minute, 0, TimeSpan.Zero);
+        return $"{rounded:yyyyMMddHHmm}/{sessionId}";
     }
 
     public void UpdateRules(DeviceRuleSnapshot rules)
@@ -410,7 +465,8 @@ public sealed class EnforcementCoordinator(
             var remaining = pcLimit is int limit ? Math.Max(0, limit - pcUsage) : -1;
             return new EnforcementState(!pcDecision.IsAllowed, pcDecision, appDecision, pcUsage,
                 pcLimit, remaining, DrainNotifications(), Language: rules.Language,
-                ExtensionOffers: offers);
+                ExtensionOffers: offers,
+                ShowWindow: Interlocked.Exchange(ref _showWindowPending, 0) == 1);
         }
         finally { _gate.Release(); }
     }

@@ -397,8 +397,36 @@ public sealed class LocalStore
     public Task CompleteBatchAsync(Guid batchId, CancellationToken cancellationToken) =>
         ExecuteAsync("DELETE FROM pending_batches WHERE batch_id=$id", cancellationToken, ("$id", batchId.ToString()));
 
-    public async Task<bool> TryConsumeFirstApplicationBlockGraceAsync(
+    public Task<bool> TryConsumeFirstApplicationBlockGraceAsync(
         string identityKey,
+        string episodeKey,
+        CancellationToken cancellationToken) =>
+        TryConsumeOnceAsync(identityKey, episodeKey, cancellationToken);
+
+    public Task<bool> TryConsumeFirstPcBlockGraceAsync(string episodeKey, CancellationToken cancellationToken) =>
+        TryConsumeOnceAsync("__pc__", episodeKey, cancellationToken);
+
+    /// <summary>
+    /// Whether the child's screen-time window has still to be opened for this sign-in, and spends
+    /// the answer saying so.
+    ///
+    /// It is persisted for the same reason the first-block grace is: the service restarts on every
+    /// automatic update, and one that reset this would open a window over whatever the child was
+    /// doing, in the middle of an afternoon, for no reason they could connect to anything. The
+    /// episode is a sign-in rather than a session id on its own, because Windows hands the same id
+    /// out again after a reboot and that reboot is exactly when the window should open.
+    /// </summary>
+    public Task<bool> TryConsumeSignInWindowOpeningAsync(string signInKey, CancellationToken cancellationToken) =>
+        TryConsumeOnceAsync("__signin__", signInKey, cancellationToken);
+
+    /// <summary>
+    /// True the first time it is asked for a <paramref name="scope"/> and
+    /// <paramref name="episodeKey"/>, false ever after, and durably so. The table is named for the
+    /// first thing that needed it; every user of it wants the same thing, which is something spent
+    /// once per episode that a restart cannot hand out again.
+    /// </summary>
+    private async Task<bool> TryConsumeOnceAsync(
+        string scope,
         string episodeKey,
         CancellationToken cancellationToken)
     {
@@ -412,16 +440,13 @@ public sealed class LocalStore
                 VALUES($identity,$episode,$now)
                 ON CONFLICT(identity_key,episode_key) DO NOTHING
                 """;
-            command.Parameters.AddWithValue("$identity", identityKey);
+            command.Parameters.AddWithValue("$identity", scope);
             command.Parameters.AddWithValue("$episode", episodeKey);
             command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
             return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
         }
         finally { _gate.Release(); }
     }
-
-    public Task<bool> TryConsumeFirstPcBlockGraceAsync(string episodeKey, CancellationToken cancellationToken) =>
-        TryConsumeFirstApplicationBlockGraceAsync("__pc__", episodeKey, cancellationToken);
 
     // ------------------------------------------------------------------ extra time
 

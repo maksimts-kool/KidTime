@@ -29,7 +29,8 @@ public sealed class DevicesController(
         int IdleThresholdSeconds,
         WeeklySchedule Schedule,
         string? ControlledUserSid,
-        AgentLanguage? Language = null);
+        AgentLanguage? Language = null,
+        bool? OpenWindowAtSignIn = null);
 
     public sealed record BlockDeviceRequest(int? Minutes, DateTimeOffset? UntilUtc);
 
@@ -64,6 +65,7 @@ public sealed class DevicesController(
                 device.ForegroundApplication,
                 controlledUserName = device.Rule.ControlledUserName,
                 language = device.Rule.Language,
+                openWindowAtSignIn = device.Rule.OpenWindowAtSignIn,
                 device.AgentVersion,
                 latestAgentVersion,
                 device.AgentUpdateStatus,
@@ -190,6 +192,7 @@ public sealed class DevicesController(
         rule.DailyLimitSeconds = request.DailyLimitSeconds;
         rule.IdleThresholdSeconds = Math.Clamp(request.IdleThresholdSeconds, 30, 3_600);
         rule.Language = request.Language ?? rule.Language;
+        rule.OpenWindowAtSignIn = request.OpenWindowAtSignIn ?? rule.OpenWindowAtSignIn;
         rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(request.Schedule);
         rule.ControlledUserSid = selectedUser?.Sid;
         rule.ControlledUserName = selectedUser?.AccountName;

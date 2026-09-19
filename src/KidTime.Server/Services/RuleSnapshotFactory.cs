@@ -55,6 +55,7 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext, TimeProvider
             Revision = device.Rule.Revision,
             TimeZoneId = device.TimeZoneId,
             Language = device.Rule.Language,
+            OpenWindowAtSignIn = device.Rule.OpenWindowAtSignIn,
             ControlledUserSid = device.Rule.ControlledUserSid,
             ControlledUserName = device.Rule.ControlledUserName,
             IdleThresholdSeconds = device.Rule.IdleThresholdSeconds,

@@ -16,6 +16,7 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
   const router = useRouter();
   const [days, setDays] = useState(() => scheduleToEditable(rule.schedule));
   const [limitEnabled, setLimitEnabled] = useState(rule.dailyLimitSeconds != null);
+  const [openAtSignIn, setOpenAtSignIn] = useState(rule.openWindowAtSignIn);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -38,6 +39,7 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
         body: JSON.stringify({
           controlledUserSid: data.get("controlledUserSid") || null,
           language: data.get("language"),
+          openWindowAtSignIn: openAtSignIn,
           dailyLimitSeconds: limitEnabled ? hours * 3600 + minutes * 60 : null,
           idleThresholdSeconds: Number(data.get("idleMinutes")) * 60,
           schedule: editableToSchedule(days),
@@ -101,6 +103,21 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
             </select>
             <FieldDescription>The panel you are looking at stays in English; this only changes what the child sees.</FieldDescription>
           </Field>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>The KidTime window on the PC</CardTitle>
+          <CardDescription>Where the child reads how much time is left, what the home network blocks, and how to ask you for more minutes.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SwitchField
+            title="Open it when the child signs in"
+            description="The window appears once per sign-in and can be closed straight away. It changes no rule — a tray icon is easy never to notice, and this is how the child learns the window is there."
+            checked={openAtSignIn}
+            onCheckedChange={setOpenAtSignIn}
+          />
         </CardContent>
       </Card>
 

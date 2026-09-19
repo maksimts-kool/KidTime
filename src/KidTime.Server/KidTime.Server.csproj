@@ -20,4 +20,8 @@
     <ProjectReference Include="..\KidTime.Domain\KidTime.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="KidTime.Server.Tests" />
+  </ItemGroup>
+
 </Project>
