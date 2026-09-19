@@ -13,6 +13,9 @@
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The window, the taskbar, Alt+Tab, Windows Search and the shortcuts setup creates all
+         read the icon from this executable, so it is set once here rather than per surface. -->
+    <ApplicationIcon>KidTime.ico</ApplicationIcon>
   </PropertyGroup>
 
 </Project>

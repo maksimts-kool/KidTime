@@ -36,6 +36,15 @@ internal sealed class AgentApplicationHost : IDisposable
     private IReadOnlyList<TimeExtensionOffer> _extensionOffers = [];
     private readonly HwndSource _trayParentSource;
     private readonly int _taskbarCreatedMessage;
+
+    /// <summary>
+    /// Waited on for as long as the agent runs, so the shortcuts on the child's Start menu and
+    /// desktop open the same window the tray icon does. See <see cref="AgentActivation"/> for why
+    /// a shortcut signals this rather than starting a second agent.
+    /// </summary>
+    private readonly EventWaitHandle _showRequested;
+
+    private readonly RegisteredWaitHandle _showRegistration;
     private long _sequence;
     private bool _busy;
     private bool _disposed;
@@ -89,6 +98,16 @@ internal sealed class AgentApplicationHost : IDisposable
 #pragma warning restore CS8622
         _trayIcon.LeftClick += _trayLeftClickHandler;
         RegisterTrayIcon("startup");
+
+        // The shortcuts reach the window through here. A thread-pool wait rather than a thread of
+        // its own: this is idle for hours at a time on the household's weakest PC.
+        _showRequested = AgentActivation.CreateListener();
+        _showRegistration = ThreadPool.RegisterWaitForSingleObject(
+            _showRequested,
+            (_, _) => OnShowRequested(),
+            state: null,
+            Timeout.Infinite,
+            executeOnlyOnce: false);
 
         NativeWindowsNotification.ExtraTimeRequested += OnToastExtraTimeRequested;
         UpdateTrayStatus(null);
@@ -353,6 +372,21 @@ internal sealed class AgentApplicationHost : IDisposable
         UpdateTrayStatus(null);
     }
 
+    /// <summary>
+    /// A shortcut asked for the window. The wait runs on a thread-pool thread, so the work has to
+    /// be handed to the dispatcher; and the agent may be shutting down by the time it arrives,
+    /// which is why both the disposal flag and the application are checked there rather than here.
+    /// </summary>
+    private void OnShowRequested()
+    {
+        if (_disposed) return;
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (_disposed) return;
+            OpenStatusWindow();
+        });
+    }
+
     private void OpenStatusWindow()
     {
         _statusWindow.Show();
@@ -420,6 +454,8 @@ internal sealed class AgentApplicationHost : IDisposable
             NativeWindowsNotification.ExtraTimeRequested -= OnToastExtraTimeRequested;
             _trayIcon.LeftClick -= _trayLeftClickHandler;
             _trayIcon.Dispose();
+            _showRegistration.Unregister(null);
+            _showRequested.Dispose();
             _countdownCard.Dispose();
             _statusWindow.CloseForExit();
         }

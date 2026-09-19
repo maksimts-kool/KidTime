@@ -38,6 +38,18 @@ public partial class App : Application
             return;
         }
 
+        // The Start menu and desktop shortcuts. They exist so the child can reach the window
+        // without hunting for a tray icon, and they must never become the agent themselves - the
+        // service supervises exactly one copy and the pipe accepts only that one. So this asks the
+        // running agent to open its window and stops, whether or not anybody answered.
+        if (AgentActivation.IsShowRequest(e.Args))
+        {
+            if (!AgentActivation.RequestShow())
+                SessionLogger.Information("A shortcut asked for the window, but no agent answered.");
+            Shutdown();
+            return;
+        }
+
         if (!TryEnterSingleInstance())
         {
             SessionLogger.Information("Another SessionAgent already owns this session; exiting.");

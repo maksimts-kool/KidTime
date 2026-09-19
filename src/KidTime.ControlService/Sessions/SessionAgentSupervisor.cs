@@ -43,6 +43,11 @@ public sealed class SessionAgentSupervisor(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Once per service start, which covers a fresh install, every automatic update, and every
+        // reboot - and puts the entries back if they are ever deleted. See AgentShortcuts for why
+        // this is the service's job rather than setup's.
+        AgentShortcuts.Ensure(ResolveExecutable(), logger);
+
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
@@ -221,10 +226,22 @@ public sealed class SessionAgentSupervisor(
             when (exception is ArgumentException or InvalidOperationException or Win32Exception) { return false; }
     }
 
-    private static SafeProcessHandle Launch(uint sessionId, out int processId)
+    /// <summary>
+    /// Where the agent lives: beside the service in a published layout, next to it in a flat one.
+    /// The shortcuts point at the same answer, so a child's desktop icon cannot come to name a
+    /// different executable from the one this service supervises.
+    /// </summary>
+    internal static string ResolveExecutable()
     {
         var executable = Path.Combine(AppContext.BaseDirectory, "SessionAgent", "KidTime.SessionAgent.exe");
-        if (!File.Exists(executable)) executable = Path.Combine(AppContext.BaseDirectory, "KidTime.SessionAgent.exe");
+        return File.Exists(executable)
+            ? executable
+            : Path.Combine(AppContext.BaseDirectory, "KidTime.SessionAgent.exe");
+    }
+
+    private static SafeProcessHandle Launch(uint sessionId, out int processId)
+    {
+        var executable = ResolveExecutable();
         if (!File.Exists(executable)) throw new FileNotFoundException("SessionAgent executable is missing.", executable);
 
         if (Environment.UserInteractive && Process.GetCurrentProcess().SessionId == sessionId)

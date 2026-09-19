@@ -193,6 +193,39 @@ public static class SessionAgentExitCodes
     public const int SessionEnded = 0x4B540001;
 }
 
+/// <summary>
+/// What the service may put on the SessionAgent's command line, and what the agent reads back.
+///
+/// It lives here because both halves have to agree on it and neither project references the
+/// other: the service writes the child's shortcuts and the agent decides what a shortcut launch
+/// means. Getting it wrong is silent and expensive - an agent that does not recognize the
+/// argument starts as a second copy, takes the single-instance mutex, is refused by the pipe
+/// because it is not the process the supervisor launched, and leaves the child with no working
+/// tray agent at all.
+/// </summary>
+public static class SessionAgentArguments
+{
+    /// <summary>
+    /// Asks the agent that already owns the session to open its screen-time window, then exit.
+    /// This is what the Start menu and desktop shortcuts pass.
+    /// </summary>
+    public const string Show = "--show";
+
+    /// <summary>
+    /// Whether this launch is a shortcut asking for the window rather than the service starting
+    /// the copy it supervises.
+    ///
+    /// The reading lives beside the constant because getting it wrong in the permissive direction
+    /// is the worst failure this feature can produce: an agent that answered true to the service's
+    /// own argument-less launch would signal and exit every two seconds for ever, and the child
+    /// would be left with no tray icon, no window and no notifications while enforcement carried
+    /// on without them. No arguments therefore means the supervised agent, always.
+    /// </summary>
+    public static bool IsShowRequest(IReadOnlyList<string>? arguments) =>
+        arguments is not null
+        && arguments.Any(argument => string.Equals(argument, Show, StringComparison.OrdinalIgnoreCase));
+}
+
 public static class DiagnosticSeverities
 {
     public const string Warning = "Warning";

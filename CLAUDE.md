@@ -616,6 +616,38 @@ rather than a `TabControl`, because only the visible panel then stays in the vis
 Internet, appears only where a DNS filter is configured. About carries the installed version, the
 privacy summary in the child's own words, and the removal flow.
 
+#### Opening that window
+
+A tray icon is not a way to find an application. Windows hides icons behind the overflow chevron by
+default, so a child who was never shown where it is cannot reach their own screen time, the Apps
+tab, the Internet tab, or the button that asks a parent for more minutes. `AgentShortcuts` therefore
+writes **KidTime** into the all-users Start menu and onto the all-users desktop, which is what makes
+it an application the child can find by name in Windows Search rather than a thing that only happens
+to them. The executable carries the icon (`ApplicationIcon` on the SessionAgent project), so the
+shortcut, the taskbar, Alt+Tab and Search all show the same mark.
+
+Two decisions there are load-bearing:
+
+- **A shortcut must never start the agent.** The service launches exactly one copy and the named
+  pipe accepts only that copy's process id, so a second one would take the single-instance mutex,
+  be refused by the pipe, and leave the supervised agent unable to start at all - a child with no
+  tray icon, no window and no notifications while enforcement carried on without them. So the
+  shortcuts pass `SessionAgentArguments.Show` and `AgentActivation` signals the running agent
+  through a session-scoped named event and exits. The signal carries **nothing**: its whole
+  vocabulary is "open the window", which the tray icon already does, so this is not a second way
+  into the enforcement boundary. That boundary is the pipe. The argument and its reading live in
+  the domain because both halves must agree and neither project references the other; the reading
+  is deliberately strict, since treating the service's own argument-less launch as a shortcut is
+  the failure that costs the child the agent entirely.
+- **The service writes them, not setup.** Setup only ever runs on a PC that is not yet enrolled, so
+  an installation that already exists would never get them, while the service starts after every
+  update and every reboot. That also makes them self-healing. Both folders are all-users ones,
+  readable and not writable by ordinary users, so the child keeps the shortcut and cannot quietly
+  delete it - and local removal takes both away, because an icon pointing at nothing is not the
+  PC returned to how it was. The name is `KidTime` in every language: it is a product name rather
+  than a sentence, and a localized file name would have to be deleted and rewritten every time a
+  parent changed the PC's language through an ordinary rule revision.
+
 Notifications are native Windows toasts. SessionAgent emits them marked with the supported urgent
 scenario, high priority, and explicit reminder audio — the Windows-supported way to break through
 Focus Assist without changing the user's global setting. Its tray dashboard composes maintained WPF
@@ -1125,7 +1157,8 @@ controlled-account SID isolation,
 cached offline rules, durable pending usage, buffered usage that survives a restart, durable fault
 queueing and fingerprinting, in-batch fault collapsing, spent application close leases that a
 relaunch cannot inherit, a sign-out that is warned about and retried when the session outlives it,
-complete English and Russian catalogs with Russian plural agreement, language-scoped rule messages,
+the tray agent's own supervised launch never mistaken for the shortcut that asks it to open its
+window, complete English and Russian catalogs with Russian plural agreement, language-scoped rule messages,
 idle exclusion, a background application in a call counted while idle and one merely playing sound
 counted only while the PC is in use, and cached app-limit evaluation.
 
@@ -1215,7 +1248,14 @@ rules:
     then confirm a site that is not blocked produces none at all. Unplug the network and open
     anything: the same error page must produce **no** toast, because a home network that is down is
     not the filter. Then confirm the whole thing stays quiet where no `Dns__*` is configured;
-28. read the server's log with `docker compose logs -f server`: one line per request with the
+28. search the Start menu on the controlled PC for "KidTime" and confirm it is found with its own
+    icon, that opening it brings up the screen-time window, and that the same shortcut is on the
+    desktop. Check Task Manager while doing it: there must still be exactly one
+    `KidTime.SessionAgent` process, because the shortcut signals the running agent instead of
+    starting a second one. Close the window and open it again from the shortcut; then, as the
+    child, try to delete the desktop icon and confirm Windows refuses. Finally remove KidTime from
+    the screen-time window and confirm both the Start menu entry and the desktop icon go with it;
+29. read the server's log with `docker compose logs -f server`: one line per request with the
     method, path, status, duration and either the parent's e-mail or the device's short id, the
     same `req=` id on the panel's line for the same click, and that id on the response's
     `X-Request-Id` header in the browser's network tab. Sign in with the wrong password and confirm
@@ -1260,6 +1300,16 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   daily limit is named only while the child is actually spending it, so an idle PC gets the warning
   when the block arrives instead. A manual block has no deadline at all and is warned about after
   the fact, with the full minute.
+- **The KidTime shortcut is missing from the Start menu or the desktop:** the service writes both
+  when it starts, so restart `KidTimeControl` and they come back; they are not written by setup, and
+  re-running setup on an enrolled PC is refused anyway. If they still do not appear, the service log
+  says which folder Windows would not give it or would not let it write. A shortcut that opens
+  nothing means no agent answered - see the entry below, because that is the same fault.
+- **Clicking the shortcut does nothing:** it does not start the agent, it asks the running one to
+  open its window, and it waits about five seconds for an answer in case the service is mid-restart.
+  Nothing happening therefore means no tray agent is running at all, which is the fault below and is
+  visible in the parent's error log. `%LOCALAPPDATA%\KidTime\logs` on the PC records the click that
+  went unanswered.
 - **The child has no tray icon, window, or notifications while rules still apply:** the tray agent
   is failing to start and the service is relaunching it every two seconds. The error log carries
   both the agent's own fault and a "SessionAgent has exited within ... times in a row" error from

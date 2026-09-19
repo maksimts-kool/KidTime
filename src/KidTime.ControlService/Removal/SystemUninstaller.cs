@@ -20,10 +20,11 @@ public sealed class SystemUninstaller : ISystemUninstaller
         var programData = Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData));
         var installPath = GetKidTimePath(programFiles);
         var dataPath = GetKidTimePath(programData);
+        var shortcuts = ShortcutPaths();
         var scriptPath = Path.Combine(
             Path.GetFullPath(Path.GetTempPath()),
             $"KidTime-Uninstall-{Guid.NewGuid():N}.ps1");
-        var script = BuildScript(installPath, dataPath);
+        var script = BuildScript(installPath, dataPath, shortcuts);
 
         await File.WriteAllTextAsync(scriptPath, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
         ProtectScript(scriptPath);
@@ -54,6 +55,18 @@ public sealed class SystemUninstaller : ISystemUninstaller
         }
     }
 
+    /// <summary>
+    /// The Start menu and desktop entries the service writes. Removal has to take them with it -
+    /// a KidTime icon left on the child's desktop after KidTime is gone is a link to nothing, and
+    /// the removal flow promises the PC is returned to how it was.
+    /// </summary>
+    private static IReadOnlyList<string> ShortcutPaths() =>
+        new[] { Environment.SpecialFolder.CommonPrograms, Environment.SpecialFolder.CommonDesktopDirectory }
+            .Select(Environment.GetFolderPath)
+            .Where(directory => !string.IsNullOrWhiteSpace(directory))
+            .Select(directory => Path.Combine(directory, "KidTime.lnk"))
+            .ToList();
+
     private static string GetKidTimePath(string root)
     {
         if (string.IsNullOrWhiteSpace(root) || !Path.IsPathFullyQualified(root))
@@ -69,12 +82,16 @@ public sealed class SystemUninstaller : ISystemUninstaller
         return expected;
     }
 
-    private static string BuildScript(string installPath, string dataPath) => $$"""
+    private static string BuildScript(
+        string installPath,
+        string dataPath,
+        IReadOnlyList<string> shortcutPaths) => $$"""
         $ErrorActionPreference = 'SilentlyContinue'
         Start-Sleep -Seconds 3
         $serviceName = '{{ServiceName}}'
         $installPath = '{{EscapePowerShellLiteral(installPath)}}'
         $dataPath = '{{EscapePowerShellLiteral(dataPath)}}'
+        $shortcuts = @({{string.Join(", ", shortcutPaths.Select(path => $"'{EscapePowerShellLiteral(path)}'"))}})
 
         Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
         for ($attempt = 0; $attempt -lt 60; $attempt++) {
@@ -96,6 +113,12 @@ public sealed class SystemUninstaller : ISystemUninstaller
             }
             if (-not (Test-Path -LiteralPath $installPath) -and -not (Test-Path -LiteralPath $dataPath)) { break }
             Start-Sleep -Milliseconds 500
+        }
+
+        foreach ($shortcut in $shortcuts) {
+            if (Test-Path -LiteralPath $shortcut) {
+                Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
+            }
         }
 
         Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
