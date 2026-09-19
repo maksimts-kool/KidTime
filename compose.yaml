@@ -97,6 +97,9 @@ services:
       # Behind a reverse proxy, set KIDTIME_BIND=127.0.0.1 so only the proxy can reach
       # the container. On a plain LAN server the default exposes it to the network.
       - "${KIDTIME_BIND:-0.0.0.0}:${KIDTIME_SERVER_PORT:-5081}:8443"
+    # Naming a second network drops the implicit default, and postgres and the panel are on
+    # that one, so both are spelled out.
+    networks: [default, dns]
 
   web:
     build:
@@ -122,3 +125,18 @@ services:
 volumes:
   kidtime-postgres:
   kidtime-dataprotection:
+
+networks:
+  # The DNS companion is usually a second stack on the same host, and reading it through the
+  # household's public address means a local call leaving the machine, coming back through the
+  # reverse proxy, and needing an admin port opened to the container - three things that can each
+  # be closed without anybody connecting the silence to KidTime. Joining the companion's own
+  # network keeps the read between two containers instead. KIDTIME_DNS_NETWORK names that network
+  # and KIDTIME_DNS_EXTERNAL says it already exists; with neither set compose creates an ordinary
+  # empty network here and nothing else changes, which is what keeps this opt-in for the
+  # installations that run no DNS server at all. Reached that way the companion answers on its
+  # container name, which its self-signed certificate matches no better than any other name -
+  # that is what KIDTIME_DNS_CERT_PIN is for.
+  dns:
+    name: ${KIDTIME_DNS_NETWORK:-kidtime-dns}
+    external: ${KIDTIME_DNS_EXTERNAL:-false}
