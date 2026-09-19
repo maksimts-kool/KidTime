@@ -64,8 +64,9 @@ Version:
 Publishing:
   --server user@host       Ubuntu server to publish on. Without one the release is published
                            on this machine, which is where the server runs in a local setup.
-  --release-dir path       Directory the server serves at /updates. Defaults to
-                           KIDTIME_RELEASE_DIR from the environment or from .env.
+  --release-dir path       Directory the server serves at /updates. Without one, publishing here
+                           takes it from KIDTIME_RELEASE_DIR or .env, and publishing on --server
+                           leaves that machine to resolve its own.
   --skip-build             Publish what is already in artifacts/releases.
   --skip-publish           Build only, leaving the release in artifacts/releases.
 
@@ -121,11 +122,14 @@ case "$bump" in major|minor|patch|none) ;; *) fail "--bump takes major, minor, p
 case "$configuration" in Release|Debug) ;; *) fail "--configuration takes Release or Debug." ;; esac
 
 # The local setup runs the server from this checkout, and .env is where that deployment says
-# which directory it serves at /updates.
-if [ -z "$release_dir" ] && [ -f "$project_root/.env" ]; then
+# which directory it serves at /updates. It describes *this* machine and nothing else, so it is
+# read only when the publish happens here. Handing it to --server is how a release comes to look
+# for a workstation path like /home/<user>/.kidtime/releases on a server that has no such
+# directory - which fails at the last step of a release, after the whole agent has been built and
+# uploaded. A server knows its own layout: with no --release-dir it resolves one itself.
+if [ -z "$release_dir" ] && [ -z "$server" ] && [ -f "$project_root/.env" ]; then
     release_dir=$(sed -n 's/^KIDTIME_RELEASE_DIR=//p' "$project_root/.env" | head -n1 | tr -d '\r"')
 fi
-release_dir=${release_dir:-/opt/kidtime/releases}
 
 # --- the Windows build machine -------------------------------------------------------
 
@@ -306,6 +310,7 @@ build_release() {
 # --- publishing ----------------------------------------------------------------------
 
 publish_here() {
+    release_dir=${release_dir:-/opt/kidtime/releases}
     step "Publishing agent $release_version in $release_dir"
     bash "$project_root/scripts/publish-agent-release.sh" "$local_releases" --release-dir "$release_dir"
 }
@@ -327,7 +332,12 @@ publish_on_server() {
     # does not match the manifest, and writes latest.json last so the server never advertises
     # a release whose package has not fully landed. The staging directory is left in place if
     # it fails, so the upload can be inspected.
-    ssh "$server" "bash '$staging/publish-agent-release.sh' '$staging' --release-dir '$release_dir' && rm -rf '$staging'"
+    # The directory is named only when this run named one. Otherwise publish-agent-release.sh
+    # reads the server's own KIDTIME_RELEASE_DIR, or falls back to /opt/kidtime/releases, which
+    # is where scripts/initialize-server.sh puts it.
+    local destination=""
+    [ -n "$release_dir" ] && destination=" --release-dir '$release_dir'"
+    ssh "$server" "bash '$staging/publish-agent-release.sh' '$staging'$destination && rm -rf '$staging'"
 }
 
 remember_configuration() {
@@ -411,7 +421,7 @@ printf '\n'
 if [ "$skip_publish" = 1 ]; then
     note "Nothing was published."
 else
-    note "Agent $release_version is published in $release_dir${server:+ on $server}."
+    note "Agent $release_version is published${release_dir:+ in $release_dir}${server:+ on $server}."
     printf 'Controlled PCs install it on their next update check; nothing there has to be restarted.\n'
 fi
 [ "$release_version" != "${previous_version:-$release_version}" ] &&

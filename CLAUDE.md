@@ -105,7 +105,12 @@ that has been off for a while does not keep it; `--build-host user@host` names a
 machine instead, and both are remembered in the untracked `artifacts/build-host.conf`. Publishing
 goes to `--server user@host` as it does from Windows, or — with no server configured — happens
 here, into `KIDTIME_RELEASE_DIR` as `.env` gives it, which is what a workstation that also runs the
-server wants. A build whose `latest.json` names a version other than the one asked for is refused
+server wants. **That `.env` answers for this machine only.** A workstation that runs its own server
+names a path like `~/.kidtime/releases`, and sending that to `--server` fails at the last step of a
+release — after the whole agent has been built and uploaded — looking for a directory the server has
+never had. So the server is left to resolve its own (`KIDTIME_RELEASE_DIR` there, else
+`/opt/kidtime/releases`, which is where `initialize-server.sh` puts it) unless this run passed
+`--release-dir` itself. A build whose `latest.json` names a version other than the one asked for is refused
 rather than published: from Linux that is what a stale source tree on the build machine looks like.
 
 The two halves still stand alone. `scripts/build-agent.ps1` publishes self-contained single-file
