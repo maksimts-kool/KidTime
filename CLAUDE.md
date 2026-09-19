@@ -775,6 +775,16 @@ section (`Dns__ApiUrl`, `Dns__Username`, `Dns__Password`, and optionally `Dns__C
 `Dns__RefreshSeconds`); with `Dns__ApiUrl` empty the feature is absent from the panel and the child's
 PC alike, which is the case for most installations.
 
+**How the server reaches it matters as much as the credentials.** The companion is normally a
+second Compose stack on the same host, and pointing `Dns__ApiUrl` at the household's public
+address makes a local read leave the machine, come back through the reverse proxy, and need an
+admin port opened to a container - each of those can be closed for good reasons by somebody who
+will never connect the silence to KidTime, and the symptom is a twenty-second connect timeout
+rather than an error. `KIDTIME_DNS_NETWORK` and `KIDTIME_DNS_EXTERNAL` in `compose.yaml` put the
+server container on the companion's own Docker network instead, so `Dns__ApiUrl` can be its
+container name and port. Unset, they leave an ordinary empty network and change nothing, because
+most installations have no DNS server to reach.
+
 1. `TechnitiumCompanionClient` signs in once with the configured credentials and keeps the session
    cookie the companion issues, renewing it silently on a 401. Every other call is a GET:
    `advanced-blocking/{node}`, `nodes/dns-schedules/rules`, and the domain groups.
@@ -1359,8 +1369,14 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   reading with its age. The usual cause is the certificate: the companion self-signs,
   so `Dns__PinnedCertificateSha256` has to carry its SHA-256, which
   `openssl s_client -connect HOST:8095 </dev/null | openssl x509 -noout -fingerprint -sha256` prints.
-  After that, check that `Dns__ApiUrl` is reachable from the server container and that the
-  credentials are the ones the DNS console takes.
+  After that, check that `Dns__ApiUrl` is reachable **from the server container** rather than from
+  the machine or the browser, which is the distinction that matters: a companion published behind
+  an allowlisted proxy port answers an admin's browser and drops the container's packets, and the
+  failure that leaves in the log is `HttpClient.Timeout ... elapsing` rather than a refusal, because
+  a dropped SYN never becomes an error. `docker exec <server> bash -c '</dev/tcp/HOST/PORT'` settles
+  it in a second; the answer is usually to reach the companion over its own Docker network - see
+  [Web filtering](#web-filtering-technitium-dns) - rather than to open the port. Then check that
+  the credentials are the ones the DNS console takes.
 - **The child was not told why a blocked site would not open:** the explanation needs four things
   at once, and the first one it fails is the answer. It is drawn only in a Gecko browser, because
   Firefox titles its error page with a sentence and Chromium titles it with the host - a child
