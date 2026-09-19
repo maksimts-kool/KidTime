@@ -1,4 +1,5 @@
 using System.Reflection;
+using KidTime.Domain.Contracts;
 using KidTime.Domain.Localization;
 using KidTime.Domain.Rules;
 
@@ -52,6 +53,8 @@ public class AgentStringsTests
         var type when type == typeof(int?) => (int?)5_400,
         var type when type == typeof(bool) => true,
         var type when type == typeof(DateTimeOffset) => DateTimeOffset.UtcNow.AddHours(3),
+        var type when type == typeof(IReadOnlyList<DnsFilterCategoryKind>) =>
+            new[] { DnsFilterCategoryKind.Adult, DnsFilterCategoryKind.Gambling },
         _ => null
     };
 
@@ -171,5 +174,32 @@ public class AgentStringsTests
         Assert.Contains("schedule", both, StringComparison.Ordinal);
         Assert.DoesNotContain("2h", scheduleOnly, StringComparison.Ordinal);
         Assert.Contains("schedule", scheduleOnly, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The sentence a child reads when a page would not open. It has to name what the household
+    /// blocks and what is shut right now - and it must not be written as if it knew which site was
+    /// asked for, because nothing in KidTime does.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(AllLanguages))]
+    public void TheWebFilterExplanationNamesTheRulesAndNotTheSite(AgentLanguage language)
+    {
+        var text = AgentStrings.For(language);
+
+        var full = text.WebFilterBlockedMessage(
+            [DnsFilterCategoryKind.Adult, DnsFilterCategoryKind.Gambling], "Roblox", "18:00");
+        Assert.Contains("Roblox", full, StringComparison.Ordinal);
+        Assert.Contains("18:00", full, StringComparison.Ordinal);
+
+        // Nothing shut on a timetable: the categories alone still have to make a sentence.
+        var categoriesOnly = text.WebFilterBlockedMessage([DnsFilterCategoryKind.Malware], null, null);
+        Assert.False(string.IsNullOrWhiteSpace(categoriesOnly));
+        Assert.DoesNotContain("Roblox", categoriesOnly, StringComparison.Ordinal);
+
+        // A set shut until a parent says otherwise is named without a time attached to it.
+        var noDeadline = text.WebFilterBlockedMessage([], "Roblox", null);
+        Assert.Contains("Roblox", noDeadline, StringComparison.Ordinal);
+        Assert.DoesNotContain("18:00", noDeadline, StringComparison.Ordinal);
     }
 }

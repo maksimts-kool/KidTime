@@ -1,3 +1,4 @@
+using KidTime.Domain.Contracts;
 using System.Globalization;
 
 namespace KidTime.Domain.Localization;
@@ -300,4 +301,30 @@ internal sealed class RussianAgentStrings : AgentStrings
     public override string WebFilterExplainTitle => "Как это работает";
     public override string WebFilterExplainDetail =>
         "Родители настроили фильтр для всей домашней сети. Заблокированный сайт просто не открывается — ни в браузере, ни в приложении. KidTime не видит, какие сайты ты открываешь, и никуда их не отправляет.";
+
+    public override string WebFilterBlockedTitle => "Здесь блокируются некоторые сайты";
+
+    public override string WebFilterBlockedMessage(
+        IReadOnlyList<DnsFilterCategoryKind> categories,
+        string? closedSiteGroup,
+        string? reopensAt)
+    {
+        var sentences = new List<string>();
+        // Label and value rather than a sentence that would have to decline every category name:
+        // "Домашняя сеть блокирует азартные игры" needs the accusative, and the catalog's names
+        // are written in the nominative for the Internet tab. A colon keeps both readings honest.
+        if (categories.Count > 0)
+            sentences.Add($"Домашняя сеть блокирует: {string.Join(", ", categories.Select(FilterCategoryName)).ToLowerInvariant()}.");
+        if (!string.IsNullOrWhiteSpace(closedSiteGroup))
+        {
+            sentences.Add(string.IsNullOrWhiteSpace(reopensAt)
+                ? $"{closedSiteGroup} — сейчас закрыто."
+                : $"{closedSiteGroup} — закрыто до {reopensAt}.");
+        }
+
+        // Impersonal on purpose: "если ты вводил" would be addressed to a boy, and the catalog
+        // has no way of knowing whose PC this is.
+        sentences.Add("Проверь, правильно ли написан адрес.");
+        return string.Join(" ", sentences);
+    }
 }

@@ -1,3 +1,4 @@
+using KidTime.Domain.Contracts;
 using System.Globalization;
 
 namespace KidTime.Domain.Localization;
@@ -269,4 +270,39 @@ internal sealed class EnglishAgentStrings : AgentStrings
     public override string WebFilterExplainTitle => "How this works";
     public override string WebFilterExplainDetail =>
         "Your parent set up a filter for the whole home network. A blocked site simply does not open, in any browser and in any app. KidTime does not see which sites you visit and never sends them anywhere.";
+
+    public override string WebFilterBlockedTitle => "Some sites are blocked here";
+
+    public override string WebFilterBlockedMessage(
+        IReadOnlyList<DnsFilterCategoryKind> categories,
+        string? closedSiteGroup,
+        string? reopensAt)
+    {
+        var sentences = new List<string>();
+        if (categories.Count > 0)
+            sentences.Add($"Your home network blocks {JoinWithAnd(categories.Select(FilterCategoryName))}.");
+        if (!string.IsNullOrWhiteSpace(closedSiteGroup))
+        {
+            sentences.Add(string.IsNullOrWhiteSpace(reopensAt)
+                ? $"{closedSiteGroup} is closed right now."
+                : $"{closedSiteGroup} is closed until {reopensAt}.");
+        }
+
+        // The last line is the honest one: a name that does not resolve is also what a typo looks
+        // like, and a child told only about the filter would retype nothing and wait.
+        sentences.Add("If you typed the address, check it.");
+        return string.Join(" ", sentences);
+    }
+
+    /// <summary>"ads", "ads and gambling", "ads, gambling and adult sites".</summary>
+    private static string JoinWithAnd(IEnumerable<string> items)
+    {
+        var list = items.Select(item => item.ToLowerInvariant()).ToList();
+        return list.Count switch
+        {
+            0 => string.Empty,
+            1 => list[0],
+            _ => $"{string.Join(", ", list.Take(list.Count - 1))} and {list[^1]}"
+        };
+    }
 }

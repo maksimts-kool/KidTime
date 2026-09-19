@@ -86,6 +86,26 @@ untracked `artifacts/deploy-target.txt` after the first `-Server user@host`, and
 `-ReleaseDirectory`. Nothing is assumed to be checked out on the server — the publish script travels
 with the payload.
 
+The same release, driven from a Linux workstation that cannot build the agent half itself:
+
+```bash
+./scripts/release-agent.sh --vm kidtime-win11 --build-user parent --identity ~/.kidtime/vm/id_ed25519
+```
+
+`scripts/release-agent.sh` runs the identical four steps by sending the **working tree** — whatever
+`git` does not ignore, including the version bump it has just made — to a Windows machine over SSH,
+running `build-agent.ps1` there in a directory it owns and clears on every release
+(`C:\kidtime-build`, so a file deleted since the last one cannot survive into a package), and
+fetching `artifacts/releases` back. Nothing is assumed to be checked out on that machine either: the
+source travels as an archive and the build step as a generated PowerShell script. `--vm` starts a
+libvirt domain first and reads its address from the DHCP lease **on every run**, because a machine
+that has been off for a while does not keep it; `--build-host user@host` names any other Windows
+machine instead, and both are remembered in the untracked `artifacts/build-host.conf`. Publishing
+goes to `--server user@host` as it does from Windows, or — with no server configured — happens
+here, into `KIDTIME_RELEASE_DIR` as `.env` gives it, which is what a workstation that also runs the
+server wants. A build whose `latest.json` names a version other than the one asked for is refused
+rather than published: from Linux that is what a stale source tree on the build machine looks like.
+
 The two halves still stand alone. `scripts/build-agent.ps1` publishes self-contained single-file
 binaries, writes `artifacts/releases/{latest.json, kidtime-agent-<version>.zip, KidTimeSetup.exe}`,
 and embeds the same ZIP into setup as a resource. `scripts/publish-agent-release.sh <dir>` installs
@@ -759,11 +779,113 @@ PC alike, which is the case for most installations.
    drawn - an empty tab would suggest something is being done that is not.
 6. The panel's **Web filtering** page is a status line and a button to the DNS console, and that is
    deliberately all it is.
+7. When a site the household filters does not open, the child is told **why**, once. This is the
+   one place the snapshot is read for something other than drawing a tab, and it still decides
+   nothing: no rule is evaluated and nothing is blocked or allowed - the only outcome is a
+   sentence. See [Explaining a page that did not open](#explaining-a-page-that-did-not-open).
 
 Which filtering group a household falls in is **named in configuration, not inferred**. The
 companion maps groups to networks, but the address the KidTime server sees is whatever the last
 proxy hop presents rather than the PC's own, so guessing would silently describe the wrong rules.
 `Dns__GroupName` names it; a DNS server with one group needs no name.
+
+#### Explaining a page that did not open
+
+A child whose home network refuses a site sees only their browser's own error page and is told
+nothing, so the household's filtering reads to them as the computer being broken. KidTime already
+holds the rules that explain it, and saying so is the one thing neither the DNS server nor the
+browser will do.
+
+**It explains the rule and never names the site**, and that is a constraint rather than a
+shortcoming. The address the child typed is browsing history under another name; reading it would
+need a browser extension, the address bar over UI Automation, or the DNS query log, and all three
+are on the far side of [the privacy boundary](#privacy-boundary). So the message describes what the
+household blocks and lets the child draw the connection, which is also the answer they actually
+needed.
+
+1. `BrowserPageErrorDetector` runs in the child's own session, on the foreground window title the
+   agent already samples, and answers one of three values: no error, a name that did not resolve,
+   or a connection that did not open - the two shapes a DNS refusal takes. **The title never
+   leaves the session**; only that value rides on `SessionUsageSample.BrowserPage`, which is inert
+   data exactly like a fault report and widens the pipe's privileges not at all.
+2. Only Gecko browsers are read, and only because **Firefox titles its error page with a sentence**
+   (`neterror-dns-not-found-title`, `neterror-page-title`) rather than with the host. Chromium puts
+   the hostname in the title, so recognizing it there would mean reading the address - which is why
+   no Chromium browser is in `SupportedBrowsers` and adding one is not a fix. A browser whose
+   interface is in a third language simply produces no match, costing the child an explanation and
+   nothing else.
+3. `EnforcementCoordinator.QueueWebFilterExplanation` decides. It is silent unless all three hold:
+   the page **just** failed (a transition, so an explanation follows the child arriving on the
+   error page rather than repeating every two seconds while they read it); the service is reaching
+   the KidTime server, because **a home network that is down produces the same error page** and
+   blaming the filter for an outage is a confident lie the child cannot check; and
+   `DnsFilterPolicy.ExplainRefusal` has something to say, which it does not when filtering is off,
+   absent, or never once read. One explanation then stands for ten minutes.
+4. `ExplainRefusal` returns the categories blocked at every hour and, of the named sets of sites
+   that are shut right now, **the one coming back soonest** - the only one the child can do
+   anything about, namely wait for it. A stale snapshot still answers: it is the filtering that
+   was in force and almost certainly still is, the same reason cached rules go on being enforced
+   offline.
+5. It is an **ordinary toast**. Nothing is closing and nothing is counting down, so nothing
+   interrupts; `AgentStrings.WebFilterBlockedMessage` composes the whole sentence per language,
+   because Russian declines a list of categories after a colon and English does not. The last line
+   tells the child to check the address, because a name that does not resolve is also what a typo
+   looks like and a child told only about the filter would retype nothing and wait.
+
+The honest limit: a connection that fails because a site is genuinely down looks the same as one
+refused with `0.0.0.0`, so an explanation can arrive for a page nothing blocked. That costs one
+toast stating true things about the household's rules, which is the cheapest of the failures
+available - the alternatives all start by reading where the child went.
+
+### Logging
+
+Three processes write to one screen, so they write the same shape. Every line is
+`time  LVL  source  message  identifiers`, and the identifiers end with a correlation id that
+**joins the panel's line to the API's line for the same click**.
+
+- **Server.** `ServerLogging.AddKidTimeLogging` picks one of two formats and does not compromise
+  between them: `KidTimeConsoleFormatter` for a household reading `docker compose logs`, or the
+  framework's own JSON console when `Logging__Format=json` ships the output to a collector. The
+  formatter drops ASP.NET Core's hosting and activity scopes (`SpanId`, `TraceId`, `ConnectionId`,
+  `RequestPath`, `ActionName` and the rest): nothing here is distributed, they repeat what the
+  request's own line already says, and together they are longer than any message this server
+  writes. It also **refuses to print an exception twice** - Entity Framework formats the whole
+  exception into the message it logs it with, and the block underneath buried the line before it.
+- **`RequestLogging` writes one line per request, at the end**, because the framework's own costs
+  several and still does not say who was asking. It carries the method, the path with any
+  secret-looking query value replaced, the status, the duration, and the actor - the parent's
+  e-mail, or `device <first eight of the id>`, which is enough to tell four PCs apart without the
+  line being mostly a GUID. A 401 or 403 is a warning: on a self-hosted box that is a revoked
+  credential or a clock problem, not noise. `/health` and `/hubs/` succeed at Debug.
+- **The correlation id** arrives in `X-Request-Id` or is minted, is pushed as a log scope so
+  everything inside the request carries it, and **always comes back on the response**, so a parent
+  with the browser's network tab open has the string both containers' logs are keyed by. An
+  arriving value is bounded and stripped of anything unprintable - it is the one part of this that
+  comes from outside.
+- **One summary at startup**, on `ApplicationStarted` so Kestrel has bound: version, environment,
+  addresses, then the database host, whether a release is published, and whether DNS filtering is
+  configured. Half the questions a self-hosted deployment raises are answered by those two lines,
+  and expensive to work out afterwards over a chat message. The connection string is reduced to
+  host and database; everything else in it is a credential.
+- **Panel.** `lib/logger.ts` is the same format in TypeScript and reads the same three settings, so
+  one choice in `.env` changes both halves. It is **server-only** and never imported into a client
+  component. Its reason for existing is `describeError`: `fetch` rejects with a bare "fetch failed"
+  and puts the actual cause in `error.cause`, and the panel used to discard the whole thing and
+  tell the parent "KidTime API is unavailable" - which is true of a refused connection, an unknown
+  host and a rejected certificate alike, and useful for none of them. `instrumentation.ts` catches
+  what escapes a server component, which otherwise reaches the log as a stack trace with no route
+  attached.
+- **PostgreSQL** is configured in `compose.yaml`. **Statements are never logged wholesale**: that
+  is the database's own copy of every rule and every parent's e-mail written to a file nothing else
+  protects. What is logged is a statement slower than `KIDTIME_PG_SLOW_QUERY_MS` (500 by default),
+  and even then with `log_parameter_max_length=0` - the shape of a slow query is what gets it
+  fixed, and its values are the household's data. Checkpoints, lock waits, long autovacuums and
+  large temp files are on because each one is rare and each one explains a slow evening.
+- **Every container's log is capped** (`x-logging`, 10 MB × 5). A household server runs for months
+  and nobody watches its disk; Docker's json-file default is unbounded.
+- **The redaction list is the same one the rest of KidTime keeps**: no passwords, JWTs, device
+  tokens, enrollment tokens, or certificate passwords, in any of the three. Adding a log line that
+  would carry one is the one change here that is not a matter of taste.
 
 ### Cost on a slow PC
 
@@ -802,6 +924,16 @@ is opened and no audio is read, which is the same fact Windows' own volume mixer
 microphone-in-use indicator show. Foreground window titles travel locally for diagnostics but are not persisted or
 uploaded by the current server contract. **Features that would cross this line are out of scope by
 design** — do not add them, and do not extend the contract to upload window titles.
+
+Noticing that **a page did not open** does not cross it either, and it is the closest thing here to
+the line. The agent reads the foreground window title it already samples, answers one of three
+values - no error, a name that did not resolve, a connection that did not open - and sends only
+that. The title stays in the child's session, no address is parsed out of it, and the explanation
+the service then queues describes the household's rules rather than the request. This is why only
+Firefox is read: it titles its error page with a sentence, while Chromium titles it with the host,
+and taking the host would be taking the URL. **Do not add a Chromium browser to that list**, and do
+not reach for the address bar, a browser extension, or a local DNS proxy to make this work
+everywhere - each of those is the feature turning into the thing this section forbids.
 
 Reading a DNS server's **configuration** does not cross it, and reading its **query log** would.
 KidTime can be pointed at a Technitium DNS server the household already runs and will report what
@@ -889,6 +1021,12 @@ companion's query-log endpoints are therefore deliberately never called. See
   the PC is standing in, and `lib/schedule.ts` exists because the panel must not resolve a Windows
   timezone; `?days=` keeps that true. The server fills every day in the range, including the empty
   ones - a chart drawn only from the days something ran makes an occasional application look daily.
+- **All three server-side processes log in one format, and every request carries a correlation id.**
+  The server writes through `KidTimeConsoleFormatter`, the panel through `lib/logger.ts`, and both
+  read `KIDTIME_LOG_FORMAT`, `KIDTIME_LOG_COLOR` and `KIDTIME_LOG_LEVEL` so one choice in `.env`
+  changes the stack. A new log line goes through the existing logger rather than `Console.WriteLine`
+  or `console.log`, and it carries no password, JWT, device token, enrollment token, or certificate
+  password - see [Logging](#logging).
 - Commit messages are plain imperative sentences describing the change ("Match the documented Caddy
   matcher to the deployed one"), with no conventional-commit prefixes.
 
@@ -944,7 +1082,12 @@ is left of it so a moved deadline can be noticed,
 persisted first-block grace, DNS block lists read as categories by their file name rather than by
 the publisher that serves them, an unrecognized list named rather than guessed at, an overnight DNS
 timetable read in its own timezone with the instant it turns over, windows that meet merged into one
-stretch and a day-restricted one skipping the days it does not cover,
+stretch and a day-restricted one skipping the days it does not cover, a Firefox error page
+recognized in both languages while a Chromium browser that titles its error page with the host is
+never read at all, a refused page explained from the categories and from whichever shut set of
+sites comes back soonest, nothing explained where filtering is off or unread, a stale snapshot
+still explaining, one explanation per arrival on an error page rather than one per sample, and
+silence while the PC cannot reach the server,
 granted extra time raising a daily limit for its own date only,
 minutes alone never lifting a manual block or a schedule while the window a grant opens lifts both
 from the decision until it expires, per scope and without handing over a spent daily limit, extra
@@ -1039,7 +1182,19 @@ rules:
     and gives the time it changes, in the child's language;
 26. stop the DNS companion and confirm nothing about KidTime's own enforcement changes: rules still
     apply, synchronization still succeeds, and both the panel and the Internet tab show the last
-    answer with its age rather than an error or an empty tab.
+    answer with its age rather than an error or an empty tab;
+27. in Firefox on the controlled PC, open a site the DNS server blocks and confirm one ordinary
+    toast appears naming what the home network blocks - and, if a site group is shut, when it comes
+    back - in the child's language; reload the page several times and confirm no second toast, then
+    confirm a site that is not blocked produces none at all. Unplug the network and open anything:
+    the same error page must produce **no** toast, because a home network that is down is not the
+    filter. Then confirm the whole thing stays quiet where no `Dns__*` is configured;
+28. read the server's log with `docker compose logs -f server`: one line per request with the
+    method, path, status, duration and either the parent's e-mail or the device's short id, the
+    same `req=` id on the panel's line for the same click, and that id on the response's
+    `X-Request-Id` header in the browser's network tab. Sign in with the wrong password and confirm
+    one warning line on each side; stop the `server` container and confirm the panel's log names
+    the actual cause (`ECONNREFUSED`) rather than only "unavailable".
 
 On a disposable PC, verify enrollment end to end (Connect stays disabled until server URL,
 enrollment code, and child account are all valid; an expired code is rejected; the panel switches to
@@ -1130,6 +1285,19 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   `openssl s_client -connect HOST:8095 </dev/null | openssl x509 -noout -fingerprint -sha256` prints.
   After that, check that `Dns__ApiUrl` is reachable from the server container and that the
   credentials are the ones the DNS console takes.
+- **The child was not told why a blocked site would not open:** the explanation needs four things
+  at once, and the first one it fails is the answer. It is drawn only in a Gecko browser, because
+  Firefox titles its error page with a sentence and Chromium titles it with the host - a child
+  using Chrome gets nothing, by design. The browser's interface language has to be one the
+  detector knows (English or Russian), which is not necessarily the language the parent chose for
+  the PC. The service has to be reaching the server, so a PC that is offline stays quiet on
+  purpose. And `Dns__*` has to be configured and blocking something - check the panel's Web
+  filtering page. After a successful explanation there is ten minutes of quiet before another.
+- **The child was told about filtering for a site nothing blocks:** a connection that fails because
+  a site is genuinely down looks the same, from outside the browser, as one refused with `0.0.0.0`.
+  Nothing distinguishes them without reading the address, which KidTime does not do. The message is
+  written to survive this - it states what the household blocks and asks the child to check the
+  address, rather than claiming that page was blocked.
 - **A category on the Internet tab reads wrong:** the subject is worked out from the block list's
   address, and an address that says nothing lands in "Other" on purpose. A list that is genuinely
   mislabelled belongs in `DnsFilterPolicy` - `KnownListNames` for a file name like `tif.txt`,
@@ -1138,5 +1306,17 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   something are listed. A domain group with no enabled blocking schedule and no binding to the
   filtering group restricts nothing, and showing it would be a rule the child would act on that does
   not exist.
+- **The server log is a wall of framework noise, or has no colour:** both are settings.
+  `KIDTIME_LOG_FORMAT=json` swaps the whole format for structured events; `KIDTIME_LOG_LEVEL=Debug`
+  adds the health probes and hub traffic that `Information` leaves out. Colour is `auto` by
+  default, which sees a pipe inside a container and gives up - compose passes `always`, so a
+  deployment that lost its colour has overridden `KIDTIME_LOG_COLOR`, or is being read through
+  something that sets `NO_COLOR`.
+- **A `Failed executing DbCommand` error on the very first start:** that is Entity Framework asking
+  an empty database for its migration history, which cannot answer yet. The `Applying migration`
+  lines immediately after it are the real state. It happens once per fresh database.
+- **A request appears in the panel's log but not the server's:** the panel answered it by itself -
+  no session cookie, or a page that needed no API call. Otherwise search the server's log for the
+  same `req=` id; the panel logs one whenever it reaches the API, and both containers key on it.
 - **Changing the `.env` admin password has no effect:** those variables seed only the first parent
   account. Do not delete PostgreSQL data merely to rotate a password.

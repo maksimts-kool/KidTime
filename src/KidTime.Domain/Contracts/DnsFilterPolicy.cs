@@ -256,4 +256,47 @@ public static class DnsFilterPolicy
         if (timeZone.IsInvalidTime(unspecified)) unspecified = unspecified.AddHours(1);
         return new DateTimeOffset(unspecified, timeZone.GetUtcOffset(unspecified)).ToUniversalTime();
     }
+
+    /// <summary>
+    /// What to tell a child whose page would not open, worked out from the filtering that is in
+    /// force. It describes the rules and never the request: KidTime does not know which site was
+    /// asked for and this deliberately does not try to guess, so the answer is the same sentence
+    /// whatever the child typed.
+    ///
+    /// Null means there is nothing honest to say - filtering that is off, or a configuration that
+    /// has never been read - and the child is then better served by silence than by KidTime
+    /// blaming a rule it cannot see. A stale snapshot still answers: it is the filtering that was
+    /// in force and almost certainly still is, which is the same reason cached rules go on being
+    /// enforced offline.
+    /// </summary>
+    public static DnsFilterRefusal? ExplainRefusal(DnsFilteringSnapshot? snapshot, DateTimeOffset nowUtc)
+    {
+        if (snapshot is not { State: DnsFilteringState.Active }) return null;
+
+        // Of several sets of sites that are shut, the one coming back soonest is the one worth
+        // naming: it is the one the child can do something about, namely wait. A set with no
+        // timetable at all comes back at no time and sorts behind every set that does.
+        var closed = snapshot.SiteGroups
+            .Where(group => group.IsBlockedNow && !string.IsNullOrWhiteSpace(group.Name))
+            .OrderBy(group => group.ChangesAtUtc ?? DateTimeOffset.MaxValue)
+            .FirstOrDefault();
+        var categories = snapshot.Categories.Select(category => category.Kind).ToList();
+        if (categories.Count == 0 && closed is null) return null;
+
+        return new DnsFilterRefusal(
+            categories,
+            closed?.Name,
+            closed?.ChangesAtUtc > nowUtc ? closed.ChangesAtUtc : null);
+    }
 }
+
+/// <summary>
+/// The reason a page did not open, as far as the configuration can account for it: the kinds of
+/// site this household blocks at every hour, and - when one is shut right now - the named set of
+/// sites that is, with the instant it comes back. <paramref name="ReopensAtUtc"/> is null for a
+/// set that is simply off until a parent says otherwise.
+/// </summary>
+public sealed record DnsFilterRefusal(
+    IReadOnlyList<DnsFilterCategoryKind> Categories,
+    string? ClosedSiteGroup,
+    DateTimeOffset? ReopensAtUtc);

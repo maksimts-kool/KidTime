@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using KidTime.Domain.Applications;
 using KidTime.Domain.Contracts;
 using KidTime.Domain.Localization;
 using Wpf.Ui.Controls;
@@ -157,7 +158,11 @@ internal sealed class AgentApplicationHost : IDisposable
                 foreground.WindowTitle,
                 foreground.Application,
                 ShouldRequestStatus(sequence),
-                AudioSessionDetector.GetAudibleApplications());
+                AudioSessionDetector.GetAudibleApplications(),
+                // Read here and never sent: the title stays in this session and only the
+                // classification crosses, so the service can explain the household's web
+                // filtering without either end learning which site the child asked for.
+                BrowserPageErrorDetector.Detect(foreground.Application, foreground.WindowTitle));
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(4));
             var state = await _client.ExchangeAsync(sample, reports, timeout.Token);
             delivered = true;

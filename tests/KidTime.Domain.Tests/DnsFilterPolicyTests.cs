@@ -154,4 +154,125 @@ public class DnsFilterPolicyTests
 
         Assert.Null(exception);
     }
+
+    // ------------------------------------------------ explaining a page that would not open
+
+    /// <summary>
+    /// The explanation is about the household's rules and never about the request, so it is the
+    /// same answer whatever the child typed - and it carries the set of sites that is shut now,
+    /// with the instant it comes back.
+    /// </summary>
+    [Fact]
+    public void ARefusalIsExplainedFromTheCategoriesAndWhateverIsShutNow()
+    {
+        var now = Local("2026-09-19T20:00");
+        var snapshot = new DnsFilteringSnapshot
+        {
+            State = DnsFilteringState.Active,
+            Categories =
+            [
+                new DnsFilterCategory(DnsFilterCategoryKind.Malware, 1),
+                new DnsFilterCategory(DnsFilterCategoryKind.Adult, 2)
+            ],
+            SiteGroups =
+            [
+                new DnsSiteGroup("Steam", 4, false, null, []),
+                new DnsSiteGroup("Roblox", 12, true, Local("2026-09-20T09:00"), [])
+            ]
+        };
+
+        var refusal = DnsFilterPolicy.ExplainRefusal(snapshot, now);
+
+        Assert.NotNull(refusal);
+        Assert.Equal(
+            [DnsFilterCategoryKind.Malware, DnsFilterCategoryKind.Adult],
+            refusal.Categories);
+        Assert.Equal("Roblox", refusal.ClosedSiteGroup);
+        Assert.Equal(Local("2026-09-20T09:00"), refusal.ReopensAtUtc);
+    }
+
+    /// <summary>
+    /// Of several sets that are shut, the one coming back soonest is the one worth naming: it is
+    /// the only one the child can do anything about, namely wait for it.
+    /// </summary>
+    [Fact]
+    public void TheSetComingBackSoonestIsTheOneNamed()
+    {
+        var snapshot = new DnsFilteringSnapshot
+        {
+            State = DnsFilteringState.Active,
+            SiteGroups =
+            [
+                new DnsSiteGroup("Always off", 2, true, null, []),
+                new DnsSiteGroup("Late", 2, true, Local("2026-09-20T09:00"), []),
+                new DnsSiteGroup("Soon", 2, true, Local("2026-09-19T21:00"), [])
+            ]
+        };
+
+        var refusal = DnsFilterPolicy.ExplainRefusal(snapshot, Local("2026-09-19T20:00"));
+
+        Assert.Equal("Soon", refusal?.ClosedSiteGroup);
+    }
+
+    /// <summary>
+    /// A set with no timetable is shut until a parent says otherwise, so there is no time to give
+    /// and the child is told the name without a promise attached to it.
+    /// </summary>
+    [Fact]
+    public void ASetWithNoTimetableIsNamedWithoutATimeToComeBack()
+    {
+        var snapshot = new DnsFilteringSnapshot
+        {
+            State = DnsFilteringState.Active,
+            SiteGroups = [new DnsSiteGroup("Roblox", 12, true, null, [])]
+        };
+
+        var refusal = DnsFilterPolicy.ExplainRefusal(snapshot, Local("2026-09-19T20:00"));
+
+        Assert.Equal("Roblox", refusal?.ClosedSiteGroup);
+        Assert.Null(refusal?.ReopensAtUtc);
+    }
+
+    /// <summary>
+    /// Filtering that is off, absent, or never once read explains nothing, and saying so anyway
+    /// would blame a rule that is not there for a page that failed for another reason entirely.
+    /// </summary>
+    [Theory]
+    [InlineData(DnsFilteringState.NotConfigured)]
+    [InlineData(DnsFilteringState.Unreachable)]
+    [InlineData(DnsFilteringState.Inactive)]
+    public void NothingIsExplainedWhenThereIsNoFilteringToExplain(DnsFilteringState state) => Assert.Null(
+        DnsFilterPolicy.ExplainRefusal(
+            new DnsFilteringSnapshot { State = state }, Local("2026-09-19T20:00")));
+
+    [Fact]
+    public void NothingIsExplainedWithoutASnapshotAtAll() =>
+        Assert.Null(DnsFilterPolicy.ExplainRefusal(null, Local("2026-09-19T20:00")));
+
+    /// <summary>
+    /// Filtering that is on but blocks nothing at all has nothing to say either - an empty
+    /// sentence on a child's screen is worse than no notification.
+    /// </summary>
+    [Fact]
+    public void FilteringThatBlocksNothingExplainsNothing() => Assert.Null(
+        DnsFilterPolicy.ExplainRefusal(
+            new DnsFilteringSnapshot { State = DnsFilteringState.Active },
+            Local("2026-09-19T20:00")));
+
+    /// <summary>
+    /// A snapshot read some time ago still describes the filtering that is in force, which is the
+    /// same reason cached rules go on being enforced while a PC is offline.
+    /// </summary>
+    [Fact]
+    public void AStaleSnapshotStillExplains()
+    {
+        var snapshot = new DnsFilteringSnapshot
+        {
+            State = DnsFilteringState.Active,
+            IsStale = true,
+            Categories = [new DnsFilterCategory(DnsFilterCategoryKind.Gambling, 1)]
+        };
+
+        Assert.NotNull(DnsFilterPolicy.ExplainRefusal(snapshot, Local("2026-09-19T20:00")));
+    }
 }

@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using KidTime.ControlService.Infrastructure;
+using KidTime.ControlService.Server;
 using KidTime.Domain.Applications;
 using KidTime.Domain.Contracts;
 using KidTime.Domain.Localization;
@@ -29,6 +31,7 @@ public sealed class EnforcementCoordinator(
     LocalStore store,
     TrustedClock clock,
     TimeExtensionService extensions,
+    AgentRuntimeStatus runtimeStatus,
     ILogger<EnforcementCoordinator> logger)
 {
     private static readonly int[] WarningThresholdSeconds = [15 * 60, 5 * 60, 2 * 60];
@@ -60,6 +63,21 @@ public sealed class EnforcementCoordinator(
     private readonly Dictionary<string, DateTimeOffset> _applicationOpenedNotifications = new(StringComparer.Ordinal);
     private DateOnly? _notificationDate;
     private long _notificationRuleRevision = -1;
+
+    /// <summary>
+    /// The browser error page the last sample saw, so the explanation is queued when the child
+    /// arrives on one rather than once every two seconds while they sit there reading it.
+    /// </summary>
+    private BrowserPageError _lastBrowserPage = BrowserPageError.None;
+
+    private DateTimeOffset _lastWebFilterNotice = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// How long one explanation stands for. A child who has understood why a site will not open
+    /// does not need telling again on the next attempt, and a browser retrying in the background
+    /// must not be able to turn an explanation into a stream of them.
+    /// </summary>
+    private static readonly TimeSpan WebFilterNoticeInterval = TimeSpan.FromMinutes(10);
 
     // This service is the only writer of the local usage table, so it can hold the running
     // totals in memory. Every evaluation - one per second from the lockout service, one per
@@ -165,6 +183,52 @@ public sealed class EnforcementCoordinator(
     /// </summary>
     public void UpdateDnsFiltering(DnsFilteringSnapshot? snapshot) => _dnsFiltering = snapshot;
 
+    /// <summary>
+    /// Tells the child why a page did not open, when the household's DNS filter is the plausible
+    /// reason. It is the one place the filtering snapshot is read for anything other than handing
+    /// it to the window - and it still decides nothing: no rule is evaluated, nothing is blocked
+    /// or allowed, and the only outcome is a sentence.
+    ///
+    /// Three things have to hold before it says anything, because a wrong explanation is worse
+    /// than none. The page must have <em>just</em> failed, so an explanation follows the child
+    /// arriving on the error page rather than repeating while they sit on it. The service must be
+    /// reaching the KidTime server, because a home network that is simply down produces the same
+    /// error page and blaming the filter for it would be a lie the child cannot check. And the
+    /// filtering has to be configured and on, which is what <see cref="DnsFilterPolicy.ExplainRefusal"/>
+    /// answers - with nothing to describe, silence is the honest reply.
+    ///
+    /// What it cannot do is name the site, and it deliberately does not try: the address is the
+    /// one thing the privacy boundary keeps out of KidTime, so the message describes the rules the
+    /// household set and lets the child draw the connection.
+    /// </summary>
+    private void QueueWebFilterExplanation(
+        SessionUsageSample sample,
+        DeviceRuleSnapshot rules,
+        DateTimeOffset utcNow)
+    {
+        var previous = _lastBrowserPage;
+        _lastBrowserPage = sample.BrowserPage;
+        if (sample.BrowserPage == BrowserPageError.None || previous != BrowserPageError.None) return;
+        if (utcNow - _lastWebFilterNotice < WebFilterNoticeInterval) return;
+        if (!runtimeStatus.Snapshot.IsConnected) return;
+        if (DnsFilterPolicy.ExplainRefusal(_dnsFiltering, utcNow) is not { } refusal) return;
+
+        _lastWebFilterNotice = utcNow;
+        var reopens = refusal.ReopensAtUtc is { } instant
+            ? RuleEvaluator.ToLocalTime(instant, rules.TimeZoneId).ToString("HH:mm", CultureInfo.InvariantCulture)
+            : null;
+        // An ordinary toast: nothing is closing and nothing is counting down, so this is news and
+        // not a warning. The key means a second explanation replaces the first rather than
+        // stacking beside it.
+        Enqueue(new UserNotification(
+            Text.WebFilterBlockedTitle,
+            Text.WebFilterBlockedMessage(refusal.Categories, refusal.ClosedSiteGroup, reopens),
+            PersistentNotificationKey: "web-filter"));
+        logger.LogInformation(
+            "Explained the home network's web filtering after a {PageError} page in the browser.",
+            sample.BrowserPage);
+    }
+
     public void UpdateRules(DeviceRuleSnapshot rules)
     {
         var previous = Interlocked.Exchange(ref _rules, rules);
@@ -208,6 +272,8 @@ public sealed class EnforcementCoordinator(
                 _foregroundName = null;
                 _foregroundIdentity = null;
             }
+
+            QueueWebFilterExplanation(sample, rules, utcNow);
 
             var foregroundChanged = !string.Equals(identity, _loggedForegroundIdentity, StringComparison.Ordinal);
             if (foregroundChanged)

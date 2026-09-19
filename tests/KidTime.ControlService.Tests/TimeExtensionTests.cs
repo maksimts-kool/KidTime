@@ -1,5 +1,6 @@
 using KidTime.ControlService.Enforcement;
 using KidTime.ControlService.Infrastructure;
+using KidTime.ControlService.Server;
 using KidTime.Domain.Applications;
 using KidTime.Domain.Contracts;
 using KidTime.Domain.Localization;
@@ -244,7 +245,7 @@ public sealed class TimeExtensionTests : IDisposable
         await store.InitializeAsync(CancellationToken.None);
         var clock = new TrustedClock();
         var coordinator = new EnforcementCoordinator(
-            store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+            store, clock, Extensions(store), ConnectedStatus(), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 1,
@@ -272,7 +273,7 @@ public sealed class TimeExtensionTests : IDisposable
         var store = new LocalStore(DatabaseFile);
         await store.InitializeAsync(CancellationToken.None);
         var coordinator = new EnforcementCoordinator(
-            store, new TrustedClock(), Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+            store, new TrustedClock(), Extensions(store), ConnectedStatus(), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 1,
@@ -297,7 +298,7 @@ public sealed class TimeExtensionTests : IDisposable
         var store = new LocalStore(DatabaseFile);
         await store.InitializeAsync(CancellationToken.None);
         var coordinator = new EnforcementCoordinator(
-            store, new TrustedClock(), Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+            store, new TrustedClock(), Extensions(store), ConnectedStatus(), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 1,
@@ -323,7 +324,7 @@ public sealed class TimeExtensionTests : IDisposable
         var store = new LocalStore(DatabaseFile);
         await store.InitializeAsync(CancellationToken.None);
         var coordinator = new EnforcementCoordinator(
-            store, new TrustedClock(), Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+            store, new TrustedClock(), Extensions(store), ConnectedStatus(), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 1,
@@ -349,7 +350,7 @@ public sealed class TimeExtensionTests : IDisposable
         await store.InitializeAsync(CancellationToken.None);
         var clock = new TrustedClock();
         var coordinator = new EnforcementCoordinator(
-            store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+            store, clock, Extensions(store), ConnectedStatus(), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 1,
@@ -384,7 +385,7 @@ public sealed class TimeExtensionTests : IDisposable
         await store.InitializeAsync(CancellationToken.None);
         var clock = new TrustedClock();
         var coordinator = new EnforcementCoordinator(
-            store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+            store, clock, Extensions(store), ConnectedStatus(), NullLogger<EnforcementCoordinator>.Instance);
         var rules = new DeviceRuleSnapshot
         {
             Revision = 1,
@@ -423,7 +424,7 @@ public sealed class TimeExtensionTests : IDisposable
         await store.AddUsageAsync(today, "nearly-spent", 1_150, CancellationToken.None);
         await store.AddUsageAsync(today, "plenty-left", 60, CancellationToken.None);
         var coordinator = new EnforcementCoordinator(
-            store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+            store, clock, Extensions(store), ConnectedStatus(), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 1,
@@ -474,7 +475,7 @@ public sealed class TimeExtensionTests : IDisposable
         var today = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
         await store.AddUsageAsync(today, "nearly-spent", 1_150, CancellationToken.None);
         var coordinator = new EnforcementCoordinator(
-            store, clock, Extensions(store), NullLogger<EnforcementCoordinator>.Instance);
+            store, clock, Extensions(store), ConnectedStatus(), NullLogger<EnforcementCoordinator>.Instance);
         coordinator.UpdateRules(new DeviceRuleSnapshot
         {
             Revision = 1,
@@ -528,6 +529,18 @@ public sealed class TimeExtensionTests : IDisposable
 
     private static TimeExtensionService Extensions(LocalStore store) =>
         new(store, NullLogger<TimeExtensionService>.Instance);
+
+    /// <summary>
+    /// A PC that is reaching the server, which is the ordinary state these tests are about. The
+    /// coordinator consults it only before explaining the household's web filtering, because a
+    /// home network that is down produces the same browser error page as a blocked site.
+    /// </summary>
+    private static AgentRuntimeStatus ConnectedStatus()
+    {
+        var status = new AgentRuntimeStatus();
+        status.MarkSynchronizationSucceeded();
+        return status;
+    }
 
     private static async Task AnswerEverythingAsync(TimeExtensionService extensions, TimeExtensionStatus status)
     {

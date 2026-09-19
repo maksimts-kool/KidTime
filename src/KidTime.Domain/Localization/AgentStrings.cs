@@ -401,4 +401,25 @@ public abstract class AgentStrings
 
     public abstract string WebFilterExplainTitle { get; }
     public abstract string WebFilterExplainDetail { get; }
+
+    /// <summary>
+    /// Said once when a page would not open in the child's browser, so that a site the home
+    /// network refuses reads as a rule rather than as a broken computer.
+    ///
+    /// It states what the household blocks and never what was asked for - KidTime does not know
+    /// the address and does not want to - so the wording has to stay a description of the rules
+    /// and must not be written as if it were about the page the child was on. The whole sentence
+    /// is built here rather than at the call site: Russian declines a list of categories after a
+    /// colon and agrees a verb with the set of sites it names, neither of which survives being
+    /// glued together from fragments in an English sentence shape.
+    /// </summary>
+    public abstract string WebFilterBlockedTitle { get; }
+
+    /// <param name="categories">What this home blocks at every hour; may be empty.</param>
+    /// <param name="closedSiteGroup">A named set of sites shut right now, or null.</param>
+    /// <param name="reopensAt">When that set comes back, already a local clock time, or null.</param>
+    public abstract string WebFilterBlockedMessage(
+        IReadOnlyList<DnsFilterCategoryKind> categories,
+        string? closedSiteGroup,
+        string? reopensAt);
 }

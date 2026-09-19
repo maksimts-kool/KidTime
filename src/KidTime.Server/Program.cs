@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Security.Cryptography.X509Certificates;
 using KidTime.Server.Data;
 using KidTime.Server.Hubs;
+using KidTime.Server.Infrastructure;
 using KidTime.Server.Security;
 using KidTime.Server.Services;
 using KidTime.Server.Services.Dns;
@@ -13,6 +14,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddKidTimeLogging();
 
 var connectionString = builder.Configuration.GetConnectionString("KidTime")
     ?? throw new InvalidOperationException("ConnectionStrings:KidTime is not configured.");
@@ -87,6 +89,10 @@ builder.Services.AddHealthChecks().AddNpgSql(connectionString);
 
 var app = builder.Build();
 
+// First in the pipeline, so the one line it writes covers everything below it - including a
+// failure that never reaches a controller - and so the correlation id is on the response
+// whatever happens to the request.
+app.UseKidTimeRequestLogging();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
@@ -94,6 +100,7 @@ app.MapHub<DeviceHub>("/hubs/device");
 app.MapHealthChecks("/health");
 
 await app.Services.GetRequiredService<DatabaseInitializer>().InitializeAsync();
+app.LogStartupSummary();
 await app.RunAsync();
 
 public partial class Program;

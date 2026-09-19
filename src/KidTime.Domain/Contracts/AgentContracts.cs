@@ -115,7 +115,27 @@ public sealed record SessionUsageSample(
     string? WindowTitle,
     ApplicationDescriptor? ForegroundApplication,
     bool StatusRequested = true,
-    IReadOnlyList<AudibleApplication>? AudibleApplications = null);
+    IReadOnlyList<AudibleApplication>? AudibleApplications = null,
+    /// <summary>
+    /// Whether the browser in front is showing its own "this did not load" page, which is what a
+    /// site refused by the household's DNS filter looks like from inside the child's session.
+    /// It is a classification and never an address: <see cref="BrowserPageErrorDetector"/> reads
+    /// the window title in the session and only this value crosses, so the service can explain
+    /// the filtering rule without either end learning where the child went.
+    /// </summary>
+    BrowserPageError BrowserPage = BrowserPageError.None);
+
+/// <summary>
+/// How a page failed to open, as much as can be known without reading the address. The two
+/// failures are told apart because they are the two shapes a DNS filter's refusal takes: a name
+/// that resolves to nothing, and a name that resolves to an address nothing answers on.
+/// </summary>
+public enum BrowserPageError
+{
+    None,
+    NameNotResolved,
+    ConnectionFailed
+}
 
 /// <summary>
 /// An application holding an active Windows audio session, whether or not it is in front. A

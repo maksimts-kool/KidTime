@@ -76,6 +76,20 @@ Windows OpenSSH client and a working SSH login; the server is remembered after t
 or `-SkipPublish` to build without releasing. Commit the version change in `Directory.Build.props`
 together with the work it ships.
 
+From a Linux workstation, which cannot build the agent half, the same release runs over SSH against
+a Windows build machine:
+
+```bash
+./scripts/release-agent.sh --build-host parent@<windows-address> --identity ~/.ssh/id_ed25519
+```
+
+It bumps the version, sends the working tree over, builds it there with the same script, brings the
+release back, and publishes it on `--server user@host` — or on this machine when no server is given,
+which is what a workstation that also runs the stack wants. `--vm <libvirt-domain>` starts a local
+Windows VM first and finds its address itself. That machine needs the .NET SDK and OpenSSH and
+nothing else; it is remembered after the first run, and the same `--bump`, `--version`,
+`--skip-publish` and `--release-dir` flags apply.
+
 The two steps are still available separately — `./scripts/build-agent.ps1` on Windows, then
 `./scripts/publish-agent-release.sh <uploaded-directory>` on the server.
 
@@ -93,7 +107,13 @@ variables in `.env` and KidTime will read that configuration - read only, and ne
 - the panel grows a **Web filtering** page: whether filtering is on, what it covers, and a button
   that opens the DNS console, which is where it is actually set up;
 - the child's KidTime window grows an **Internet** tab listing what is blocked all the time and
-  which sites have hours of their own, with the time they come back.
+  which sites have hours of their own, with the time they come back;
+- when a filtered site will not open in the child's Firefox, KidTime says why - once, as an
+  ordinary notification naming what the home network blocks and when a closed set of sites comes
+  back. It explains the rule and never the site: KidTime does not read the address, the DNS query
+  log, or anything else that would amount to browsing history, so the message is the same sentence
+  whatever was typed. A PC that cannot reach the server stays quiet, because a home network that is
+  down produces the same browser error page as a blocked site.
 
 With the variables empty the page says so and the child's PC shows no such tab. Nothing about
 KidTime's own enforcement changes either way: a DNS block and a KidTime rule are separate things,
@@ -115,9 +135,22 @@ disable Defender, UAC, the firewall, or any other Windows protection.
 
 ```bash
 docker compose ps
-docker compose logs --tail 200 server web postgres
+docker compose logs -f server web postgres
 docker compose down            # stops without deleting PostgreSQL data
 ```
+
+The server and the panel log in the same format - time, level, source, message - and every request
+carries a `req=` id that appears on both containers' lines and on the response's `X-Request-Id`
+header, so one click in the panel can be followed all the way through. PostgreSQL logs statements
+slower than half a second, never the statements themselves. Four optional variables in `.env` tune
+all of it:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `KIDTIME_LOG_LEVEL` | `Information` | `Debug` adds health probes, hub traffic, and every API call the panel makes. |
+| `KIDTIME_LOG_FORMAT` | `pretty` | `json` emits structured events for a log collector instead. |
+| `KIDTIME_LOG_COLOR` | `always` | `never` for a terminal or pipeline that does not render ANSI. |
+| `KIDTIME_PG_SLOW_QUERY_MS` | `500` | The duration above which PostgreSQL logs a query's shape. |
 
 On the controlled PC, as an administrator:
 
