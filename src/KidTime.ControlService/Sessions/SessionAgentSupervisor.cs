@@ -29,6 +29,9 @@ public sealed class SessionAgentSupervisor(
     /// </summary>
     private static readonly TimeSpan SessionEndingWindow = TimeSpan.FromSeconds(60);
 
+    /// <summary>STATUS_DLL_INIT_FAILED_LOGOFF: the process started on a window station that is shutting down.</summary>
+    private const int DllInitFailedLogoff = unchecked((int)0xC000026B);
+
     private const uint StillActive = 259;
     private const uint WaitTimeout = 0x102;
 
@@ -151,10 +154,25 @@ public sealed class SessionAgentSupervisor(
     /// The agent exits with <see cref="SessionAgentExitCodes.SessionEnded"/> when Windows ends the
     /// session. That session still answers for its user for several seconds afterwards and every
     /// copy launched into it dies at once, so the loop stands down until the user is gone.
+    ///
+    /// A copy launched into a session that is already signing out never gets as far as saying so:
+    /// Windows refuses to initialize it and it exits with <see cref="DllInitFailedLogoff"/>. That
+    /// is Windows' own statement that the session is being torn down, so it stands the loop down
+    /// the same way - and tells the lockout loop, because a slow PC can spend longer than
+    /// <see cref="PcSignOutSchedule.SettlePeriod"/> signing out and must not be reported as one
+    /// that ignored its sign-out.
     /// </summary>
     private void NoteSessionEnded()
     {
-        if (ReadExitCode() != SessionAgentExitCodes.SessionEnded) return;
+        var code = ReadExitCode();
+        if (code == DllInitFailedLogoff)
+        {
+            signOutState.NoteTeardownObserved();
+            _sessionEndedTimestamp = Stopwatch.GetTimestamp();
+            logger.LogInformation("SessionAgent could not start because Windows is signing the session out; it is not relaunched into it.");
+            return;
+        }
+        if (code != SessionAgentExitCodes.SessionEnded) return;
         _sessionEndedTimestamp = Stopwatch.GetTimestamp();
         logger.LogInformation("SessionAgent exited because Windows is ending the session; it is not relaunched into it.");
     }

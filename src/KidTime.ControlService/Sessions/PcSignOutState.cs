@@ -20,9 +20,19 @@ public sealed class PcSignOutState
     /// </summary>
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(15);
 
-    private long _issuedAtTimestamp;
+    /// <summary>
+    /// How long Windows' own word that the session is being torn down stays good. The supervisor
+    /// stands down for a minute after hearing it and then tries once more, which is what renews
+    /// it, so this covers that minute and the launch after it.
+    /// </summary>
+    public static readonly TimeSpan TeardownEvidenceWindow = TimeSpan.FromSeconds(90);
 
-    public void MarkIssued() => Volatile.Write(ref _issuedAtTimestamp, Stopwatch.GetTimestamp());
+    private long _issuedAtTimestamp;
+    private long _teardownObservedTimestamp;
+
+    public void MarkIssued() => MarkIssued(Stopwatch.GetTimestamp());
+
+    public void MarkIssued(long nowTimestamp) => Volatile.Write(ref _issuedAtTimestamp, nowTimestamp);
 
     public bool IsSigningOut
     {
@@ -31,5 +41,29 @@ public sealed class PcSignOutState
             var issued = Volatile.Read(ref _issuedAtTimestamp);
             return issued != 0 && Stopwatch.GetElapsedTime(issued) < Window;
         }
+    }
+
+    /// <summary>
+    /// Records that Windows refused to start the agent because the session's window station is
+    /// shutting down - proof that a sign-out is in progress, however long it is taking.
+    /// </summary>
+    public void NoteTeardownObserved() => NoteTeardownObserved(Stopwatch.GetTimestamp());
+
+    public void NoteTeardownObserved(long nowTimestamp) => Volatile.Write(ref _teardownObservedTimestamp, nowTimestamp);
+
+    /// <summary>
+    /// True when Windows has said, since the last sign-out was issued and recently enough, that
+    /// the session is still being torn down. A slow PC can take well over
+    /// <see cref="PcSignOutSchedule.SettlePeriod"/> to sign a session out - a game saving, a
+    /// profile unloading from a spinning disk - and that session has not outlived its sign-out;
+    /// it is in the middle of it.
+    /// </summary>
+    public bool IsTearingDown(long nowTimestamp)
+    {
+        var issued = Volatile.Read(ref _issuedAtTimestamp);
+        var observed = Volatile.Read(ref _teardownObservedTimestamp);
+        return issued != 0
+               && observed >= issued
+               && Stopwatch.GetElapsedTime(observed, nowTimestamp) < TeardownEvidenceWindow;
     }
 }

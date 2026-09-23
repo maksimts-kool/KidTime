@@ -104,7 +104,20 @@ public sealed class SessionLockoutService(
             return;
         }
 
-        var step = _signOut.Next(signedIn.SessionId, signedIn.User, Stopwatch.GetTimestamp());
+        var now = Stopwatch.GetTimestamp();
+        var step = _signOut.Next(signedIn.SessionId, signedIn.User, now);
+        if (step is SignOutStep.WarnAgain && signOutState.IsTearingDown(now))
+        {
+            // Windows has refused to start anything in this session because it is signing it out,
+            // so the sign-out is working, just slowly. It gets another settle period rather than
+            // a second warning nobody can see and an error the parent can do nothing about.
+            _signOut.SignOutIssued(now);
+            logger.LogInformation(
+                "Windows session {SessionId} ({User}) is still signing out; waiting for it to finish.",
+                signedIn.SessionId, signedIn.User);
+            return;
+        }
+
         if (step is SignOutStep.WarnAgain)
         {
             // The parent has to learn that this PC did not actually sign out; the child

@@ -772,7 +772,15 @@ false report is a better failure than a child with none. **The child ending the 
 themselves looks the same** - signing out, restarting, or shutting down - and the service is told
 nothing, so the agent says it: WPF's `SessionEnding` makes it exit with
 `SessionAgentExitCodes.SessionEnded`, and the supervisor stands down until the session loses its
-user (at most a minute, so a cancelled shutdown gets its tray agent back). When the loop is real,
+user (at most a minute, so a cancelled shutdown gets its tray agent back). **A sign-out can also
+take longer than both windows** - a slow PC saving a game or unloading a profile has been seen
+spending over thirty seconds on it - and then a copy launched into it cannot even start: Windows
+refuses it with `0xC000026B` (`STATUS_DLL_INIT_FAILED_LOGOFF`, the window station is shutting
+down). The supervisor reads that exit code as the session ending, stands down exactly as for
+`SessionEnded`, and records it in `PcSignOutState`, where `SessionLockoutService` finds it and
+gives the session another settle period instead of reporting "still signed in after it was signed
+out" and warning a child who is no longer there. Without that word from Windows, a session that
+outlives `SettlePeriod` is still reported and warned again. When the loop is real,
 the error carries the agent's exit code - read from the handle `CreateProcessAsUser` returned,
 because an agent that dies within milliseconds is gone before it can be reopened by id -
 and `0xE0434352` is a .NET exception that escaped, which is the difference between the agent
@@ -1398,7 +1406,9 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   agent relaunched into it died every two seconds until it went away. The current service does not
   count those, so a report that still appears is a real one - and it now carries the agent's exit
   code, with `0xE0434352` meaning a .NET exception escaped, which the agent's own fault report on
-  the same PC will name.
+  the same PC will name. `0xC000026B` beside a "still signed in after it was signed out" error is a
+  sign-out that took longer than thirty seconds rather than one that failed; the current service
+  recognizes it and reports neither.
 - **The error log stays empty after a crash:** reports ride the next synchronization, so a PC that
   is offline delivers them when it reconnects. Check `LastSeenUtc`, then
   `%LOCALAPPDATA%\KidTime\logs\session-agent-faults.ndjson` (queued in the child's session) and
