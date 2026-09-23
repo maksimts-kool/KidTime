@@ -1,0 +1,28 @@
+# Override for a host that already runs one PostgreSQL for several stacks. Layered on top of
+# compose.yaml, never used alone:
+#
+#   docker compose -f compose.yaml -f compose.shared-db.yaml up -d
+#
+# In Portainer, compose.yaml is the stack's compose path and this file its additional path, so a
+# pull-and-redeploy keeps following the repository and everything else in compose.yaml - logging,
+# DNS, ports - still reaches this deployment unchanged.
+#
+# The shared server must already hold a `kidtime` database owned by a `kidtime` role whose password
+# is POSTGRES_PASSWORD, and must sit on the external network KIDTIME_SHARED_DB_NETWORK. Its log
+# settings are its own business now, but keep log_parameter_max_length=0 there: the bind
+# parameters are the household's data (see Logging in CLAUDE.md).
+services:
+  # Kept out of every ordinary `up` rather than deleted, which an override cannot do.
+  postgres:
+    profiles: [bundled-postgres]
+
+  server:
+    depends_on: !reset {}
+    environment:
+      ConnectionStrings__KidTime: Host=${KIDTIME_SHARED_DB_HOST:-shared-postgres};Port=5432;Database=kidtime;Username=kidtime;Password=${POSTGRES_PASSWORD}
+    networks: [default, dns, shared-db]
+
+networks:
+  shared-db:
+    name: ${KIDTIME_SHARED_DB_NETWORK:-shared-db}
+    external: true

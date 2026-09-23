@@ -1184,6 +1184,15 @@ The proxy hop stays on HTTPS so the server container keeps using its own certifi
 Data Protection keys; `tls_insecure_skip_verify` covers only that loopback hop. `--base-path` is
 compiled into the web bundle, so changing it later means rebuilding the web image.
 
+### A shared PostgreSQL, and Portainer
+
+A host that already runs one PostgreSQL for several stacks layers `compose.shared-db.yaml` over
+`compose.yaml`: the bundled `postgres` service is parked behind a profile and the server joins the
+external `shared-db` network instead. In Portainer that is a **Git** stack with `compose.yaml` as
+its path and `compose.shared-db.yaml` as an additional path. **Never edit such a stack's file
+through the Portainer editor or `PUT /api/stacks/{id}`** - that detaches it from the repository and
+takes "Pull and redeploy" with it. A change the deployment needs belongs in the override, here.
+
 ## Verification
 
 Automated tests cover daily limits, manual blocks, temporary-block expiry, schedules and overnight
