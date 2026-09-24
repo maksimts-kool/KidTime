@@ -209,6 +209,78 @@ public sealed class LocalStoreTests : IDisposable
         Assert.Equal(20, await reopened.GetUsageAsync(date, null, CancellationToken.None));
     }
 
+    /// <summary>
+    /// A full disk once stopped the whole service from here: the periodic flush threw out of the
+    /// sample path, the pipe host let it go, and the host shut down with nothing enforcing. The
+    /// flush runs on the real ten-second interval, which is why this test waits.
+    /// </summary>
+    [Fact]
+    public async Task A_database_that_cannot_be_written_keeps_the_seconds_buffered_and_enforcement_running()
+    {
+        Directory.CreateDirectory(_directory);
+        var store = new LocalStore(DatabaseFile);
+        await store.InitializeAsync(CancellationToken.None);
+        var clock = new TrustedClock();
+        var coordinator = new EnforcementCoordinator(store, clock, Extensions(store), ConnectedStatus(), NullLogger<EnforcementCoordinator>.Instance);
+        coordinator.UpdateRules(new DeviceRuleSnapshot { Revision = 1, TimeZoneId = "UTC", DailyLimitSeconds = 3_600 });
+        var app = Descriptor();
+        var date = RuleEvaluator.GetLocalDate(clock.GetUtcNow(), "UTC");
+        await SetUsageWritesFailingAsync(true);
+
+        await coordinator.HandleSampleAsync(Sample(1, 0, 0, app), CancellationToken.None);
+        await Task.Delay(TimeSpan.FromSeconds(10.5));
+        var state = await coordinator.HandleSampleAsync(Sample(2, 20_000, 0, app), CancellationToken.None);
+
+        Assert.Equal(20, state.TodayActiveSeconds);
+        Assert.Equal(0, await store.GetUsageAsync(date, null, CancellationToken.None));
+
+        await SetUsageWritesFailingAsync(false);
+        await coordinator.FlushUsageAsync(CancellationToken.None);
+        Assert.Equal(20, await store.GetUsageAsync(date, null, CancellationToken.None));
+    }
+
+    /// <summary>Stands in for a full disk: SQLite refuses the usage write with an ordinary error.</summary>
+    private async Task SetUsageWritesFailingAsync(bool failing)
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = DatabaseFile,
+            Cache = SqliteCacheMode.Shared
+        }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = failing
+            ? """
+              CREATE TRIGGER full_insert BEFORE INSERT ON daily_usage BEGIN SELECT RAISE(FAIL, 'database or disk is full'); END;
+              CREATE TRIGGER full_update BEFORE UPDATE ON daily_usage BEGIN SELECT RAISE(FAIL, 'database or disk is full'); END;
+              """
+            : "DROP TRIGGER full_insert; DROP TRIGGER full_update;";
+        await command.ExecuteNonQueryAsync();
+    }
+
+    [Fact]
+    public void Earlier_update_packages_are_removed_and_the_rollback_copy_is_kept()
+    {
+        var updates = Path.Combine(_directory, "updates");
+        Directory.CreateDirectory(Path.Combine(updates, "staged-2.0.4", "SessionAgent"));
+        Directory.CreateDirectory(Path.Combine(updates, "staged-2.0.5"));
+        Directory.CreateDirectory(Path.Combine(updates, "backup"));
+        File.WriteAllBytes(Path.Combine(updates, "staged-2.0.4", "SessionAgent", "KidTime.SessionAgent.exe"), new byte[1_000]);
+        File.WriteAllBytes(Path.Combine(updates, "kidtime-agent-2.0.4.zip"), new byte[500]);
+        File.WriteAllBytes(Path.Combine(updates, "kidtime-agent-2.0.5.zip"), new byte[500]);
+        File.WriteAllBytes(Path.Combine(updates, "backup", "KidTime.ControlService.exe"), new byte[10]);
+        File.WriteAllText(Path.Combine(updates, "status.json"), "{}");
+
+        var removed = AgentUpdateWorker.RemoveStaleUpdateFiles(updates, NullLogger.Instance);
+
+        Assert.Equal(2_000, removed);
+        Assert.Empty(Directory.EnumerateDirectories(updates, "staged-*"));
+        Assert.Empty(Directory.EnumerateFiles(updates, "*.zip"));
+        Assert.True(File.Exists(Path.Combine(updates, "backup", "KidTime.ControlService.exe")));
+        // The outcome of the update that just ran is read after this, so it must survive too.
+        Assert.True(File.Exists(Path.Combine(updates, "status.json")));
+    }
+
     [Fact]
     public async Task Diagnostic_reports_are_queued_until_the_server_accepts_them()
     {

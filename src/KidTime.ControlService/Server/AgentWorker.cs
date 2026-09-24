@@ -3,6 +3,7 @@ using KidTime.ControlService.Infrastructure;
 using KidTime.ControlService.Sessions;
 using KidTime.Domain.Contracts;
 using KidTime.Domain.Rules;
+using Microsoft.Data.Sqlite;
 
 namespace KidTime.ControlService.Server;
 
@@ -44,8 +45,14 @@ public sealed class AgentWorker(
         finally
         {
             // Counted seconds are buffered in memory between flushes, so a service that is
-            // stopping - a restart, an automatic update, a shutdown - writes them out first.
-            await coordinator.FlushUsageAsync(CancellationToken.None);
+            // stopping - a restart, an automatic update, a shutdown - writes them out first. A
+            // write that fails here is logged rather than thrown: a faulted worker marks the stop
+            // as a failure, and the service control manager would restart a service being updated.
+            try { await coordinator.FlushUsageAsync(CancellationToken.None); }
+            catch (SqliteException exception)
+            {
+                logger.LogError(exception, "Buffered usage could not be written to the local database while stopping.");
+            }
         }
     }
 
@@ -77,6 +84,14 @@ public sealed class AgentWorker(
                     runtimeStatus.MarkSynchronizationFailed(exception.Message);
                     logger.LogWarning(exception, "Synchronization failed; cached rules remain active and usage stays queued locally.");
                     nextSync = now.AddSeconds(20);
+                }
+                catch (SqliteException exception)
+                {
+                    // The local database cannot be written - usually a full disk. Enforcement goes
+                    // on from memory and the heartbeat below still tells the parent the PC is here.
+                    runtimeStatus.MarkSynchronizationFailed(exception.Message);
+                    logger.LogError(exception, "Synchronization failed because the local database could not be written.");
+                    nextSync = now.AddSeconds(60);
                 }
             }
 

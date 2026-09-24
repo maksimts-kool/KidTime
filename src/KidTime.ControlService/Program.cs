@@ -5,6 +5,7 @@ using KidTime.ControlService.Ipc;
 using KidTime.ControlService.Removal;
 using KidTime.ControlService.Server;
 using KidTime.ControlService.Sessions;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Options;
 
 if (args.FirstOrDefault()?.Equals("enroll", StringComparison.OrdinalIgnoreCase) == true)
@@ -62,4 +63,20 @@ builder.Services.AddHostedService<SessionLockoutService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<SessionAgentSupervisor>());
 
 var host = builder.Build();
+
+// A worker that throws stops the whole host, and a host that stops reports SERVICE_STOPPED with
+// exit code 0 - which the service control manager reads as a deliberate stop and never restarts.
+// A full disk once left a controlled PC with no enforcement for an evening that way. Reporting a
+// non-zero code is what lets the recovery actions setup configures (restart, with failure actions
+// on non-crash failures enabled) bring the service back. An ordinary stop - the parent's removal,
+// an automatic update, shutdown - faults no worker and keeps exit code 0.
+host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(() =>
+{
+    if (!host.Services.GetServices<IHostedService>().OfType<BackgroundService>()
+            .Any(service => service.ExecuteTask?.IsFaulted == true))
+        return;
+    Environment.ExitCode = 1;
+    if (host.Services.GetService<IHostLifetime>() is WindowsServiceLifetime service) service.ExitCode = 1;
+});
+
 await host.RunAsync();

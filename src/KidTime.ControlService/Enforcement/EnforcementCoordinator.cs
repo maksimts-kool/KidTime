@@ -7,6 +7,7 @@ using KidTime.Domain.Applications;
 using KidTime.Domain.Contracts;
 using KidTime.Domain.Localization;
 using KidTime.Domain.Rules;
+using Microsoft.Data.Sqlite;
 
 namespace KidTime.ControlService.Enforcement;
 
@@ -97,6 +98,7 @@ public sealed class EnforcementCoordinator(
     private readonly Dictionary<string, DateTimeOffset> _applicationRefreshed = new(StringComparer.Ordinal);
     private long _lastUsageFlushTimestamp = Stopwatch.GetTimestamp();
     private long _lastCountedUsageTimestamp;
+    private bool _usageWriteFailing;
 
     /// <summary>
     /// When the PC's own schedule window closes, kept rather than worked out again.
@@ -378,7 +380,7 @@ public sealed class EnforcementCoordinator(
             }
 
             if (Stopwatch.GetElapsedTime(_lastUsageFlushTimestamp) >= UsageFlushInterval)
-                await FlushUsageCoreAsync(cancellationToken);
+                await TryFlushUsageAsync(cancellationToken);
 
             var pcUsage = await ReadUsageAsync(localDate, null, cancellationToken);
             // Extra time a parent granted today is part of the limit from here on. Reading the
@@ -611,6 +613,31 @@ public sealed class EnforcementCoordinator(
         await _gate.WaitAsync(cancellationToken);
         try { await FlushUsageCoreAsync(cancellationToken); }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// The periodic flush on the sample path. Enforcement reads the totals held in memory, so a
+    /// database that cannot be written - a disk filled by a game download - costs nothing but
+    /// durability until it can be again. Letting the exception out here once stopped the whole
+    /// service, which is the one outcome worse than losing a few seconds of usage: the seconds
+    /// stay buffered and the write is retried on the next interval.
+    /// </summary>
+    private async Task TryFlushUsageAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await FlushUsageCoreAsync(cancellationToken);
+            if (!_usageWriteFailing) return;
+            _usageWriteFailing = false;
+            logger.LogInformation("Buffered usage was written to the local database again.");
+        }
+        catch (SqliteException exception)
+        {
+            if (_usageWriteFailing) return;
+            _usageWriteFailing = true;
+            logger.LogError(exception,
+                "Usage could not be written to the local database; enforcement continues from the totals held in memory and the write is retried.");
+        }
     }
 
     private async Task FlushUsageCoreAsync(CancellationToken cancellationToken)

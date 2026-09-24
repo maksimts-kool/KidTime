@@ -9,6 +9,7 @@ using KidTime.ControlService.Server;
 using KidTime.ControlService.Sessions;
 using KidTime.Domain.Contracts;
 using KidTime.Domain.Localization;
+using Microsoft.Data.Sqlite;
 
 namespace KidTime.ControlService.Ipc;
 
@@ -46,6 +47,13 @@ public sealed class NamedPipeHost(
             catch (Exception exception) when (exception is IOException or JsonException or InvalidDataException)
             {
                 logger.LogWarning(exception, "Invalid or interrupted SessionAgent IPC exchange.");
+            }
+            catch (SqliteException exception)
+            {
+                // A local database that cannot be written fails this one exchange. It must not end
+                // the pipe - and with it the host - because every other exchange is how the child
+                // gets their warnings and how their usage is counted at all.
+                logger.LogError(exception, "The local database failed while answering the SessionAgent.");
             }
         }
     }

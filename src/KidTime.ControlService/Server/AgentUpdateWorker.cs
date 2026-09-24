@@ -21,6 +21,7 @@ public sealed class AgentUpdateWorker(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         AnnounceCompletedUpdate();
+        RemoveStaleUpdateFiles();
         await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -57,6 +58,7 @@ public sealed class AgentUpdateWorker(
 
         logger.LogInformation("Agent update {Version} is available; installed version is {InstalledVersion}.",
             manifest.Version, state.CurrentVersion);
+        RemoveStaleUpdateFiles();
         state.Set("Downloading");
         var packagePath = Path.Combine(AgentPaths.UpdateDirectory, $"kidtime-agent-{manifest.Version}.zip");
         await api.DownloadUpdateAsync(manifest.Version, packagePath, cancellationToken);
@@ -137,6 +139,56 @@ public sealed class AgentUpdateWorker(
         {
             logger.LogWarning(exception, "The recorded update outcome could not be read.");
         }
+    }
+
+    private void RemoveStaleUpdateFiles()
+    {
+        var removedBytes = RemoveStaleUpdateFiles(AgentPaths.UpdateDirectory, logger);
+        if (removedBytes > 0)
+            logger.LogInformation("Removed {Megabytes} MB of earlier update packages.", removedBytes / (1024 * 1024));
+    }
+
+    /// <summary>
+    /// Each update downloads a package and unpacks it beside the running service, and nothing used
+    /// to take either away: a PC that had followed every release carried eleven of each, four
+    /// gigabytes, on the machine whose disk had just filled. Neither outlives the update it was
+    /// for - by the time the service runs again, the updater has copied the staged files into
+    /// place or restored the backup - so every one of them is removed on start and before the
+    /// next download. <c>backup</c> is the rollback copy and stays.
+    /// </summary>
+    public static long RemoveStaleUpdateFiles(string updateDirectory, ILogger logger)
+    {
+        if (!Directory.Exists(updateDirectory)) return 0;
+        long removedBytes = 0;
+        foreach (var staged in Directory.EnumerateDirectories(updateDirectory, "staged-*"))
+        {
+            try
+            {
+                var size = new DirectoryInfo(staged).EnumerateFiles("*", SearchOption.AllDirectories).Sum(file => file.Length);
+                Directory.Delete(staged, recursive: true);
+                removedBytes += size;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(exception, "An earlier staged update at {Path} could not be removed.", staged);
+            }
+        }
+
+        foreach (var package in Directory.EnumerateFiles(updateDirectory, "kidtime-agent-*.zip"))
+        {
+            try
+            {
+                var size = new FileInfo(package).Length;
+                File.Delete(package);
+                removedBytes += size;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(exception, "An earlier update package at {Path} could not be removed.", package);
+            }
+        }
+
+        return removedBytes;
     }
 
     private sealed record UpdateOutcome(string? Status, string? Version, string? Error);

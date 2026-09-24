@@ -404,6 +404,19 @@ unreachable, and the service never falls back to permitting everything. New usag
 locally; after reconnection the agent uploads discovered applications, uploads durable usage
 batches, refreshes rules, acknowledges commands, and resumes SignalR.
 
+**A local database that cannot be written never stops enforcement.** A full disk - a game
+download reserving its whole size up front is the usual cause - once made one usage write throw
+out of the sample path, which ended the pipe host and with it the whole service, and the service
+then stopped *cleanly*, with exit code 0, which Windows reads as a deliberate stop and never
+restarts: an evening with nothing counted and nothing enforced, and no report either, because the
+process was gone before it could upload one. So the periodic flush keeps its seconds buffered and
+retries (enforcement reads memory anyway), the pipe host and the sync loop log a `SqliteException`
+instead of dying on it, and `Program.cs` reports exit code 1 whenever a worker faulted, so the
+recovery actions setup configures - with failure actions on non-crash failures enabled - restart
+anything that still gets through. An ordinary stop faults no worker and keeps exit code 0; that
+matters, because a non-zero code during an automatic update would have the service manager
+restart the service the updater is replacing.
+
 **Usage accounting is idempotent.** Pending counters move into a batch and zero in the same
 transaction. The server records every batch ID (`ProcessedUsageBatch`) before acknowledging, so an
 uncertain retry cannot double-count, and the agent deletes a batch only after a successful response.
@@ -793,6 +806,10 @@ channel used for rules and usage. Each manifest carries version, exact byte size
 server and agent verify the package before installation. `AgentUpdateWorker` checks periodically
 (five minutes by default), stages under `C:\ProgramData\KidTime\updates` outside the install
 directory, keeps a rollback copy, replaces only service binaries, and restarts `KidTimeControl`.
+**Every earlier package and staging directory is removed** when the service starts and before the
+next download - only `backup` stays. Nothing used to take them away, and a PC that had followed
+every release carried about 340 MB per version, four gigabytes in all, on the machine whose disk
+had just filled.
 The updater script records its outcome, so the first run after a restart reads that file and either
 queues one ordinary "KidTime updated" notification for the child or logs an error - which the
 parent then sees in the error log - when the update failed and was rolled back.
@@ -1237,7 +1254,9 @@ answer announced once however often the server repeats it, every stop on the req
 accepted while anything between or beyond them is refused, automatic-update version comparison,
 controlled-account SID isolation,
 cached offline rules, durable pending usage, buffered usage that survives a restart, durable fault
-queueing and fingerprinting, in-batch fault collapsing, spent application close leases that a
+queueing and fingerprinting, a database that refuses usage writes leaving enforcement running on
+the buffered seconds and losing none of them once it accepts writes again, earlier update packages
+removed while the rollback copy is kept, in-batch fault collapsing, spent application close leases that a
 relaunch cannot inherit, a sign-out that is warned about and retried when the session outlives it,
 the tray agent's own supervised launch never mistaken for the shortcut that asks it to open its
 window, complete English and Russian catalogs with Russian plural agreement, language-scoped rule messages,
@@ -1418,6 +1437,14 @@ the screen-time window rejects invalid parent credentials, and with valid ones r
   the same PC will name. `0xC000026B` beside a "still signed in after it was signed out" error is a
   sign-out that took longer than thirty seconds rather than one that failed; the current service
   recognizes it and reports neither.
+- **The panel shows a few minutes for a day the child spent on the PC, and the PC is offline:**
+  `KidTimeControl` has stopped - `sc.exe query KidTimeControl` says so - and nothing is counted or
+  enforced until it runs again. The last lines of `C:\ProgramData\KidTime\logs\control-service.ndjson`
+  say why. `SQLite Error 13: 'database or disk is full'` was a full system drive: agents before
+  this was fixed stopped on it with exit code 0, which Windows does not restart, so free space and
+  `Start-Service KidTimeControl`. If the tray agent then restarts every two seconds with "Rejected
+  named-pipe client process", the copy from before the stop is still holding the single-instance
+  mutex; end that `KidTime.SessionAgent` and the supervised one takes over.
 - **The error log stays empty after a crash:** reports ride the next synchronization, so a PC that
   is offline delivers them when it reconnects. Check `LastSeenUtc`, then
   `%LOCALAPPDATA%\KidTime\logs\session-agent-faults.ndjson` (queued in the child's session) and
