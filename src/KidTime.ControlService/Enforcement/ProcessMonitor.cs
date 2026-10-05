@@ -2,6 +2,7 @@ using System.Diagnostics;
 using KidTime.ControlService.Infrastructure;
 using KidTime.Domain.Applications;
 using KidTime.ControlService.Sessions;
+using Microsoft.Data.Sqlite;
 
 namespace KidTime.ControlService.Enforcement;
 
@@ -31,6 +32,13 @@ public sealed class ProcessMonitor(
                 continue;
             }
 
+            try { await coordinator.RefreshApplicationCopiesAsync(stoppingToken); }
+            catch (SqliteException exception)
+            {
+                // Copies are recognized from the fingerprints already held; a database that
+                // cannot be written must not stop the sweep that closes blocked applications.
+                logger.LogWarning(exception, "Could not record application fingerprints.");
+            }
             var activeSessionId = checked((int)WindowsSession.ActiveSessionId);
             var processes = Process.GetProcesses();
             var current = new HashSet<int>();
@@ -58,11 +66,18 @@ public sealed class ProcessMonitor(
                         }
                         var descriptor = ApplicationCatalogPolicy.NormalizeForCatalog(inspected);
                         var identity = ApplicationIdentity.CreateKey(descriptor);
-                        tracked = new TrackedApplication(identity, descriptor.DisplayName);
+                        var original = coordinator.ResolveApplicationCopy(identity, descriptor.ExecutablePath);
+                        tracked = new TrackedApplication(original, descriptor.DisplayName);
                         _tracked[process.Id] = tracked;
-                        await store.UpsertApplicationAsync(
-                            identity, descriptor, stoppingToken, forceSynchronization: true);
-                        logger.LogInformation("Application discovered: {Application} ({Path}).", descriptor.DisplayName, descriptor.ExecutablePath);
+                        // A copy of a controlled application is closed under that application's
+                        // rule and reported as nothing new: a card for it would be a second
+                        // application the parent never set a rule on.
+                        if (original == identity)
+                        {
+                            await store.UpsertApplicationAsync(
+                                identity, descriptor, stoppingToken, forceSynchronization: true);
+                            logger.LogInformation("Application discovered: {Application} ({Path}).", descriptor.DisplayName, descriptor.ExecutablePath);
+                        }
                     }
                     if (!runningApplications.TryGetValue(tracked.IdentityKey, out var running))
                         runningApplications[tracked.IdentityKey] = running = new RunningApplication(tracked.DisplayName, []);

@@ -437,6 +437,19 @@ application's stable key, so normal updates can move paths, change hashes, and c
 without losing the rule. **Changing this precedence breaks existing rules.** Matching also uses a
 weighted publisher/product/original-name score for diagnostics and migration.
 
+The file name is part of that key whenever an executable carries no product metadata, which is what
+cs2.exe looks like - so a child on a real controlled PC copied it to `cs2_alt.exe` beside the
+original and had a game with no rule on it. `ApplicationCopies` closes that without touching the
+key: the service fingerprints (size and SHA-256) the executable of every application **that has a
+rule**, keeps the last few versions in `LocalStore`, and a process with no rule of its own whose
+file is one of them is enforced as that application - counted, warned and closed under its rule,
+and never uploaded as a card of its own. Because the fingerprints persist, renaming the original
+away after the service has seen it is caught the same way. `EnforcementCoordinator.ResolveApplicationCopy`
+is the one place a process becomes an identity for this, and both the sample path and
+`ProcessMonitor` go through it; a candidate is hashed only when its size already equals a
+fingerprint's. A modified executable is a different file and is not matched - this stops a
+rename, not a determined attacker, who is an administrator problem anyway.
+
 The management catalog includes interactive Win32 and MSIX applications such as browsers, Notepad,
 Xbox, Calculator, and Photos. When Windows places a packaged app inside `ApplicationFrameHost`,
 SessionAgent resolves the packaged child process before creating its identity.
@@ -1258,7 +1271,9 @@ queueing and fingerprinting, a database that refuses usage writes leaving enforc
 the buffered seconds and losing none of them once it accepts writes again, earlier update packages
 removed while the rollback copy is kept, in-batch fault collapsing, spent application close leases that a
 relaunch cannot inherit, a game launched suspended (as Steam launches them) identified by the service
-before it has started running, a sign-out that is warned about and retried when the session outlives it,
+before it has started running, a renamed copy of a controlled application counted and closed under its rule -
+including after the original was renamed away - while a same-sized different file and an application
+with a rule of its own are left alone, a sign-out that is warned about and retried when the session outlives it,
 the tray agent's own supervised launch never mistaken for the shortcut that asks it to open its
 window, complete English and Russian catalogs with Russian plural agreement, language-scoped rule messages,
 idle exclusion, a background application in a call counted while idle and one merely playing sound

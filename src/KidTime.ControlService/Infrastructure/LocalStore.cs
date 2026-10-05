@@ -9,6 +9,7 @@ namespace KidTime.ControlService.Infrastructure;
 public sealed class LocalStore
 {
     private const int MaximumQueuedDiagnostics = 200;
+    private const int MaximumFingerprintsPerApplication = 5;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string _connectionString;
@@ -91,6 +92,13 @@ public sealed class LocalStore
                     uploaded INTEGER NOT NULL DEFAULT 0,
                     announced INTEGER NOT NULL DEFAULT 0,
                     period_key TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS application_fingerprints (
+                    identity_key TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    length INTEGER NOT NULL,
+                    recorded_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(identity_key, sha256)
                 );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
@@ -448,6 +456,67 @@ public sealed class LocalStore
         finally { _gate.Release(); }
     }
 
+    // ------------------------------------------------------------------ application copies
+
+    /// <summary>Where each of these applications' executables was last seen on this PC.</summary>
+    public async Task<IReadOnlyDictionary<string, string>> GetApplicationPathsAsync(
+        IReadOnlyCollection<string> identityKeys,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (identityKeys.Count == 0) return result;
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT identity_key,descriptor_json FROM applications";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var key = reader.GetString(0);
+                if (!identityKeys.Contains(key)) continue;
+                var descriptor = JsonSerializer.Deserialize<ApplicationDescriptor>(reader.GetString(1), JsonOptions);
+                if (!string.IsNullOrWhiteSpace(descriptor?.ExecutablePath)) result[key] = descriptor.ExecutablePath;
+            }
+        }
+        finally { _gate.Release(); }
+        return result;
+    }
+
+    public async Task<IReadOnlyList<ApplicationFingerprint>> GetApplicationFingerprintsAsync(CancellationToken cancellationToken)
+    {
+        var result = new List<ApplicationFingerprint>();
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT identity_key,sha256,length FROM application_fingerprints";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                result.Add(new ApplicationFingerprint(reader.GetString(0), reader.GetString(1), reader.GetInt64(2)));
+        }
+        finally { _gate.Release(); }
+        return result;
+    }
+
+    /// <summary>
+    /// Remembers one version of an application's executable, keeping the most recent few: a copy
+    /// taken before the application last updated is still that application.
+    /// </summary>
+    public Task AddApplicationFingerprintAsync(ApplicationFingerprint fingerprint, CancellationToken cancellationToken) =>
+        ExecuteAsync("""
+            INSERT INTO application_fingerprints(identity_key,sha256,length,recorded_at_utc)
+            VALUES($key,$sha,$length,$now)
+            ON CONFLICT(identity_key,sha256) DO UPDATE SET recorded_at_utc=excluded.recorded_at_utc;
+            DELETE FROM application_fingerprints WHERE identity_key=$key AND sha256 NOT IN (
+                SELECT sha256 FROM application_fingerprints WHERE identity_key=$key
+                ORDER BY recorded_at_utc DESC LIMIT $keep);
+            """, cancellationToken,
+            ("$key", fingerprint.IdentityKey), ("$sha", fingerprint.Sha256), ("$length", fingerprint.Length),
+            ("$now", DateTimeOffset.UtcNow.ToString("O")), ("$keep", MaximumFingerprintsPerApplication));
+
     // ------------------------------------------------------------------ extra time
 
     /// <summary>
@@ -646,3 +715,6 @@ public sealed class LocalStore
         return connection;
     }
 }
+
+/// <summary>One version of an application's executable, as its size and SHA-256.</summary>
+public sealed record ApplicationFingerprint(string IdentityKey, string Sha256, long Length);

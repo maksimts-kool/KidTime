@@ -50,6 +50,7 @@ public sealed class EnforcementCoordinator(
     private static readonly TimeSpan UsageFlushInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ApplicationRefreshInterval = TimeSpan.FromMinutes(10);
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly ApplicationCopies _copies = new(store, logger);
     private DeviceRuleSnapshot _rules = new();
     private long _lastSequence;
     private long _lastMonotonicMilliseconds;
@@ -114,6 +115,19 @@ public sealed class EnforcementCoordinator(
     private static readonly TimeSpan AllowanceEndRecheckInterval = TimeSpan.FromMinutes(1);
 
     public DeviceRuleSnapshot Rules => _rules;
+
+    /// <summary>Fingerprints the executables of the applications the rules name; see <see cref="ApplicationCopies"/>.</summary>
+    public Task RefreshApplicationCopiesAsync(CancellationToken cancellationToken) =>
+        _copies.RefreshAsync(_rules, cancellationToken);
+
+    /// <summary>
+    /// The identity a running executable is enforced under: its own, or that of the controlled
+    /// application it is a byte-for-byte copy of. Every path that turns a process into an identity
+    /// for counting or closing goes through here, or a renamed copy is counted under one identity
+    /// and closed under another.
+    /// </summary>
+    public string ResolveApplicationCopy(string identityKey, string executablePath) =>
+        _copies.FindOriginal(_rules, identityKey, executablePath) ?? identityKey;
 
     /// <summary>
     /// The household's DNS filtering, as the server last described it. It is held here only so
@@ -322,6 +336,15 @@ public sealed class EnforcementCoordinator(
                 foregroundApplication = ApplicationCatalogPolicy.NormalizeForCatalog(sample.ForegroundApplication);
                 identity = ApplicationIdentity.CreateKey(foregroundApplication);
                 _foregroundName = foregroundApplication.DisplayName;
+                var original = ResolveApplicationCopy(identity, foregroundApplication.ExecutablePath);
+                if (original != identity)
+                {
+                    // A copy is the application it copies, and it gets no card of its own.
+                    identity = original;
+                    foregroundApplication = null;
+                    _foregroundName = rules.Applications.FirstOrDefault(x => x.IdentityKey == identity)?.DisplayName
+                                      ?? _foregroundName;
+                }
                 _foregroundIdentity = identity;
             }
             else
@@ -360,7 +383,10 @@ public sealed class EnforcementCoordinator(
             var countsPc = !isIdle && sample.ProcessId > 0;
             var countedApplications = new HashSet<string>(StringComparer.Ordinal);
             if (countsPc && identity is not null) countedApplications.Add(identity);
-            var audible = ResolveAudibleApplications(sample.AudibleApplications, isIdle);
+            var audible = ResolveAudibleApplications(sample.AudibleApplications, isIdle)
+                .Select(pair => (Identity: ResolveApplicationCopy(pair.Key, pair.Value.ExecutablePath), Application: pair.Value))
+                .DistinctBy(pair => pair.Identity, StringComparer.Ordinal)
+                .ToDictionary(pair => pair.Identity, pair => pair.Application, StringComparer.Ordinal);
             countedApplications.UnionWith(audible.Keys);
             if (deltaMilliseconds > 0 && (countsPc || countedApplications.Count > 0))
             {
