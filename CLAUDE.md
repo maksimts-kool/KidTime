@@ -1257,7 +1257,8 @@ cached offline rules, durable pending usage, buffered usage that survives a rest
 queueing and fingerprinting, a database that refuses usage writes leaving enforcement running on
 the buffered seconds and losing none of them once it accepts writes again, earlier update packages
 removed while the rollback copy is kept, in-batch fault collapsing, spent application close leases that a
-relaunch cannot inherit, a sign-out that is warned about and retried when the session outlives it,
+relaunch cannot inherit, a game launched suspended (as Steam launches them) identified by the service
+before it has started running, a sign-out that is warned about and retried when the session outlives it,
 the tray agent's own supervised launch never mistaken for the shortcut that asks it to open its
 window, complete English and Russian catalogs with Russian plural agreement, language-scoped rule messages,
 idle exclusion, a background application in a call counted while idle and one merely playing sound

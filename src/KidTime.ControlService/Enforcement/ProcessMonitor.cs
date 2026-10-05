@@ -45,8 +45,13 @@ public sealed class ProcessMonitor(
                     if (_ignored.Contains(process.Id)) continue;
                     if (!_tracked.TryGetValue(process.Id, out var tracked))
                     {
+                        // A process that cannot be read yet is asked about again on the next
+                        // sweep. Only an answer - "this is not something a child opens" - is
+                        // remembered: ignoring a process for the rest of its life because one read
+                        // failed is how a blocked game ran on unclosed.
                         var inspected = inspector.Inspect(process);
-                        if (inspected is null || !ApplicationCatalogPolicy.IsUserManageable(inspected))
+                        if (inspected is null) continue;
+                        if (!ApplicationCatalogPolicy.IsUserManageable(inspected))
                         {
                             _ignored.Add(process.Id);
                             continue;

@@ -11,11 +11,24 @@ public sealed class ApplicationInspector(
     ApplicationIconExtractor iconExtractor,
     ILogger<ApplicationInspector> logger)
 {
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+
+    /// <summary>
+    /// What a running process is, or null when it cannot be told yet.
+    ///
+    /// The path comes from <c>QueryFullProcessImageName</c> on a limited-information handle, the
+    /// same call the tray agent makes, and never from <see cref="Process.MainModule"/>. Reading
+    /// the main module walks the process's loader list, which does not exist yet in a process
+    /// that is still starting - and Steam starts its games suspended to inject the overlay. The
+    /// agent then counted cs2 by its window while the service, which had failed to read the same
+    /// process once, never looked at it again, and a two-hour limit ran on until the schedule
+    /// closed the PC. The image name is known from the moment the process exists.
+    /// </summary>
     public ApplicationDescriptor? Inspect(Process process, bool includeHash = false)
     {
         try
         {
-            var path = process.MainModule?.FileName;
+            var path = ReadProcessPath(process.Id);
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
             var descriptor = InspectPath(path, includeHash);
             return new ApplicationDescriptor
@@ -28,12 +41,13 @@ public sealed class ApplicationInspector(
                 Company = descriptor.Company,
                 SignaturePublisher = descriptor.SignaturePublisher,
                 FileVersion = descriptor.FileVersion,
-                PackageFamilyName = ReadPackageFamilyName(process),
+                PackageFamilyName = ReadPackageFamilyName(process.Id),
                 Sha256 = descriptor.Sha256,
                 IconPngBase64 = descriptor.IconPngBase64
             };
         }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception
+                                              or NotSupportedException or IOException or UnauthorizedAccessException)
         {
             logger.LogDebug(exception, "Could not inspect process {ProcessId}.", process.Id);
             return null;
@@ -72,26 +86,39 @@ public sealed class ApplicationInspector(
 #pragma warning restore SYSLIB0026, SYSLIB0057
             return certificate.GetNameInfo(X509NameType.SimpleName, false);
         }
-        catch (CryptographicException)
+        catch (Exception exception) when (exception is CryptographicException or IOException
+                                          or UnauthorizedAccessException or ArgumentException)
         {
             return null;
         }
     }
 
-    private static string? ReadPackageFamilyName(Process process)
+    private static string? ReadProcessPath(int processId)
     {
+        var handle = OpenProcess(ProcessQueryLimitedInformation, false, (uint)processId);
+        if (handle == IntPtr.Zero) return null;
+        try
+        {
+            var capacity = 32_768;
+            var value = new StringBuilder(capacity);
+            return QueryFullProcessImageName(handle, 0, value, ref capacity) ? value.ToString() : null;
+        }
+        finally { CloseHandle(handle); }
+    }
+
+    private static string? ReadPackageFamilyName(int processId)
+    {
+        var handle = OpenProcess(ProcessQueryLimitedInformation, false, (uint)processId);
+        if (handle == IntPtr.Zero) return null;
         try
         {
             var length = 0;
-            var result = GetPackageFamilyName(process.Handle, ref length, null);
+            var result = GetPackageFamilyName(handle, ref length, null);
             if (result != 122 || length <= 1) return null;
             var value = new StringBuilder(length);
-            return GetPackageFamilyName(process.Handle, ref length, value) == 0 ? value.ToString() : null;
+            return GetPackageFamilyName(handle, ref length, value) == 0 ? value.ToString() : null;
         }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            return null;
-        }
+        finally { CloseHandle(handle); }
     }
 
     private static string First(params string?[] values) =>
@@ -101,4 +128,12 @@ public sealed class ApplicationInspector(
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetPackageFamilyName(IntPtr process, ref int packageFamilyNameLength, StringBuilder? packageFamilyName);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
+    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder executableName, ref int size);
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
 }
