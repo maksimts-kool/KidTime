@@ -9,9 +9,9 @@ import { Input } from "@/components/ui/input";
  * `<input type="time">` draws whatever clock the browser's locale uses, so a parent on an
  * English-US browser was handed AM/PM for a schedule the PC enforces on a 24-hour clock - and no
  * attribute changes that. This is a plain text field instead: digits only, the colon put in as you
- * type ("1430" reads 14:30), and a short entry finished on blur ("9" becomes 09:00). The value
- * handed upward is the text as it stands, so an unfinished time fails the editor's own check
- * rather than being guessed at.
+ * type ("1430" reads 14:30), and a short entry finished on blur ("9" becomes 09:00) - and read
+ * the same way by anything that saves it, so Enter before leaving the field loses nothing. Text
+ * that is no time at all ("25", "9:75") fails the editor's own check rather than being guessed at.
  */
 export function TimeInput({
   value,
@@ -52,10 +52,14 @@ export function TimeInput({
   );
 }
 
-/** Keeps the digits and puts the colon in after the hours. */
+/**
+ * Keeps the digits and puts the colon in before the last two, so the field always shows the time
+ * it will be read as: "930" is 9:30 and "1430" is 14:30. Putting it after the first two instead
+ * showed "14:3" half-way through typing 14:30 - a time that reads as 01:43.
+ */
 function maskTime(raw: string) {
   const digits = raw.replace(/\D/g, "").slice(0, 4);
-  return digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits;
+  return digits.length > 2 ? `${digits.slice(0, -2)}:${digits.slice(-2)}` : digits;
 }
 
 /** "9" → "09:00", "930" → "09:30", "14:30" → "14:30"; null for anything that is not a time. */

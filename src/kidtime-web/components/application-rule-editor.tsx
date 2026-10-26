@@ -4,17 +4,15 @@ import { appPath } from "@/lib/paths";
 import { FormEvent, useState } from "react";
 import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
-import type { WeeklySchedule } from "@/lib/types";
-import { editableToSchedule, scheduleToEditable, validateEditableSchedule, WeeklyScheduleEditor } from "./weekly-schedule-editor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SwitchField } from "@/components/ui/switch";
 
-export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSeconds, schedule }: { applicationId: string; blocked: boolean; dailyLimitSeconds: number | null; schedule: WeeklySchedule }) {
+/** Block and daily limit; the schedule card above edits the schedule in popups of its own. */
+export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSeconds }: { applicationId: string; blocked: boolean; dailyLimitSeconds: number | null }) {
   const router = useRouter();
-  const [days, setDays] = useState(() => scheduleToEditable(schedule));
   const [isBlocked, setIsBlocked] = useState(blocked);
   const [limitEnabled, setLimitEnabled] = useState(dailyLimitSeconds != null);
   const [busy, setBusy] = useState(false);
@@ -22,20 +20,15 @@ export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSecond
   const [error, setError] = useState("");
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setSaved(false); setError("");
-    const scheduleError = validateEditableSchedule(days);
-    if (scheduleError) {
-      setError(scheduleError);
-      return;
-    }
     setBusy(true);
     const data = new FormData(event.currentTarget);
     try {
       const result = await fetch(appPath(`/api/backend/applications/${applicationId}/rules`), {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ manuallyBlocked: isBlocked, dailyLimitSeconds: limitEnabled ? Number(data.get("hours")) * 3600 + Number(data.get("minutes")) * 60 : null, schedule: editableToSchedule(days) }),
+        body: JSON.stringify({ manuallyBlocked: isBlocked, dailyLimitSeconds: limitEnabled ? Number(data.get("hours")) * 3600 + Number(data.get("minutes")) * 60 : null }),
       });
       if (!result.ok) {
-        setError(result.status === 400 ? "Check the limit and schedule values, then try again." : "The application rule could not be saved.");
+        setError(result.status === 400 ? "Check the limit, then try again." : "The application rule could not be saved.");
         return;
       }
       setSaved(true);
@@ -58,11 +51,6 @@ export function ApplicationRuleEditor({ applicationId, blocked, dailyLimitSecond
             onCheckedChange={setIsBlocked}
           />
         </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Weekly schedule</CardTitle><CardDescription>Add multiple non-overlapping access ranges. The application closes when its current allowed range ends.</CardDescription></CardHeader>
-        <CardContent><WeeklyScheduleEditor days={days} onChange={setDays} /><p className="mt-3 text-xs text-muted-foreground">Leave every day disabled to allow the application at all times.</p></CardContent>
       </Card>
 
       <Card>

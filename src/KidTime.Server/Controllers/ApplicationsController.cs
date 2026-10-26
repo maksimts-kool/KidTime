@@ -21,7 +21,8 @@ public sealed class ApplicationsController(
     public sealed record UpdateApplicationRuleRequest(
         bool ManuallyBlocked,
         int? DailyLimitSeconds,
-        WeeklySchedule Schedule);
+        // Null keeps the stored schedule; see PUT schedule.
+        WeeklySchedule? Schedule = null);
 
     [HttpGet]
     public async Task<IActionResult> List(Guid? deviceId, string? search, CancellationToken cancellationToken)
@@ -156,17 +157,43 @@ public sealed class ApplicationsController(
         CancellationToken cancellationToken)
     {
         if (request.DailyLimitSeconds is < 60 or > 86_400) return BadRequest("Daily limit must be 60-86400 seconds.");
-        if (ScheduleValidator.Validate(request.Schedule) is { } scheduleError) return BadRequest(scheduleError);
+        if (request.Schedule is not null && ScheduleValidator.Validate(request.Schedule) is { } scheduleError)
+            return BadRequest(scheduleError);
         var item = await dbContext.DeviceApplications.Include(x => x.Rule)
             .SingleOrDefaultAsync(x => x.Id == deviceApplicationId, cancellationToken);
         if (item is null) return NotFound();
         item.Rule.ManuallyBlocked = request.ManuallyBlocked;
         item.Rule.DailyLimitSeconds = request.DailyLimitSeconds;
-        item.Rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(request.Schedule);
+        if (request.Schedule is not null) item.Rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(request.Schedule);
         item.Rule.UpdatedAtUtc = timeProvider.GetUtcNow();
         var deviceRule = await dbContext.DeviceRules.SingleAsync(x => x.DeviceId == item.DeviceId, cancellationToken);
         deviceRule.Revision++;
         deviceRule.UpdatedAtUtc = timeProvider.GetUtcNow();
+        var command = new DeviceCommand { DeviceId = item.DeviceId, Type = "RulesChanged" };
+        dbContext.DeviceCommands.Add(command);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await hubContext.Clients.Group(DeviceHub.GroupName(item.DeviceId))
+            .SendAsync("Command", new { command.Id, command.Type }, cancellationToken);
+        return NoContent();
+    }
+
+    /// <summary>Replaces one application's weekly schedule and nothing else.</summary>
+    [HttpPut("{deviceApplicationId:guid}/schedule")]
+    public async Task<IActionResult> UpdateSchedule(
+        Guid deviceApplicationId,
+        WeeklySchedule schedule,
+        CancellationToken cancellationToken)
+    {
+        if (ScheduleValidator.Validate(schedule) is { } scheduleError) return BadRequest(scheduleError);
+        var item = await dbContext.DeviceApplications.Include(x => x.Rule)
+            .SingleOrDefaultAsync(x => x.Id == deviceApplicationId, cancellationToken);
+        if (item is null) return NotFound();
+        var now = timeProvider.GetUtcNow();
+        item.Rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(schedule);
+        item.Rule.UpdatedAtUtc = now;
+        var deviceRule = await dbContext.DeviceRules.SingleAsync(x => x.DeviceId == item.DeviceId, cancellationToken);
+        deviceRule.Revision++;
+        deviceRule.UpdatedAtUtc = now;
         var command = new DeviceCommand { DeviceId = item.DeviceId, Type = "RulesChanged" };
         dbContext.DeviceCommands.Add(command);
         await dbContext.SaveChangesAsync(cancellationToken);

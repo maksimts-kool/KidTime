@@ -27,7 +27,9 @@ public sealed class DevicesController(
     public sealed record UpdateDeviceRuleRequest(
         int? DailyLimitSeconds,
         int IdleThresholdSeconds,
-        WeeklySchedule Schedule,
+        // Null keeps the stored schedule: the panel edits it on its own, in a popup that saves
+        // through PUT schedule, so the rest of the rule form no longer carries it.
+        WeeklySchedule? Schedule,
         string? ControlledUserSid,
         AgentLanguage? Language = null,
         bool? OpenWindowAtSignIn = null);
@@ -175,7 +177,8 @@ public sealed class DevicesController(
         var rule = await dbContext.DeviceRules.SingleOrDefaultAsync(x => x.DeviceId == deviceId, cancellationToken);
         if (rule is null) return NotFound();
         if (request.DailyLimitSeconds is < 60 or > 86_400) return BadRequest("Daily limit must be 60-86400 seconds.");
-        if (ScheduleValidator.Validate(request.Schedule) is { } scheduleError) return BadRequest(scheduleError);
+        if (request.Schedule is not null && ScheduleValidator.Validate(request.Schedule) is { } scheduleError)
+            return BadRequest(scheduleError);
 
         var device = await dbContext.Devices.AsNoTracking().SingleAsync(x => x.Id == deviceId, cancellationToken);
         var users = DeserializeWindowsUsers(device.WindowsUsersJson);
@@ -196,11 +199,29 @@ public sealed class DevicesController(
         rule.IdleThresholdSeconds = Math.Clamp(request.IdleThresholdSeconds, 30, 3_600);
         rule.Language = request.Language ?? rule.Language;
         rule.OpenWindowAtSignIn = request.OpenWindowAtSignIn ?? rule.OpenWindowAtSignIn;
-        rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(request.Schedule);
+        if (request.Schedule is not null) rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(request.Schedule);
         rule.ControlledUserSid = selectedUser?.Sid;
         rule.ControlledUserName = selectedUser?.AccountName;
         await MarkRulesChangedAsync(rule, cancellationToken);
         return Ok(await snapshots.CreateAsync(deviceId, cancellationToken));
+    }
+
+    /// <summary>
+    /// Replaces the PC's weekly schedule and nothing else. The panel adds and edits ranges in
+    /// popups that save at once, so each one is a whole-week write of the week as the popup left it.
+    /// </summary>
+    [HttpPut("{deviceId:guid}/schedule")]
+    public async Task<IActionResult> UpdateSchedule(
+        Guid deviceId,
+        WeeklySchedule schedule,
+        CancellationToken cancellationToken)
+    {
+        var rule = await dbContext.DeviceRules.SingleOrDefaultAsync(x => x.DeviceId == deviceId, cancellationToken);
+        if (rule is null) return NotFound();
+        if (ScheduleValidator.Validate(schedule) is { } scheduleError) return BadRequest(scheduleError);
+        rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(schedule);
+        await MarkRulesChangedAsync(rule, cancellationToken);
+        return NoContent();
     }
 
     /// <summary>

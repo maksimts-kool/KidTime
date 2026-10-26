@@ -349,8 +349,8 @@ waiting to be spent.
 
 A holiday week, a trip, exam season: dates on which the PC or one application runs on a schedule
 and daily limit of its own, and then goes back to the weekly rules with nobody remembering to
-change them. The panel calls them **Special periods** and offers them below the weekly rules on the
-device page and on each application's page.
+change them. The panel calls them **Special periods** and draws them as the second tab of the
+schedule card, beside **Weekly schedule**, on the device page and on each application's page.
 
 1. They live in their own `SpecialPeriods` table (device, optional application, name, first and
    last device-local date inclusive, the days of a schedule, a daily limit). Adding or removing one
@@ -1183,11 +1183,22 @@ companion's query-log endpoints are therefore deliberately never called. See
   point. The exception escapes the window constructor, `AgentApplicationHost` never finishes, and
   the child is left with no tray icon, no screen-time window, and no notifications while
   enforcement carries on without them. Guard the handler; do not rely on attribute order.
+- **A schedule card shows; popups change.** `ScheduleCard` is the PC's or an application's schedule
+  as read-only week bars (`WeekView`) with the special periods on a second tab. Adding a range
+  (to any set of days at once), editing a day, clearing the week, and adding or removing a period
+  each happen in a popup that saves the moment it is confirmed, through `PUT .../schedule` and
+  `api/special-periods`. The card lives outside the rule editor's form and that form no longer
+  sends a schedule - the rules endpoints keep the stored one when it is absent - so neither can
+  overwrite the other's unsaved state. Emptying the last open day is refused in the day popup:
+  a week with no ranges at all means *no schedule*, open at any time, and that has to be asked
+  for by name with **Clear**.
 - **Times of day are typed on a 24-hour clock, never through `<input type="time">`.** The native
   field draws the browser locale's clock, so a parent on an English-US browser was given AM/PM for
   a schedule the PC enforces in 24-hour time, and no attribute changes that.
-  `components/ui/time-input.tsx` is a text field that takes digits, puts the colon in, and finishes
-  a short entry on blur ("9" becomes 09:00). Times the panel *shows* come from the server already
+  `components/ui/time-input.tsx` is a text field that takes digits and puts the colon before the
+  last two, so it always shows the time it will be read as ("930" is 9:30); a short entry is
+  finished on blur ("9" becomes 09:00), and the schedule helpers read the text the same way, so
+  pressing Enter before leaving the field loses nothing. Times the panel *shows* come from the server already
   formatted `HH:mm`.
 - The amount controls at both ends are sliders over the same range, and the range lives in
   `TimeExtensionPolicy` rather than in either UI. `components/ui/slider.tsx` wraps Base UI's parts
@@ -1437,7 +1448,7 @@ rules:
     lists it as given by you, the child is told once on the next sync, and a blocked PC opens for
     those minutes from the moment you gave them;
 31. add a special period from today to a week out with 12:00–15:00 and 18:00–22:00 every day (set
-    one day, then Copy to all days), confirm the devices page names it beside today's hours, that
+    one day, then Copy to all days, in the Add special period popup), confirm the devices page names it beside today's hours, that
     the PC follows those hours today - signed out at 15:00 with the minute's warning before it -
     and that after its last day the weekly schedule is back without anything being changed;
 32. read the server's log with `docker compose logs -f server`: one line per request with the

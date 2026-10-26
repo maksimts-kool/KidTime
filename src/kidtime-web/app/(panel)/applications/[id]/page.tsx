@@ -8,7 +8,7 @@ import { ApplicationIcon } from "@/components/application-icon";
 import { ApplicationRuleEditor } from "@/components/application-rule-editor";
 import { DailyUsageChart } from "@/components/charts/daily-usage-chart";
 import { GiveExtraTime } from "@/components/give-extra-time";
-import { SpecialPeriods } from "@/components/special-periods";
+import { ScheduleCard } from "@/components/schedule-card";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -107,17 +107,19 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
           ))}
         </CardContent>
       </Card>
-      <ApplicationRuleEditor applicationId={id} blocked={detail.rule.manuallyBlocked} dailyLimitSeconds={detail.rule.dailyLimitSeconds} schedule={detail.rule.schedule} />
-      <div className="mt-4">
-        <SpecialPeriods
+      <div className="mb-4">
+        <ScheduleCard
+          scheduleEndpoint={`/api/backend/applications/${id}/schedule`}
+          schedule={detail.rule.schedule}
+          periods={periods}
           deviceId={detail.device.id}
           deviceApplicationId={id}
-          periods={periods}
-          schedule={detail.rule.schedule}
           dailyLimitSeconds={detail.rule.dailyLimitSeconds}
           scope={detail.application.displayName}
+          description="When the application may be used. It closes when its current allowed range ends."
         />
       </div>
+      <ApplicationRuleEditor applicationId={id} blocked={detail.rule.manuallyBlocked} dailyLimitSeconds={detail.rule.dailyLimitSeconds} />
     </>
   );
 }

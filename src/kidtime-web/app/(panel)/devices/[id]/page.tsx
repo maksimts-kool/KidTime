@@ -8,7 +8,7 @@ import { GiveExtraTime } from "@/components/give-extra-time";
 import { PageHeader } from "@/components/page-header";
 import { QuickBlock } from "@/components/quick-block";
 import { RemoveDevice } from "@/components/remove-device";
-import { SpecialPeriods } from "@/components/special-periods";
+import { ScheduleCard } from "@/components/schedule-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -56,16 +56,18 @@ export default async function DevicePage({ params }: { params: Promise<{ id: str
           ))}
         </CardContent>
       </Card>
-      <DeviceRuleEditor deviceId={id} rule={detail.rules} accounts={detail.availableWindowsUsers} />
-      <div className="mt-4">
-        <SpecialPeriods
-          deviceId={id}
-          periods={periods}
+      <div className="mb-4">
+        <ScheduleCard
+          scheduleEndpoint={`/api/backend/devices/${id}/schedule`}
           schedule={detail.rules.schedule}
+          periods={periods}
+          deviceId={id}
           dailyLimitSeconds={detail.rules.dailyLimitSeconds}
           scope="the PC"
+          description="When the PC may be used: the same hours every week, and different ones on holidays or other dates you set."
         />
       </div>
+      <DeviceRuleEditor deviceId={id} rule={detail.rules} accounts={detail.availableWindowsUsers} />
     </>
   );
 }

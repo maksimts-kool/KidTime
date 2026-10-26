@@ -5,16 +5,18 @@ import { FormEvent, useState } from "react";
 import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { agentLanguages, type DeviceRule, type WindowsUserAccount } from "@/lib/types";
-import { editableToSchedule, scheduleToEditable, validateEditableSchedule, WeeklyScheduleEditor } from "./weekly-schedule-editor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SwitchField } from "@/components/ui/switch";
 
+/**
+ * Everything about the PC's rule except its schedule, which the schedule card above edits in
+ * popups and saves on its own - so this form neither sends it nor overwrites it.
+ */
 export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: string; rule: DeviceRule; accounts: WindowsUserAccount[] }) {
   const router = useRouter();
-  const [days, setDays] = useState(() => scheduleToEditable(rule.schedule));
   const [limitEnabled, setLimitEnabled] = useState(rule.dailyLimitSeconds != null);
   const [openAtSignIn, setOpenAtSignIn] = useState(rule.openWindowAtSignIn);
   const [saved, setSaved] = useState(false);
@@ -24,11 +26,6 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaved(false); setError("");
-    const scheduleError = validateEditableSchedule(days);
-    if (scheduleError) {
-      setError(scheduleError);
-      return;
-    }
     setBusy(true);
     const data = new FormData(event.currentTarget);
     const hours = Number(data.get("limitHours"));
@@ -42,11 +39,10 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
           openWindowAtSignIn: openAtSignIn,
           dailyLimitSeconds: limitEnabled ? hours * 3600 + minutes * 60 : null,
           idleThresholdSeconds: Number(data.get("idleMinutes")) * 60,
-          schedule: editableToSchedule(days),
         }),
       });
       if (!response.ok) {
-        setError(response.status === 400 ? "Check the limit, schedule, and idle values, then try again." : "The PC rule could not be saved.");
+        setError(response.status === 400 ? "Check the limit and idle values, then try again." : "The PC rule could not be saved.");
         return;
       }
       setSaved(true);
@@ -119,11 +115,6 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
             onCheckedChange={setOpenAtSignIn}
           />
         </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Weekly schedule</CardTitle><CardDescription>Add as many non-overlapping access ranges as needed. Overnight windows are supported.</CardDescription></CardHeader>
-        <CardContent><WeeklyScheduleEditor days={days} onChange={setDays} /><p className="mt-3 text-xs text-muted-foreground">Leave every day disabled to allow the PC at all times.</p></CardContent>
       </Card>
 
       <Card>

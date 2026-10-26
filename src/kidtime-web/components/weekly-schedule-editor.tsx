@@ -3,7 +3,7 @@
 import { Copy, Plus, Trash2 } from "lucide-react";
 import type { WeeklySchedule } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { TimeInput } from "@/components/ui/time-input";
+import { normalizeTime, TimeInput } from "@/components/ui/time-input";
 import { Separator } from "@/components/ui/separator";
 import { SwitchOption } from "@/components/ui/switch";
 
@@ -31,7 +31,10 @@ export function editableToSchedule(days: EditableDay[]): WeeklySchedule {
       .filter(item => item.enabled)
       .map(item => ({
         day: item.day,
-        windows: item.windows.map(window => ({ start: `${window.start}:00`, end: `${window.end}:00` })),
+        windows: item.windows.map(window => ({
+          start: `${normalizeTime(window.start) ?? window.start}:00`,
+          end: `${normalizeTime(window.end) ?? window.end}:00`,
+        })),
       })),
   };
 }
@@ -197,12 +200,14 @@ function findOverlappingWindowIds(days: EditableDay[]): Set<string> {
   return overlapping;
 }
 
+/**
+ * A typed time in minutes from midnight. Read through `normalizeTime`, so "22" is 22:00 here too:
+ * pressing Enter submits before the field has been left and finished its own short entry.
+ */
 function parseMinutes(value: string): number | null {
-  const match = /^(\d{2}):(\d{2})$/.exec(value);
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (hours > 23 || minutes > 59) return null;
+  const normalized = normalizeTime(value);
+  if (!normalized) return null;
+  const [hours, minutes] = normalized.split(":").map(Number);
   return hours * 60 + minutes;
 }
 

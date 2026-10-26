@@ -11,10 +11,16 @@ import { cn } from "@/lib/utils";
 export function ScheduleStrip({
   windows,
   nowMinute,
+  showScale = true,
+  label,
   className,
 }: {
   windows: string[];
   nowMinute?: number | null;
+  /** The 00-24 marks under the bar; a stack of days draws them once rather than on every row. */
+  showScale?: boolean;
+  /** The bar's accessible name, when it is not today's. */
+  label?: string;
   className?: string;
 }) {
   const segments = windows.flatMap(toSegments);
@@ -25,7 +31,7 @@ export function ScheduleStrip({
         <div
           className="relative h-2.5 w-full overflow-hidden rounded-full bg-muted ring-1 ring-border/70 ring-inset"
           role="img"
-          aria-label={segments.length ? `Allowed today: ${windows.join(", ")}` : "Nothing scheduled today"}
+          aria-label={label ?? (segments.length ? `Allowed today: ${windows.join(", ")}` : "Nothing scheduled today")}
         >
           {segments.map(segment => (
             <span
@@ -43,9 +49,11 @@ export function ScheduleStrip({
           />
         )}
       </div>
-      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground tabular-nums">
-        <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
-      </div>
+      {showScale && (
+        <div className="mt-1 flex justify-between text-[10px] text-muted-foreground tabular-nums">
+          <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+        </div>
+      )}
     </div>
   );
 }
