@@ -40,6 +40,10 @@ public sealed class DevicesController(
         var now = timeProvider.GetUtcNow();
         var latestAgentVersion = updates.GetLatest()?.Manifest.Version;
         var devices = await dbContext.Devices.AsNoTracking().Include(x => x.Rule).ToListAsync(cancellationToken);
+        var periods = (await RuleSnapshotFactory.ActivePeriods(dbContext.SpecialPeriods.AsNoTracking(), now)
+                .Where(period => period.DeviceApplicationId == null)
+                .ToListAsync(cancellationToken))
+            .ToLookup(period => period.DeviceId);
         var faultCounts = await dbContext.DeviceDiagnosticEvents.AsNoTracking()
             .Where(item => item.ResolvedAtUtc == null)
             .GroupBy(item => item.DeviceId)
@@ -53,6 +57,9 @@ public sealed class DevicesController(
                 .Where(x => x.DeviceId == device.Id && x.LocalDate == localDate)
                 .Select(x => (int?)x.ActiveSeconds)
                 .SingleOrDefaultAsync(cancellationToken) ?? 0;
+            var schedule = RuleSnapshotFactory.Compose(device.Rule.ScheduleJson, periods[device.Id]);
+            // A holiday can carry a limit of its own, so the card reads the one in force today.
+            var dailyLimit = RuleEvaluator.EffectiveDailyLimitSeconds(device.Rule.DailyLimitSeconds, schedule, null, localDate);
             result.Add(new
             {
                 device.Id,
@@ -73,13 +80,9 @@ public sealed class DevicesController(
                 device.AgentUpdateCheckedAtUtc,
                 isAgentUpToDate = updates.IsCurrent(device.AgentVersion),
                 todayActiveSeconds = today,
-                dailyLimitSeconds = device.Rule.DailyLimitSeconds,
-                remainingSeconds = device.Rule.DailyLimitSeconds is int limit ? Math.Max(0, limit - today) : (int?)null,
-                schedule = DescribeSchedule(
-                    RuleSnapshotFactory.DeserializeSchedule(device.Rule.ScheduleJson),
-                    device.TimeZoneId,
-                    localDate,
-                    now),
+                dailyLimitSeconds = dailyLimit,
+                remainingSeconds = dailyLimit is int limit ? Math.Max(0, limit - today) : (int?)null,
+                schedule = DescribeSchedule(schedule, device.TimeZoneId, localDate, now),
                 manuallyBlocked = device.Rule.ManuallyBlocked &&
                     (device.Rule.ManualBlockUntilUtc is null || device.Rule.ManualBlockUntilUtc > now),
                 device.Rule.ManualBlockUntilUtc,
@@ -220,9 +223,15 @@ public sealed class DevicesController(
     {
         var withinWindow = RuleEvaluator.IsWithinSchedule(schedule, now, timeZoneId);
         var localNow = RuleEvaluator.ToLocalTime(now, timeZoneId);
+        var period = schedule.OverrideOn(localDate);
         return new
         {
             configured = schedule.IsConfigured,
+            // The holiday or trip whose rules are in force today, so the card can say why today
+            // does not look like the weekly schedule.
+            specialPeriod = period is null
+                ? null
+                : new { period.Name, endDate = period.EndDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) },
             withinWindow,
             localDate = localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             nowMinuteOfDay = localNow.Hour * 60 + localNow.Minute,
@@ -232,7 +241,7 @@ public sealed class DevicesController(
             opensAtLocal = withinWindow
                 ? null
                 : ToLocalStamp(RuleEvaluator.FindNextAllowanceStartUtc(schedule, now, timeZoneId), timeZoneId),
-            todayWindows = schedule.Days
+            todayWindows = (period?.Days ?? schedule.Days)
                 .Where(day => day.Day == localDate.DayOfWeek)
                 .SelectMany(day => day.Windows)
                 .OrderBy(window => window.Start)

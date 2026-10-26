@@ -376,7 +376,7 @@ public sealed class RuleEvaluatorTests
         };
 
         Assert.Null(RuleEvaluator.EffectiveDailyLimitSeconds(
-            rule.DailyLimitSeconds, rule.Bonus, DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime)));
+            rule.DailyLimitSeconds, rule.Schedule, rule.Bonus, DateOnly.FromDateTime(MondayNoonUtc.UtcDateTime)));
         Assert.True(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 100_000).IsAllowed);
     }
 
@@ -497,6 +497,123 @@ public sealed class RuleEvaluatorTests
         Assert.Null(RuleEvaluator.FindPendingDeviceRestriction(
             NewDeviceRule(), MondayNoonUtc, 3600, countingActiveTime: true, null));
     }
+
+    [Fact]
+    public void A_special_period_replaces_the_weekly_schedule_on_its_dates_only()
+    {
+        // School week: mornings only. Holiday week from Monday 24 August: 12-15 and 18-22 daily.
+        var schedule = Holiday(Schedule((DayOfWeek.Monday, "08:00", "10:00")),
+            new DateOnly(2026, 8, 24), new DateOnly(2026, 8, 30),
+            EveryDay(("12:00", "15:00"), ("18:00", "22:00")));
+        var rule = new DeviceRuleSnapshot { TimeZoneId = "UTC", Schedule = schedule };
+
+        Assert.True(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 0).IsAllowed);
+        Assert.False(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc.AddHours(-3), 0).IsAllowed);
+        Assert.True(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc.AddDays(6).AddHours(9), 0).IsAllowed);
+
+        // The Monday after the holiday is back on the school week.
+        var nextMonday = MondayNoonUtc.AddDays(7);
+        Assert.False(RuleEvaluator.EvaluateDevice(rule, nextMonday, 0).IsAllowed);
+        Assert.True(RuleEvaluator.EvaluateDevice(rule, nextMonday.AddHours(-3), 0).IsAllowed);
+    }
+
+    [Fact]
+    public void A_special_period_replaces_the_daily_limit_on_its_dates_only()
+    {
+        var schedule = Holiday(new WeeklySchedule(),
+            new DateOnly(2026, 8, 24), new DateOnly(2026, 8, 24), [], dailyLimitSeconds: 4 * 3600);
+        var rule = new DeviceRuleSnapshot { TimeZoneId = "UTC", DailyLimitSeconds = 3600, Schedule = schedule };
+
+        Assert.True(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 2 * 3600).IsAllowed);
+        Assert.False(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 4 * 3600).IsAllowed);
+        Assert.False(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc.AddDays(1), 2 * 3600).IsAllowed);
+        Assert.Equal(4 * 3600 + 600, RuleEvaluator.EffectiveDailyLimitSeconds(
+            rule.DailyLimitSeconds, rule.Schedule, new TimeBonus(new DateOnly(2026, 8, 24), 600), new DateOnly(2026, 8, 24)));
+    }
+
+    [Fact]
+    public void A_special_period_with_no_limit_lifts_the_regular_one()
+    {
+        var schedule = Holiday(new WeeklySchedule(),
+            new DateOnly(2026, 8, 24), new DateOnly(2026, 8, 24), [], dailyLimitSeconds: null);
+        var rule = new DeviceRuleSnapshot { TimeZoneId = "UTC", DailyLimitSeconds = 3600, Schedule = schedule };
+
+        Assert.True(RuleEvaluator.EvaluateDevice(rule, MondayNoonUtc, 10 * 3600).IsAllowed);
+    }
+
+    [Fact]
+    public void An_overnight_window_belongs_to_the_schedule_of_the_evening_it_started()
+    {
+        // Regular week: 20:00-02:00 every night. Holiday on Monday 24 only: 12:00-15:00.
+        var schedule = Holiday(new WeeklySchedule { Days = EveryDay(("20:00", "02:00")) },
+            new DateOnly(2026, 8, 24), new DateOnly(2026, 8, 24), EveryDay(("12:00", "15:00")));
+        var rule = new DeviceRuleSnapshot { TimeZoneId = "UTC", Schedule = schedule };
+        var mondayMidnight = new DateTimeOffset(2026, 8, 24, 0, 0, 0, TimeSpan.Zero);
+
+        // Sunday's late window still runs into the first morning of the holiday...
+        Assert.True(RuleEvaluator.EvaluateDevice(rule, mondayMidnight.AddHours(1), 0).IsAllowed);
+        // ...but Monday evening is the holiday's, which has no late window to carry into Tuesday.
+        Assert.False(RuleEvaluator.EvaluateDevice(rule, mondayMidnight.AddHours(21), 0).IsAllowed);
+        Assert.False(RuleEvaluator.EvaluateDevice(rule, mondayMidnight.AddHours(25), 0).IsAllowed);
+        Assert.True(RuleEvaluator.EvaluateDevice(rule, mondayMidnight.AddHours(44), 0).IsAllowed);
+    }
+
+    [Fact]
+    public void The_allowance_ends_where_a_special_period_begins()
+    {
+        // No regular schedule, so Sunday is open all day; the holiday from Monday opens at noon.
+        var schedule = Holiday(new WeeklySchedule(),
+            new DateOnly(2026, 8, 24), new DateOnly(2026, 8, 30), EveryDay(("12:00", "15:00")));
+        var sundayEvening = new DateTimeOffset(2026, 8, 23, 23, 0, 0, TimeSpan.Zero);
+
+        Assert.Equal(
+            new DateTimeOffset(2026, 8, 24, 0, 0, 0, TimeSpan.Zero),
+            RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, sundayEvening, "UTC"));
+        Assert.Equal(
+            new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero),
+            RuleEvaluator.FindNextAllowanceStartUtc(schedule, sundayEvening.AddHours(2), "UTC"));
+    }
+
+    [Fact]
+    public void Special_periods_may_not_overlap_or_run_backwards()
+    {
+        var holiday = new ScheduleOverride
+        {
+            Name = "Holiday", StartDate = new DateOnly(2026, 12, 24), EndDate = new DateOnly(2027, 1, 6)
+        };
+
+        Assert.Null(ScheduleValidator.ValidateOverride(holiday, []));
+        Assert.NotNull(ScheduleValidator.ValidateOverride(
+            new ScheduleOverride { Name = "Trip", StartDate = new DateOnly(2027, 1, 6), EndDate = new DateOnly(2027, 1, 9) },
+            [holiday]));
+        Assert.Null(ScheduleValidator.ValidateOverride(
+            new ScheduleOverride { Name = "Trip", StartDate = new DateOnly(2027, 1, 7), EndDate = new DateOnly(2027, 1, 9) },
+            [holiday]));
+        Assert.NotNull(ScheduleValidator.ValidateOverride(
+            new ScheduleOverride { Name = "Backwards", StartDate = new DateOnly(2027, 1, 9), EndDate = new DateOnly(2027, 1, 7) },
+            []));
+    }
+
+    private static WeeklySchedule Holiday(
+        WeeklySchedule regular,
+        DateOnly start,
+        DateOnly end,
+        List<DaySchedule> days,
+        int? dailyLimitSeconds = null) => new()
+    {
+        Days = regular.Days,
+        Overrides = [new ScheduleOverride
+        {
+            Name = "Holiday", StartDate = start, EndDate = end, Days = days, DailyLimitSeconds = dailyLimitSeconds
+        }]
+    };
+
+    private static List<DaySchedule> EveryDay(params (string Start, string End)[] windows) =>
+        Enum.GetValues<DayOfWeek>().Select(day => new DaySchedule
+        {
+            Day = day,
+            Windows = windows.Select(window => new TimeWindow(TimeOnly.Parse(window.Start), TimeOnly.Parse(window.End))).ToList()
+        }).ToList();
 
     /// <summary>The expensive scan the caller owns; see FindPendingDeviceRestriction.</summary>
     private static DateTimeOffset? AllowanceEnd(DeviceRuleSnapshot rule, DateTimeOffset utcNow) =>

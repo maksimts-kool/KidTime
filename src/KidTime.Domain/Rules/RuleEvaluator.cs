@@ -30,7 +30,7 @@ public static class RuleEvaluator
         }
 
         var localNow = TimeZoneInfo.ConvertTime(utcNow, timeZone).DateTime;
-        if (EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Bonus, DateOnly.FromDateTime(localNow))
+        if (EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Schedule, rule.Bonus, DateOnly.FromDateTime(localNow))
                 is int limit
             && activeSecondsToday >= limit)
         {
@@ -73,7 +73,7 @@ public static class RuleEvaluator
         }
 
         var localNow = TimeZoneInfo.ConvertTime(utcNow, timeZone).DateTime;
-        if (EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Bonus, DateOnly.FromDateTime(localNow))
+        if (EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Schedule, rule.Bonus, DateOnly.FromDateTime(localNow))
                 is int limit
             && activeSecondsToday >= limit)
         {
@@ -97,13 +97,21 @@ public static class RuleEvaluator
     }
 
     /// <summary>
-    /// The daily limit that actually applies on a device-local date: the parent's limit plus any
-    /// extra time granted for that date. Every path that reads a daily limit - enforcement, the
-    /// running-out reminders, the child's own window - has to go through here, or the child is
-    /// closed down at the original limit while being told they were given more.
+    /// The daily limit that actually applies on a device-local date: the parent's limit - or the
+    /// one a special period such as a holiday sets for that date instead - plus any extra time
+    /// granted for that date. Every path that reads a daily limit - enforcement, the running-out
+    /// reminders, the child's own window, the panel - has to go through here, or the child is
+    /// closed down at a limit other than the one they are being shown.
     /// </summary>
-    public static int? EffectiveDailyLimitSeconds(int? dailyLimitSeconds, TimeBonus? bonus, DateOnly localDate) =>
-        dailyLimitSeconds is int limit ? limit + TimeBonus.SecondsOn(bonus, localDate) : null;
+    public static int? EffectiveDailyLimitSeconds(
+        int? dailyLimitSeconds,
+        WeeklySchedule schedule,
+        TimeBonus? bonus,
+        DateOnly localDate)
+    {
+        var baseLimit = schedule.OverrideOn(localDate) is { } period ? period.DailyLimitSeconds : dailyLimitSeconds;
+        return baseLimit is int limit ? limit + TimeBonus.SecondsOn(bonus, localDate) : null;
+    }
 
     /// <summary>
     /// The restriction the PC is heading into, and how many seconds are left before it starts.
@@ -146,7 +154,7 @@ public static class RuleEvaluator
 
         var localDate = GetLocalDate(utcNow, rule.TimeZoneId);
         if (countingActiveTime
-            && EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Bonus, localDate) is int limit)
+            && EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Schedule, rule.Bonus, localDate) is int limit)
         {
             // Evaluating with the limit already spent is what produces the wording and the
             // available-at instant the child will be shown when it actually is.

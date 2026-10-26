@@ -20,7 +20,10 @@ export type ScheduleState = {
   /** Device-local stamps, "2026-08-31T21:00" - never instants; see lib/schedule.ts. */
   closesAtLocal: string | null;
   opensAtLocal: string | null;
+  /** Today's windows - the special period's when one is in force. */
   todayWindows: string[];
+  /** The holiday or trip whose rules apply today, if any; `endDate` is its last day, inclusive. */
+  specialPeriod: { name: string; endDate: string } | null;
 };
 
 export type DeviceSummary = {
@@ -185,6 +188,31 @@ export type TimeExtensionRequest = {
   status: "Pending" | "Approved" | "Denied";
   requestedAtUtc: string;
   decidedAtUtc: string | null;
+  /** Time the parent gave from the panel without being asked; `requestedMinutes` is then 0. */
+  initiatedByParent: boolean;
+};
+
+/**
+ * A stretch of dates - a holiday, a trip - on which a PC or one application runs on its own
+ * schedule and daily limit instead of the weekly ones. Dates are the PC's own, inclusive.
+ */
+export type SpecialPeriod = {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  /** No days at all means no schedule during the period. */
+  schedule: WeeklySchedule;
+  /** Replaces the daily limit for the period; null means no limit. */
+  dailyLimitSeconds: number | null;
+  isActive: boolean;
+};
+
+/** Something a parent can give extra time to: the PC itself, or one application on it. */
+export type ExtraTimeTarget = {
+  deviceId: string;
+  deviceApplicationId: string | null;
+  label: string;
 };
 
 /**

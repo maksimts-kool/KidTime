@@ -1,9 +1,9 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { Copy, Plus, Trash2 } from "lucide-react";
 import type { WeeklySchedule } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { TimeInput } from "@/components/ui/time-input";
 import { Separator } from "@/components/ui/separator";
 import { SwitchOption } from "@/components/ui/switch";
 
@@ -73,6 +73,16 @@ export function WeeklyScheduleEditor({ days, onChange }: { days: EditableDay[]; 
     });
   }
 
+  /** One day's ranges onto every day - a holiday is usually the same hours all week. */
+  function copyToAllDays(dayIndex: number) {
+    const source = days[dayIndex];
+    onChange(days.map(day => ({
+      day: day.day,
+      enabled: source.enabled,
+      windows: source.windows.map((window, index) => ({ id: `${day.day}-${Date.now()}-${index}`, start: window.start, end: window.end })),
+    })));
+  }
+
   function removeWindow(dayIndex: number, windowId: string) {
     const windows = days[dayIndex].windows.filter(window => window.id !== windowId);
     updateDay(dayIndex, { windows, enabled: windows.length > 0 });
@@ -101,26 +111,24 @@ export function WeeklyScheduleEditor({ days, onChange }: { days: EditableDay[]; 
                 return (
                   <div key={window.id}>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Input
-                        className="w-full sm:w-32"
+                      <TimeInput
+                        className="w-full tabular-nums sm:w-24"
                         aria-label={`${item.day} range ${windowIndex + 1} start`}
                         aria-invalid={overlaps}
-                        type="time"
                         value={window.start}
                         disabled={!item.enabled}
                         required={item.enabled}
-                        onChange={event => updateWindow(dayIndex, window.id, { start: event.target.value })}
+                        onValueChange={value => updateWindow(dayIndex, window.id, { start: value })}
                       />
                       <span>to</span>
-                      <Input
-                        className="w-full sm:w-32"
+                      <TimeInput
+                        className="w-full tabular-nums sm:w-24"
                         aria-label={`${item.day} range ${windowIndex + 1} end`}
                         aria-invalid={overlaps}
-                        type="time"
                         value={window.end}
                         disabled={!item.enabled}
                         required={item.enabled}
-                        onChange={event => updateWindow(dayIndex, window.id, { end: event.target.value })}
+                        onValueChange={value => updateWindow(dayIndex, window.id, { end: value })}
                       />
                       <Button
                         type="button"
@@ -137,9 +145,14 @@ export function WeeklyScheduleEditor({ days, onChange }: { days: EditableDay[]; 
                   </div>
                 );
               })}
-              <Button type="button" variant="outline" size="sm" className="w-fit" onClick={() => addWindow(dayIndex)}>
-                <Plus data-icon="inline-start" /> Add time range
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" size="sm" className="w-fit" onClick={() => addWindow(dayIndex)}>
+                  <Plus data-icon="inline-start" /> Add time range
+                </Button>
+                <Button type="button" variant="ghost" size="sm" className="w-fit text-muted-foreground" onClick={() => copyToAllDays(dayIndex)}>
+                  <Copy data-icon="inline-start" /> Copy to all days
+                </Button>
+              </div>
             </div>
           </div>
         </div>

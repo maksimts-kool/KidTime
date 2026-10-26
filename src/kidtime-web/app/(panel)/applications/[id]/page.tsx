@@ -3,10 +3,12 @@ import { ArrowLeft, BadgeCheck, CalendarRange, Clock3, FileText, Flame, FolderOp
 import { backendFetch } from "@/lib/backend";
 import { formatDuration } from "@/lib/format";
 import { busiestDay, changeAgainst, formatDayLabel, formatWeekday } from "@/lib/chart";
-import type { DailyUsage, WeeklySchedule } from "@/lib/types";
+import type { DailyUsage, SpecialPeriod, WeeklySchedule } from "@/lib/types";
 import { ApplicationIcon } from "@/components/application-icon";
 import { ApplicationRuleEditor } from "@/components/application-rule-editor";
 import { DailyUsageChart } from "@/components/charts/daily-usage-chart";
+import { GiveExtraTime } from "@/components/give-extra-time";
+import { SpecialPeriods } from "@/components/special-periods";
 import { StatCard } from "@/components/stat-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +41,8 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
     backendFetch<Detail>(`/api/applications/${id}`),
     backendFetch<ApplicationStatistics>(`/api/statistics/applications/${id}?days=${days}`),
   ]);
+  const periods = await backendFetch<SpecialPeriod[]>(
+    `/api/special-periods?deviceId=${detail.device.id}&deviceApplicationId=${id}`);
   // The last day of the range is the PC's own today, which is the one the child is still adding to.
   const today = statistics.to;
   const todaySeconds = statistics.daily.find(item => item.date === today)?.activeSeconds ?? 0;
@@ -54,7 +58,8 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
       <Button variant="ghost" size="sm" className="mb-4 -ml-2" render={<Link href="/applications" />}><ArrowLeft data-icon="inline-start" />Applications</Button>
       <div className="mb-6 flex items-center gap-4">
         <ApplicationIcon applicationId={id} displayName={detail.application.displayName} hasIcon={detail.hasIcon} size="large" />
-        <div className="min-w-0"><p className="mb-1 text-xs font-medium tracking-wide text-primary uppercase">{detail.device.name}</p><h1 className="truncate text-2xl font-semibold tracking-tight sm:text-3xl">{detail.application.displayName}</h1><p className="mt-1 truncate text-sm text-muted-foreground">{detail.application.signaturePublisher ?? detail.application.company ?? detail.application.executableName}</p></div>
+        <div className="min-w-0 flex-1"><p className="mb-1 text-xs font-medium tracking-wide text-primary uppercase">{detail.device.name}</p><h1 className="truncate text-2xl font-semibold tracking-tight sm:text-3xl">{detail.application.displayName}</h1><p className="mt-1 truncate text-sm text-muted-foreground">{detail.application.signaturePublisher ?? detail.application.company ?? detail.application.executableName}</p></div>
+        <GiveExtraTime targets={[{ deviceId: detail.device.id, deviceApplicationId: id, label: detail.application.displayName }]} />
       </div>
       <section className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
@@ -103,6 +108,16 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
         </CardContent>
       </Card>
       <ApplicationRuleEditor applicationId={id} blocked={detail.rule.manuallyBlocked} dailyLimitSeconds={detail.rule.dailyLimitSeconds} schedule={detail.rule.schedule} />
+      <div className="mt-4">
+        <SpecialPeriods
+          deviceId={detail.device.id}
+          deviceApplicationId={id}
+          periods={periods}
+          schedule={detail.rule.schedule}
+          dailyLimitSeconds={detail.rule.dailyLimitSeconds}
+          scope={detail.application.displayName}
+        />
+      </div>
     </>
   );
 }

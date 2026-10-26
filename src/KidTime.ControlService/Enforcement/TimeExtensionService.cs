@@ -142,6 +142,22 @@ public sealed class TimeExtensionService(LocalStore store, ILogger<TimeExtension
         if (decisions.Count == 0) return;
         foreach (var decision in decisions)
         {
+            // Time the parent gave unasked has no request here to answer, so it is recorded as one
+            // already answered - which is what the announcement and the child's window both read.
+            if (decision is { FromParent: true, Status: TimeExtensionStatus.Approved, LocalDate: { } grantedOn })
+            {
+                await store.AddParentGrantAsync(new LocalTimeExtension(
+                    decision.RequestId,
+                    grantedOn,
+                    decision.ApplicationIdentityKey,
+                    decision.DisplayName,
+                    0,
+                    Math.Max(0, decision.GrantedMinutes),
+                    TimeExtensionStatus.Approved,
+                    decision.DecidedAtUtc ?? DateTimeOffset.UtcNow), cancellationToken);
+                continue;
+            }
+
             await store.ApplyTimeExtensionDecisionAsync(
                 decision.RequestId,
                 decision.Status,
@@ -172,7 +188,9 @@ public sealed class TimeExtensionService(LocalStore store, ILogger<TimeExtension
         var stored = await store.GetTimeExtensionsAsync(localDate, cancellationToken);
         _latestByScope.Clear();
         foreach (var item in stored) _latestByScope[item.ScopeKey] = item;
-        _requestsToday = stored.Count;
+        // A grant the parent gave unasked is recorded as a request for zero minutes, and the
+        // daily cap bounds how often the child asks - not how often a parent gives.
+        _requestsToday = stored.Count(item => item.RequestedMinutes > 0);
         _loadedDate = localDate;
     }
 }

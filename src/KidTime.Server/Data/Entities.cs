@@ -215,6 +215,14 @@ public sealed class TimeExtension
     public DateTimeOffset ReceivedAtUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? DecidedAtUtc { get; set; }
     public Guid? DecidedByParentUserId { get; set; }
+
+    /// <summary>
+    /// Extra time the parent gave from the panel without being asked. It is stored as an approved
+    /// request for zero minutes so the snapshot, the agent's announcement and the panel's history
+    /// all read it exactly like an answered one, and it is left out of the child's daily cap -
+    /// that cap bounds how often the child may ask, not how often a parent may give.
+    /// </summary>
+    public bool InitiatedByParent { get; set; }
 }
 
 /// <summary>The three states a request can be in, as they are stored and sent.</summary>
@@ -223,4 +231,33 @@ public static class TimeExtensionStatuses
     public const string Pending = "Pending";
     public const string Approved = "Approved";
     public const string Denied = "Denied";
+}
+
+/// <summary>
+/// A stretch of dates on which a PC or one application runs on a schedule and daily limit of its
+/// own - a holiday week, a trip, exam season. It reaches the agent inside the rule snapshot as a
+/// <c>ScheduleOverride</c> on the schedule it replaces, so the PC carries its upcoming periods
+/// offline and switches over at midnight on its own clock with nothing sent at the boundary.
+/// </summary>
+public sealed class SpecialPeriod
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid DeviceId { get; set; }
+    public Device Device { get; set; } = null!;
+
+    /// <summary>Null for the PC's own screen time; otherwise the application it applies to.</summary>
+    public Guid? DeviceApplicationId { get; set; }
+    public DeviceApplication? DeviceApplication { get; set; }
+
+    public required string Name { get; set; }
+    public DateOnly StartDate { get; set; }
+    public DateOnly EndDate { get; set; }
+
+    /// <summary>The days of a <c>WeeklySchedule</c>; empty means no schedule during the period.</summary>
+    public string ScheduleJson { get; set; } = "{\"days\":[]}";
+
+    /// <summary>Replaces the regular daily limit for the period; null means no limit at all.</summary>
+    public int? DailyLimitSeconds { get; set; }
+
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
 }

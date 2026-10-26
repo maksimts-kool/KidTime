@@ -216,6 +216,35 @@ public sealed class TimeExtensionTests : IDisposable
     }
 
     [Fact]
+    public async Task Time_a_parent_gives_unasked_is_announced_once_and_costs_the_child_no_request()
+    {
+        var (_, extensions) = await NewServiceAsync();
+        var grant = new TimeExtensionDecision(
+            Guid.NewGuid(), TimeExtensionStatus.Approved, 45, "PC", DateTimeOffset.UtcNow,
+            FromParent: true, ApplicationIdentityKey: null, LocalDate: Today);
+
+        await extensions.ApplyDecisionsAsync([grant], CancellationToken.None);
+        var announcements = await extensions.GetAnnouncementsAsync(CancellationToken.None);
+        foreach (var item in announcements) await extensions.MarkAnnouncedAsync(item.RequestId, CancellationToken.None);
+        // The server repeats a day of decisions on every sync.
+        await extensions.ApplyDecisionsAsync([grant], CancellationToken.None);
+        var repeated = await extensions.GetAnnouncementsAsync(CancellationToken.None);
+        var state = await extensions.GetStateAsync(Today, null, Period, CancellationToken.None);
+
+        var announced = Assert.Single(announcements);
+        Assert.Equal(45, announced.GrantedMinutes);
+        Assert.Empty(repeated);
+        Assert.Empty(await extensions.GetPendingUploadsAsync(CancellationToken.None));
+        Assert.Equal(TimeExtensionOfferState.Granted, state.State);
+        for (var asked = 0; asked < TimeExtensionPolicy.MaximumRequestsPerDay; asked++)
+        {
+            var result = await extensions.SubmitAsync(Today, $"app-{asked}", "Game", 10, 60, isBlocked: false,
+                Period, AgentStrings.English, CancellationToken.None);
+            Assert.True(result.Accepted);
+        }
+    }
+
+    [Fact]
     public async Task The_card_state_follows_the_last_answer_for_that_scope()
     {
         var (_, extensions) = await NewServiceAsync();

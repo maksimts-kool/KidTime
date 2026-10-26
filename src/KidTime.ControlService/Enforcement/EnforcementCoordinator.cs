@@ -412,7 +412,7 @@ public sealed class EnforcementCoordinator(
             // Extra time a parent granted today is part of the limit from here on. Reading the
             // parent's raw number anywhere below would close the child down at the old limit
             // while the window told them they had been given more.
-            var pcLimit = RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Bonus, localDate);
+            var pcLimit = RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Schedule, rules.Bonus, localDate);
             var pcDecision = RuleEvaluator.EvaluateDevice(rules, utcNow, pcUsage);
             if (!pcDecision.IsAllowed && !_lastPcBlocked)
                 logger.LogWarning("PC blocked; reason {Reason}.", pcDecision.Reason);
@@ -441,7 +441,7 @@ public sealed class EnforcementCoordinator(
             {
                 var appUsage = await ReadUsageAsync(localDate, identity, cancellationToken);
                 var appLimit = RuleEvaluator.EffectiveDailyLimitSeconds(
-                    appRule.DailyLimitSeconds, appRule.Bonus, localDate);
+                    appRule.DailyLimitSeconds, appRule.Schedule, appRule.Bonus, localDate);
                 appDecision = RuleEvaluator.EvaluateApplication(appRule, utcNow, rules.TimeZoneId, appUsage, rules.Language);
                 if (appDecision.IsAllowed && BuildRestriction(
                              appLimit, appUsage,
@@ -483,7 +483,7 @@ public sealed class EnforcementCoordinator(
                 var audibleDecision = RuleEvaluator.EvaluateApplication(
                     audibleRule, utcNow, rules.TimeZoneId, audibleUsage, rules.Language);
                 if (audibleDecision.IsAllowed && BuildRestriction(
-                        RuleEvaluator.EffectiveDailyLimitSeconds(audibleRule.DailyLimitSeconds, audibleRule.Bonus, localDate),
+                        RuleEvaluator.EffectiveDailyLimitSeconds(audibleRule.DailyLimitSeconds, audibleRule.Schedule, audibleRule.Bonus, localDate),
                         audibleUsage,
                         RuleEvaluator.FindCurrentAllowanceEndUtc(audibleRule.Schedule, utcNow, rules.TimeZoneId),
                         utcNow, localDate) is { } audibleRestriction)
@@ -534,7 +534,7 @@ public sealed class EnforcementCoordinator(
             return new PcEnforcementStatus(
                 RuleEvaluator.EvaluateDevice(rules, utcNow, usage),
                 usage,
-                RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Bonus, localDate),
+                RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Schedule, rules.Bonus, localDate),
                 RuleEvaluator.FindPendingDeviceRestriction(
                     rules, utcNow, usage, IsSpendingActiveTime, CurrentDeviceAllowanceEnd(rules, utcNow)));
         }
@@ -600,7 +600,7 @@ public sealed class EnforcementCoordinator(
                 // one in the foreground: a child looking at the Apps tab is looking at exactly the
                 // list of things they might need more time for. This is the snapshot the window
                 // asks for while it is open, so the extra work is bounded by that.
-                var limit = RuleEvaluator.EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Bonus, localDate);
+                var limit = RuleEvaluator.EffectiveDailyLimitSeconds(rule.DailyLimitSeconds, rule.Schedule, rule.Bonus, localDate);
                 applications.Add(new ApplicationTimeStatus(
                     rule.IdentityKey,
                     rule.DisplayName,
@@ -831,10 +831,31 @@ public sealed class EnforcementCoordinator(
         WeeklySchedule newSchedule) =>
         oldDailyLimit != newDailyLimit || !SchedulesEqual(oldSchedule, newSchedule);
 
+    /// <summary>
+    /// Whether two schedules say the same thing, special periods included - a holiday the parent
+    /// has just added is a schedule change the child should hear about like any other.
+    /// </summary>
     private static bool SchedulesEqual(WeeklySchedule left, WeeklySchedule right)
     {
-        var leftDays = left.Days.OrderBy(day => day.Day).ToList();
-        var rightDays = right.Days.OrderBy(day => day.Day).ToList();
+        if (!DaysEqual(left.Days, right.Days)) return false;
+        if (left.Overrides.Count != right.Overrides.Count) return false;
+        var leftPeriods = left.Overrides.OrderBy(period => period.StartDate).ToList();
+        var rightPeriods = right.Overrides.OrderBy(period => period.StartDate).ToList();
+        for (var index = 0; index < leftPeriods.Count; index++)
+        {
+            if (leftPeriods[index].StartDate != rightPeriods[index].StartDate
+                || leftPeriods[index].EndDate != rightPeriods[index].EndDate
+                || leftPeriods[index].DailyLimitSeconds != rightPeriods[index].DailyLimitSeconds
+                || !DaysEqual(leftPeriods[index].Days, rightPeriods[index].Days))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool DaysEqual(List<DaySchedule> left, List<DaySchedule> right)
+    {
+        var leftDays = left.OrderBy(day => day.Day).ToList();
+        var rightDays = right.OrderBy(day => day.Day).ToList();
         if (leftDays.Count != rightDays.Count) return false;
         for (var index = 0; index < leftDays.Count; index++)
         {
@@ -955,7 +976,7 @@ public sealed class EnforcementCoordinator(
         string timeZoneId)
     {
         var bonusSeconds = TimeBonus.SecondsOn(bonus, localDate);
-        var effectiveLimit = RuleEvaluator.EffectiveDailyLimitSeconds(dailyLimitSeconds, bonus, localDate);
+        var effectiveLimit = RuleEvaluator.EffectiveDailyLimitSeconds(dailyLimitSeconds, schedule, bonus, localDate);
         var isWithinSchedule = RuleEvaluator.IsWithinSchedule(schedule, utcNow, timeZoneId);
         var scheduleEnd = isWithinSchedule
             ? RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, utcNow, timeZoneId)
@@ -1001,7 +1022,7 @@ public sealed class EnforcementCoordinator(
             if (submission.ApplicationIdentityKey is not { Length: > 0 } identityKey)
             {
                 var usage = await ReadUsageAsync(localDate, null, cancellationToken);
-                var limit = RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Bonus, localDate);
+                var limit = RuleEvaluator.EffectiveDailyLimitSeconds(rules.DailyLimitSeconds, rules.Schedule, rules.Bonus, localDate);
                 // A scope that is shut right now has no seconds left to measure, and that is the
                 // one moment the question is worth asking, so it is passed as its own fact rather
                 // than inferred from a remaining count of zero.
@@ -1016,7 +1037,7 @@ public sealed class EnforcementCoordinator(
             if (rules.Applications.FirstOrDefault(item => item.IdentityKey == identityKey) is not { } appRule)
                 return new TimeExtensionSubmissionResult(false, text.ExtraTimeNotPossible);
             var appUsage = await ReadUsageAsync(localDate, identityKey, cancellationToken);
-            var appLimit = RuleEvaluator.EffectiveDailyLimitSeconds(appRule.DailyLimitSeconds, appRule.Bonus, localDate);
+            var appLimit = RuleEvaluator.EffectiveDailyLimitSeconds(appRule.DailyLimitSeconds, appRule.Schedule, appRule.Bonus, localDate);
             var isAppBlocked = !RuleEvaluator
                 .EvaluateApplication(appRule, utcNow, rules.TimeZoneId, appUsage, rules.Language).IsAllowed;
             return await extensions.SubmitAsync(localDate, identityKey, appRule.DisplayName, submission.Minutes,
@@ -1035,11 +1056,19 @@ public sealed class EnforcementCoordinator(
         Enqueue(request.Status == TimeExtensionStatus.Approved
             ? new UserNotification(
                 text.ExtraTimeApprovedTitle,
-                text.ExtraTimeApprovedMessage(request.DisplayName, request.GrantedMinutes))
+                text.ExtraTimeApprovedMessage(ScopeName(text, request), request.GrantedMinutes))
             : new UserNotification(
                 text.ExtraTimeDeniedTitle,
-                text.ExtraTimeDeniedMessage(request.DisplayName)));
+                text.ExtraTimeDeniedMessage(ScopeName(text, request))));
     }
+
+    /// <summary>
+    /// The PC is named in the language the child reads now. A grant the parent gave from the panel
+    /// arrives with the server's English label, and a request asked before a language switch
+    /// carries the old one.
+    /// </summary>
+    private static string ScopeName(AgentStrings text, LocalTimeExtension request) =>
+        request.ApplicationIdentityKey is null ? text.PcScopeName : request.DisplayName;
 
     private static int? RemainingOrNull(int? limitSeconds, int activeSeconds) =>
         limitSeconds is int limit ? Math.Max(0, limit - activeSeconds) : null;

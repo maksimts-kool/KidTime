@@ -96,13 +96,20 @@ public enum TimeExtensionStatus
 /// <summary>
 /// What the parent decided, on its way back. The granted minutes are already in the rule
 /// snapshot by the time this arrives; this exists so the child can be told, once, what happened.
+///
+/// <paramref name="FromParent"/> marks time the parent gave from the panel without being asked.
+/// The PC has no request of its own to match it to, so that one also says which scope and which
+/// device-local date it was for, and the agent records it as an answered request to announce.
 /// </summary>
 public sealed record TimeExtensionDecision(
     Guid RequestId,
     TimeExtensionStatus Status,
     int GrantedMinutes,
     string DisplayName,
-    DateTimeOffset? DecidedAtUtc);
+    DateTimeOffset? DecidedAtUtc,
+    bool FromParent = false,
+    string? ApplicationIdentityKey = null,
+    DateOnly? LocalDate = null);
 
 public sealed record AgentCommand(Guid Id, string Type, DateTimeOffset CreatedAtUtc);
 

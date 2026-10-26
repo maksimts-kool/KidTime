@@ -122,10 +122,10 @@ export function TimeExtensionRequests({ requests }: { requests: TimeExtensionReq
               <div key={request.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
                 <span className="text-muted-foreground">
                   {request.deviceName} · {request.isPc ? "PC screen time" : request.displayName} ·{" "}
-                  asked for {request.requestedMinutes}m on {request.localDate}
+                  {request.initiatedByParent ? `given by you on ${request.localDate}` : `asked for ${request.requestedMinutes}m on ${request.localDate}`}
                 </span>
                 <Badge variant={request.status === "Approved" ? "secondary" : "outline"}>
-                  {request.status === "Approved" ? `Granted ${request.grantedMinutes}m` : "Denied"}
+                  {request.status === "Approved" ? `${request.initiatedByParent ? "Gave" : "Granted"} ${request.grantedMinutes}m` : "Denied"}
                 </Badge>
               </div>
             ))}

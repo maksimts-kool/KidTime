@@ -44,6 +44,9 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext, TimeProvider
             today,
             pcGrants.Where(grant => grant.LocalDate == today).Sum(grant => grant.GrantedMinutes),
             LiftedUntil(pcGrants, now));
+        var periods = await ActivePeriods(dbContext.SpecialPeriods.AsNoTracking(), now)
+            .Where(period => period.DeviceId == deviceId)
+            .ToListAsync(cancellationToken);
         var applicationGrants = grants
             .Where(grant => grant.ApplicationIdentityKey != null)
             .GroupBy(grant => grant.ApplicationIdentityKey!, StringComparer.Ordinal)
@@ -62,7 +65,9 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext, TimeProvider
             ManuallyBlocked = device.Rule.ManuallyBlocked,
             ManualBlockUntilUtc = device.Rule.ManualBlockUntilUtc,
             DailyLimitSeconds = device.Rule.DailyLimitSeconds,
-            Schedule = DeserializeSchedule(device.Rule.ScheduleJson),
+            Schedule = Compose(
+                device.Rule.ScheduleJson,
+                periods.Where(period => period.DeviceApplicationId == null)),
             Bonus = pcBonus,
             Applications = appRules
                 .Where(item => ApplicationCatalogPolicy.IsUserManageable(ToDescriptor(item)))
@@ -72,7 +77,9 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext, TimeProvider
                 DisplayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(ToDescriptor(item)),
                 ManuallyBlocked = item.Rule.ManuallyBlocked,
                 DailyLimitSeconds = item.Rule.DailyLimitSeconds,
-                Schedule = DeserializeSchedule(item.Rule.ScheduleJson),
+                Schedule = Compose(
+                    item.Rule.ScheduleJson,
+                    periods.Where(period => period.DeviceApplicationId == item.Id)),
                 Bonus = BuildApplicationBonus(today, now, applicationGrants, item.Application.IdentityKey),
                 UpdatedAtUtc = item.Rule.UpdatedAtUtc
             }).ToList()
@@ -135,8 +142,41 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext, TimeProvider
         Sha256 = item.Sha256
     };
 
+    /// <summary>
+    /// Special periods that have not ended yet. Their dates are the PC's own, and the PC's day can
+    /// be a day behind UTC's, so this keeps everything that ended up to yesterday in UTC terms and
+    /// leaves <see cref="ScheduleOverride.Covers"/> to say whether a date really falls inside.
+    /// Upcoming periods travel too: a PC that is offline on the first morning of a holiday still
+    /// switches over at its own midnight.
+    /// </summary>
+    public static IQueryable<SpecialPeriod> ActivePeriods(IQueryable<SpecialPeriod> periods, DateTimeOffset now)
+    {
+        var earliest = DateOnly.FromDateTime(now.UtcDateTime).AddDays(-1);
+        return periods.Where(period => period.EndDate >= earliest);
+    }
+
+    /// <summary>A rule's stored weekly schedule with the special periods that apply to it.</summary>
+    public static WeeklySchedule Compose(string? scheduleJson, IEnumerable<SpecialPeriod> periods) => new()
+    {
+        Days = DeserializeSchedule(scheduleJson).Days,
+        Overrides = periods.OrderBy(period => period.StartDate).Select(ToOverride).ToList()
+    };
+
+    public static ScheduleOverride ToOverride(SpecialPeriod period) => new()
+    {
+        Name = period.Name,
+        StartDate = period.StartDate,
+        EndDate = period.EndDate,
+        Days = DeserializeSchedule(period.ScheduleJson).Days,
+        DailyLimitSeconds = period.DailyLimitSeconds
+    };
+
+    /// <summary>
+    /// Special periods live in their own table, so a stored schedule never carries any: a parent
+    /// saving the weekly schedule cannot overwrite or duplicate a holiday by sending it back.
+    /// </summary>
     public static string SerializeSchedule(WeeklySchedule schedule) =>
-        JsonSerializer.Serialize(schedule, JsonOptions);
+        JsonSerializer.Serialize(schedule.WithoutOverrides(), JsonOptions);
 
     public static WeeklySchedule DeserializeSchedule(string? json)
     {

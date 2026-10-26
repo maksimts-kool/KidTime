@@ -509,6 +509,48 @@ namespace KidTime.Server.Data.Migrations
                     b.ToTable("ProcessedUsageBatches");
                 });
 
+            modelBuilder.Entity("KidTime.Server.Data.SpecialPeriod", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("DailyLimitSeconds")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("DeviceApplicationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("ScheduleJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceApplicationId");
+
+                    b.HasIndex("DeviceId", "EndDate");
+
+                    b.ToTable("SpecialPeriods");
+                });
+
             modelBuilder.Entity("KidTime.Server.Data.TimeExtension", b =>
                 {
                     b.Property<Guid>("Id")
@@ -538,6 +580,9 @@ namespace KidTime.Server.Data.Migrations
 
                     b.Property<int>("GrantedMinutes")
                         .HasColumnType("integer");
+
+                    b.Property<bool>("InitiatedByParent")
+                        .HasColumnType("boolean");
 
                     b.Property<DateOnly>("LocalDate")
                         .HasColumnType("date");
@@ -659,6 +704,24 @@ namespace KidTime.Server.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Device");
+                });
+
+            modelBuilder.Entity("KidTime.Server.Data.SpecialPeriod", b =>
+                {
+                    b.HasOne("KidTime.Server.Data.DeviceApplication", "DeviceApplication")
+                        .WithMany()
+                        .HasForeignKey("DeviceApplicationId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("KidTime.Server.Data.Device", "Device")
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+
+                    b.Navigation("DeviceApplication");
                 });
 
             modelBuilder.Entity("KidTime.Server.Data.TimeExtension", b =>

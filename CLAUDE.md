@@ -307,6 +307,17 @@ enforcement boundary where it was.
    grants too, for the window alone.
 7. The agent announces the answer once — `TimeExtensionService` marks it announced after the
    notification is queued — as an ordinary toast. Nothing is closing, so nothing interrupts.
+8. **A parent can also give time unasked** — the **Give extra time** button on the device page,
+   on an application's page, and on the Requests page. `POST api/time-extensions/grant` records it
+   as a request the child never made: approved, for zero requested minutes, with
+   `InitiatedByParent` set. That one row is what keeps it from being a second mechanism - the
+   snapshot reads it as a `TimeBonus` like any grant, so it raises today's limit and opens a block
+   or closed schedule from the moment it was given. The sync's decision list carries it with
+   `FromParent`, its scope and its date, because the PC has no request of its own to match it to;
+   `TimeExtensionService` records it as an answered request and the child is told once, the same
+   way. It never counts against the child's daily request cap at either end — that cap bounds how
+   often a child asks, not how often a parent gives — and its slider runs to two hours rather than
+   thirty minutes, still under the four-hour `MaximumGrantedMinutes`.
 
 The limits are `TimeExtensionPolicy`. The amount is a **slider from 5 to 30 minutes in steps of
 five** rather than a number field: a dial with a floor and a ceiling asks a smaller question, and
@@ -334,6 +345,39 @@ waits for the next synchronization, which is also why the window is anchored to 
 not to the moment the PC hears about it: a grant nobody was there to use is over rather than
 waiting to be spent.
 
+### Special periods
+
+A holiday week, a trip, exam season: dates on which the PC or one application runs on a schedule
+and daily limit of its own, and then goes back to the weekly rules with nobody remembering to
+change them. The panel calls them **Special periods** and offers them below the weekly rules on the
+device page and on each application's page.
+
+1. They live in their own `SpecialPeriods` table (device, optional application, name, first and
+   last device-local date inclusive, the days of a schedule, a daily limit). Adding or removing one
+   bumps `DeviceRule.Revision` and is pushed like any rule change. **They never live in a rule's
+   `ScheduleJson`** — `SerializeSchedule` strips them — so saving the weekly schedule cannot
+   overwrite or duplicate a holiday by sending back what the panel was shown.
+2. `RuleSnapshotFactory` puts every period that has not ended into the snapshot as
+   `WeeklySchedule.Overrides`. **Upcoming ones travel too**, so a PC that is offline on the first
+   morning of a holiday still switches over at its own midnight with nothing sent at the boundary.
+3. A period sits *inside* `WeeklySchedule` because `WeeklySchedule.Allows` is the one question
+   every schedule path asks — enforcement, the allowance-end scan the countdown uses, the panel's
+   "allowed until". Each of them therefore crosses a period's first and last night correctly
+   without knowing periods exist. An overnight window belongs to the evening it started on, so the
+   last night of a holiday keeps its late window past midnight and the first night of one does not
+   inherit the school night's.
+4. **On its dates a period replaces both rules whole**: a period with no days is open at any time,
+   and one with no limit has none, which is exactly how the regular rule reads those. The daily
+   limit is resolved by `RuleEvaluator.EffectiveDailyLimitSeconds`, which now takes the schedule
+   for that reason - every path already had to read a limit there, and that is what makes a
+   holiday limit reach the countdown, the child's window and the panel alike. Extra time is added
+   on top as usual.
+5. Two periods covering the same date are refused by `ScheduleValidator.ValidateOverride` rather
+   than ordered. A period is at most 366 days.
+
+An agent older than this ignores `Overrides` and keeps enforcing the weekly rules, so periods
+take effect on a PC from the release that carries them.
+
 ### Rule precedence
 
 A PC or application is unavailable when any relevant rule denies it, in this order:
@@ -344,7 +388,8 @@ A PC or application is unavailable when any relevant rule denies it, in this ord
 
 Extra time a parent granted while the scope was shut suspends the first and the third for the
 minutes it was given, counted from the decision; it never suspends the second, which the same
-grant has already raised by those minutes.
+grant has already raised by those minutes. On the dates of a [special period](#special-periods)
+the period's limit and schedule are the second and third.
 
 PC rules are evaluated before the interactive desktop is exposed. Application rules are evaluated at
 process discovery and again while the application is foreground, so reaching a limit closes an
@@ -1138,6 +1183,12 @@ companion's query-log endpoints are therefore deliberately never called. See
   point. The exception escapes the window constructor, `AgentApplicationHost` never finishes, and
   the child is left with no tray icon, no screen-time window, and no notifications while
   enforcement carries on without them. Guard the handler; do not rely on attribute order.
+- **Times of day are typed on a 24-hour clock, never through `<input type="time">`.** The native
+  field draws the browser locale's clock, so a parent on an English-US browser was given AM/PM for
+  a schedule the PC enforces in 24-hour time, and no attribute changes that.
+  `components/ui/time-input.tsx` is a text field that takes digits, puts the colon in, and finishes
+  a short entry on blur ("9" becomes 09:00). Times the panel *shows* come from the server already
+  formatted `HH:mm`.
 - The amount controls at both ends are sliders over the same range, and the range lives in
   `TimeExtensionPolicy` rather than in either UI. `components/ui/slider.tsx` wraps Base UI's parts
   (Root → Control → Track → Indicator + Thumb); the track needs an explicit height because the
@@ -1255,6 +1306,11 @@ without the node's configuration signed in to again and believed on the retry, t
 answer twice failing the whole read rather than reading as a household that filters nothing,
 schedules or domain groups that could not be read failing it too, and a household that has
 genuinely switched filtering off still read as an answer,
+a special period replacing the weekly schedule and the daily limit on its own dates only, a period
+with no limit lifting the regular one, an overnight window read from the schedule of the evening
+it started on across a period's first and last night, the allowance ending where a period begins,
+overlapping or backwards periods refused, time a parent gives unasked announced once and costing
+the child none of their daily requests,
 granted extra time raising a daily limit for its own date only,
 minutes alone never lifting a manual block or a schedule while the window a grant opens lifts both
 from the decision until it expires, per scope and without handing over a spent daily limit, extra
@@ -1377,7 +1433,14 @@ rules:
     `KidTime.SessionAgent` from Task Manager, and confirm the service brings the agent back
     without the window reopening — one window per sign-in, not one per agent. Then restart
     `KidTimeControl` and confirm the same; only signing in again brings it back;
-30. read the server's log with `docker compose logs -f server`: one line per request with the
+30. on the device page, press **Give extra time**, give 15 minutes, and confirm the Requests page
+    lists it as given by you, the child is told once on the next sync, and a blocked PC opens for
+    those minutes from the moment you gave them;
+31. add a special period from today to a week out with 12:00–15:00 and 18:00–22:00 every day (set
+    one day, then Copy to all days), confirm the devices page names it beside today's hours, that
+    the PC follows those hours today - signed out at 15:00 with the minute's warning before it -
+    and that after its last day the weekly schedule is back without anything being changed;
+32. read the server's log with `docker compose logs -f server`: one line per request with the
     method, path, status, duration and either the parent's e-mail or the device's short id, the
     same `req=` id on the panel's line for the same click, and that id on the response's
     `X-Request-Id` header in the browser's network tab. Sign in with the wrong password and confirm

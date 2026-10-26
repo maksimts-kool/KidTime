@@ -178,7 +178,7 @@ public sealed class AgentController(
                 continue;
 
             var madeToday = await dbContext.TimeExtensions.CountAsync(
-                item => item.DeviceId == DeviceId && item.LocalDate == request.LocalDate,
+                item => item.DeviceId == DeviceId && item.LocalDate == request.LocalDate && !item.InitiatedByParent,
                 cancellationToken);
             if (madeToday >= TimeExtensionPolicy.MaximumRequestsPerDay)
             {
@@ -233,7 +233,12 @@ public sealed class AgentController(
         item.Status == TimeExtensionStatuses.Approved ? TimeExtensionStatus.Approved : TimeExtensionStatus.Denied,
         item.GrantedMinutes,
         item.DisplayName,
-        item.DecidedAtUtc);
+        item.DecidedAtUtc,
+        // A grant the child never asked for has no local record to update, so it carries what the
+        // agent needs to make one: the scope and the date it was given for.
+        item.InitiatedByParent,
+        item.InitiatedByParent ? item.ApplicationIdentityKey : null,
+        item.InitiatedByParent ? item.LocalDate : null);
 
     [Authorize(AuthenticationSchemes = DeviceAuthenticationDefaults.Scheme)]
     [HttpGet("update")]

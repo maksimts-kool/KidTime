@@ -2,17 +2,22 @@ import Link from "next/link";
 import { ArrowLeft, CircleCheck, CloudDownload, CloudOff, RefreshCw, UserRound } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
 import { formatSeen } from "@/lib/format";
-import type { DeviceDetail } from "@/lib/types";
+import type { DeviceDetail, SpecialPeriod } from "@/lib/types";
 import { DeviceRuleEditor } from "@/components/device-rule-editor";
+import { GiveExtraTime } from "@/components/give-extra-time";
 import { PageHeader } from "@/components/page-header";
 import { QuickBlock } from "@/components/quick-block";
 import { RemoveDevice } from "@/components/remove-device";
+import { SpecialPeriods } from "@/components/special-periods";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
 export default async function DevicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const detail = await backendFetch<DeviceDetail>(`/api/devices/${id}`);
+  const [detail, periods] = await Promise.all([
+    backendFetch<DeviceDetail>(`/api/devices/${id}`),
+    backendFetch<SpecialPeriod[]>(`/api/special-periods?deviceId=${id}`),
+  ]);
   const online = detail.device.isOnline;
   const synced = detail.device.appliedRuleRevision >= detail.rules.revision;
   const updateValue = detail.device.isAgentUpToDate
@@ -35,6 +40,7 @@ export default async function DevicePage({ params }: { params: Promise<{ id: str
         description={`${detail.device.windowsVersion} · ${detail.device.timeZoneId}`}
         actions={(
           <div className="flex flex-wrap items-center gap-2">
+            <GiveExtraTime targets={[{ deviceId: id, deviceApplicationId: null, label: "PC screen time" }]} />
             <QuickBlock deviceId={id} blocked={detail.rules.manuallyBlocked} />
             <RemoveDevice deviceId={id} deviceName={detail.device.name} />
           </div>
@@ -51,6 +57,15 @@ export default async function DevicePage({ params }: { params: Promise<{ id: str
         </CardContent>
       </Card>
       <DeviceRuleEditor deviceId={id} rule={detail.rules} accounts={detail.availableWindowsUsers} />
+      <div className="mt-4">
+        <SpecialPeriods
+          deviceId={id}
+          periods={periods}
+          schedule={detail.rules.schedule}
+          dailyLimitSeconds={detail.rules.dailyLimitSeconds}
+          scope="the PC"
+        />
+      </div>
     </>
   );
 }

@@ -23,11 +23,50 @@ public sealed class DaySchedule
     public List<TimeWindow> Windows { get; init; } = [];
 }
 
+/// <summary>
+/// A stretch of device-local dates that runs on rules of its own - a holiday week with screen time
+/// at 12:00-15:00 and 18:00-22:00 every day, instead of the school-week schedule.
+///
+/// Inside the dates, <see cref="Days"/> replaces the weekly schedule and
+/// <see cref="DailyLimitSeconds"/> replaces the daily limit, both of them whole: a period with no
+/// days is open at any time, and one with no limit has none, exactly as the regular rule reads.
+/// Outside them nothing changes. It lives inside <see cref="WeeklySchedule"/> because
+/// <see cref="WeeklySchedule.Allows"/> is the one question every schedule path asks - the
+/// countdown, the allowance-end scan, the panel's "allowed until" - so each of them crosses the
+/// first and last night of a period correctly without being taught about periods at all.
+/// </summary>
+public sealed class ScheduleOverride
+{
+    /// <summary>The panel's label for it, "Winter holidays". Never shown to the child.</summary>
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>First device-local date the period applies to.</summary>
+    public DateOnly StartDate { get; init; }
+
+    /// <summary>Last device-local date the period applies to, inclusive.</summary>
+    public DateOnly EndDate { get; init; }
+
+    public List<DaySchedule> Days { get; init; } = [];
+    public int? DailyLimitSeconds { get; init; }
+
+    public bool Covers(DateOnly date) => date >= StartDate && date <= EndDate;
+}
+
 public sealed class WeeklySchedule
 {
     public List<DaySchedule> Days { get; init; } = [];
 
-    public bool IsConfigured => Days.Count > 0;
+    /// <summary>Date ranges that run on their own schedule and limit; see <see cref="ScheduleOverride"/>.</summary>
+    public List<ScheduleOverride> Overrides { get; init; } = [];
+
+    public bool IsConfigured => Days.Count > 0 || Overrides.Count > 0;
+
+    /// <summary>The period in force on a device-local date, if any.</summary>
+    public ScheduleOverride? OverrideOn(DateOnly date) =>
+        Overrides.FirstOrDefault(period => period.Covers(date));
+
+    /// <summary>The same week without its periods - what a parent edits as "the weekly schedule".</summary>
+    public WeeklySchedule WithoutOverrides() => new() { Days = Days };
 
     public bool Allows(DateTime localTime)
     {
@@ -36,18 +75,32 @@ public sealed class WeeklySchedule
             return true;
         }
 
-        var time = TimeOnly.FromDateTime(localTime);
-        var today = Days.FirstOrDefault(day => day.Day == localTime.DayOfWeek);
-        if (today?.Windows.Any(window => window.Contains(time) &&
-                (window.Start <= window.End || time >= window.Start)) == true)
+        var date = DateOnly.FromDateTime(localTime);
+        var week = DaysOn(date);
+        // A date whose week has no days in it is not restricted - the regular week left empty, or
+        // a period that sets only a limit - so nothing that started the night before matters.
+        // A week that has days but not this one is closed today, as it always was.
+        if (week.Count == 0)
         {
             return true;
         }
 
-        var previousDay = localTime.AddDays(-1).DayOfWeek;
-        return Days.FirstOrDefault(day => day.Day == previousDay)?.Windows.Any(window =>
+        var time = TimeOnly.FromDateTime(localTime);
+        if (week.FirstOrDefault(day => day.Day == localTime.DayOfWeek)?.Windows.Any(window =>
+                window.Contains(time) && (window.Start <= window.End || time >= window.Start)) == true)
+        {
+            return true;
+        }
+
+        // An overnight window belongs to the evening it started on, so it is read from whichever
+        // schedule that date ran on: the last night of a holiday keeps its late window past
+        // midnight, and the first night of one does not inherit the school night's.
+        var previousDate = date.AddDays(-1);
+        return DaysOn(previousDate).FirstOrDefault(day => day.Day == previousDate.DayOfWeek)?.Windows.Any(window =>
             window.Start > window.End && time < window.End) == true;
     }
+
+    private List<DaySchedule> DaysOn(DateOnly date) => OverrideOn(date)?.Days ?? Days;
 }
 
 /// <summary>

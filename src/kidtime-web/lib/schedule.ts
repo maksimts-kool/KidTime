@@ -49,12 +49,25 @@ export function describeSchedule(device: DeviceSummary): { label: string; value:
     : { label: "Schedule", value: "Closed" };
 }
 
-/** Today's windows as the parent wrote them, or why there are none. */
+/**
+ * Today's windows as the parent wrote them, or why there are none - prefixed with the special
+ * period in force, because otherwise a holiday's hours read as the weekly schedule gone wrong.
+ */
 export function describeTodayWindows(device: DeviceSummary) {
-  if (!device.schedule.configured) return null;
-  return device.schedule.todayWindows.length
-    ? `Today ${device.schedule.todayWindows.join(", ")}`
-    : "Nothing scheduled today";
+  const { schedule } = device;
+  if (!schedule.configured) return null;
+  const today = schedule.todayWindows.length
+    ? `Today ${schedule.todayWindows.join(", ")}`
+    : schedule.specialPeriod ? "Any time today" : "Nothing scheduled today";
+  if (!schedule.specialPeriod) return today;
+  const { endDate } = schedule.specialPeriod;
+  const until = endDate === schedule.localDate
+    ? "today"
+    : endDate === addDays(schedule.localDate, 1)
+      ? "tomorrow"
+      : new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })
+        .format(new Date(`${endDate}T00:00:00Z`));
+  return `${schedule.specialPeriod.name} until ${until} · ${today}`;
 }
 
 /**

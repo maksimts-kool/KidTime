@@ -543,6 +543,28 @@ public sealed class LocalStore
             ("$status", request.Status.ToString()),
             ("$requested", request.RequestedAtUtc.ToString("O")));
 
+    /// <summary>
+    /// Records extra time the parent gave from the panel without being asked: already answered,
+    /// already on the server, and waiting only to be announced. The id is the server's, so the
+    /// same grant arriving on every sync for a day is written once.
+    /// </summary>
+    public Task AddParentGrantAsync(LocalTimeExtension grant, CancellationToken cancellationToken) =>
+        ExecuteAsync("""
+            INSERT INTO time_extensions(
+                request_id,local_date,identity_key,display_name,requested_minutes,granted_minutes,
+                status,requested_at_utc,uploaded,announced,period_key)
+            VALUES($id,$date,$identity,$name,0,$granted,$status,$requested,1,0,'')
+            ON CONFLICT(request_id) DO NOTHING
+            """,
+            cancellationToken,
+            ("$id", grant.RequestId.ToString()),
+            ("$date", grant.LocalDate.ToString("yyyy-MM-dd")),
+            ("$identity", grant.ApplicationIdentityKey ?? string.Empty),
+            ("$name", grant.DisplayName),
+            ("$granted", grant.GrantedMinutes),
+            ("$status", grant.Status.ToString()),
+            ("$requested", grant.RequestedAtUtc.ToString("O")));
+
     public Task<IReadOnlyList<LocalTimeExtension>> GetTimeExtensionsAsync(
         DateOnly localDate,
         CancellationToken cancellationToken) =>

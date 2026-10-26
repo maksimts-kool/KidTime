@@ -1,5 +1,7 @@
 using System.Security.Claims;
+using KidTime.Domain.Applications;
 using KidTime.Domain.Contracts;
+using KidTime.Domain.Rules;
 using KidTime.Server.Data;
 using KidTime.Server.Hubs;
 using Microsoft.AspNetCore.Authorization;
@@ -27,6 +29,9 @@ public sealed class TimeExtensionsController(
 {
     public sealed record DecisionRequest(bool Approved, int? Minutes);
 
+    /// <summary>Extra time a parent gives unasked: to the PC, or to one application on it.</summary>
+    public sealed record GrantRequest(Guid DeviceId, Guid? DeviceApplicationId, int Minutes);
+
     [HttpGet]
     public async Task<IActionResult> List(Guid? deviceId, bool includeDecided, CancellationToken cancellationToken)
     {
@@ -50,7 +55,8 @@ public sealed class TimeExtensionsController(
                 item.GrantedMinutes,
                 item.Status,
                 item.RequestedAtUtc,
-                item.DecidedAtUtc
+                item.DecidedAtUtc,
+                item.InitiatedByParent
             })
             .ToListAsync(cancellationToken);
         return Ok(items);
@@ -88,16 +94,83 @@ public sealed class TimeExtensionsController(
         // A denial bumps the revision too. The extra minutes are not the only thing that has to
         // reach the PC quickly - so does the answer, because a child left staring at "waiting for
         // your parent" has been told nothing at all.
-        var deviceRule = await dbContext.DeviceRules.SingleAsync(
-            rule => rule.DeviceId == item.DeviceId, cancellationToken);
+        await MarkRulesChangedAsync(item.DeviceId, now, cancellationToken);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Gives extra time without waiting to be asked - an afternoon that ran long for a good reason,
+    /// a game that needs ten more minutes to save. It is recorded as a request the child never
+    /// made, already approved, so it reaches the PC through exactly the path an approval takes:
+    /// minutes added to today's limit, and a window over a block or a closed schedule counted from
+    /// this moment. The child is told once, the same way.
+    /// </summary>
+    [HttpPost("grant")]
+    public async Task<IActionResult> Grant(GrantRequest request, CancellationToken cancellationToken)
+    {
+        if (!TimeExtensionPolicy.IsAllowedGrant(request.Minutes))
+            return BadRequest($"Granted time must be 1-{TimeExtensionPolicy.MaximumGrantedMinutes} minutes.");
+        var device = await dbContext.Devices.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == request.DeviceId, cancellationToken);
+        if (device is null) return NotFound();
+
+        string? identityKey = null;
+        var displayName = "PC";
+        if (request.DeviceApplicationId is { } applicationId)
+        {
+            var application = await dbContext.DeviceApplications.AsNoTracking()
+                .Include(item => item.Application)
+                .SingleOrDefaultAsync(item => item.Id == applicationId && item.DeviceId == request.DeviceId,
+                    cancellationToken);
+            if (application is null) return NotFound();
+            identityKey = application.Application.IdentityKey;
+            displayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(new ApplicationDescriptor
+            {
+                DisplayName = application.Application.DisplayName,
+                ExecutableName = application.Application.ExecutableName,
+                ExecutablePath = application.ExecutablePath,
+                ProductName = application.Application.ProductName,
+                OriginalFilename = application.Application.OriginalFilename,
+                Company = application.Application.Company,
+                SignaturePublisher = application.Application.SignaturePublisher,
+                FileVersion = application.FileVersion,
+                PackageFamilyName = application.Application.PackageFamilyName,
+                Sha256 = application.Sha256
+            });
+        }
+
+        var now = timeProvider.GetUtcNow();
+        dbContext.TimeExtensions.Add(new TimeExtension
+        {
+            Id = Guid.NewGuid(),
+            DeviceId = request.DeviceId,
+            DeviceApplicationId = request.DeviceApplicationId,
+            ApplicationIdentityKey = identityKey,
+            DisplayName = displayName,
+            LocalDate = RuleEvaluator.GetLocalDate(now, device.TimeZoneId),
+            RequestedMinutes = 0,
+            GrantedMinutes = request.Minutes,
+            Status = TimeExtensionStatuses.Approved,
+            RequestedAtUtc = now,
+            ReceivedAtUtc = now,
+            DecidedAtUtc = now,
+            DecidedByParentUserId = ParentUserId,
+            InitiatedByParent = true
+        });
+        await MarkRulesChangedAsync(request.DeviceId, now, cancellationToken);
+        return NoContent();
+    }
+
+    private async Task MarkRulesChangedAsync(Guid deviceId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var deviceRule = await dbContext.DeviceRules.SingleAsync(rule => rule.DeviceId == deviceId, cancellationToken);
         deviceRule.Revision++;
         deviceRule.UpdatedAtUtc = now;
-        var command = new DeviceCommand { DeviceId = item.DeviceId, Type = "RulesChanged" };
+        var command = new DeviceCommand { DeviceId = deviceId, Type = "RulesChanged" };
         dbContext.DeviceCommands.Add(command);
         await dbContext.SaveChangesAsync(cancellationToken);
-        await hubContext.Clients.Group(DeviceHub.GroupName(item.DeviceId))
+        await hubContext.Clients.Group(DeviceHub.GroupName(deviceId))
             .SendAsync("Command", new { command.Id, command.Type }, cancellationToken);
-        return NoContent();
     }
 
     private Guid ParentUserId => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);

@@ -18,6 +18,7 @@ public sealed class KidTimeDbContext(DbContextOptions<KidTimeDbContext> options)
     public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
     public DbSet<DeviceDiagnosticEvent> DeviceDiagnosticEvents => Set<DeviceDiagnosticEvent>();
     public DbSet<TimeExtension> TimeExtensions => Set<TimeExtension>();
+    public DbSet<SpecialPeriod> SpecialPeriods => Set<SpecialPeriod>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -156,6 +157,18 @@ public sealed class KidTimeDbContext(DbContextOptions<KidTimeDbContext> options)
             entity.Property(x => x.ApplicationIdentityKey).HasMaxLength(64);
             entity.Property(x => x.DisplayName).HasMaxLength(255);
             entity.Property(x => x.Status).HasMaxLength(16);
+        });
+
+        modelBuilder.Entity<SpecialPeriod>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => new { x.DeviceId, x.EndDate });
+            entity.HasOne(x => x.Device).WithMany()
+                .HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.DeviceApplication).WithMany()
+                .HasForeignKey(x => x.DeviceApplicationId).OnDelete(DeleteBehavior.Cascade);
+            entity.Property(x => x.Name).HasMaxLength(100);
+            entity.Property(x => x.ScheduleJson).HasColumnType("jsonb");
         });
     }
 }
