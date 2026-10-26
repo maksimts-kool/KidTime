@@ -115,7 +115,7 @@ function SuggestionRow({ suggestion }: { suggestion: Suggestion }) {
           <p className="font-medium">{suggestion.title}</p>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{suggestion.detail}</p>
         </div>
-        <Button variant="outline" size="sm" render={<Link href={suggestion.href} />}>
+        <Button variant="outline" size="sm" nativeButton={false} render={<Link href={suggestion.href} />}>
           {suggestion.action} <ArrowRight data-icon="inline-end" />
         </Button>
       </div>

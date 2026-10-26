@@ -18,11 +18,15 @@ public sealed class ApplicationsController(
     IHubContext<DeviceHub> hubContext,
     TimeProvider timeProvider) : ControllerBase
 {
+    /// <summary>
+    /// The block switch, and the schedule only when one is sent; the panel edits the schedule and
+    /// the daily limit in the schedule card, through PUT schedule and PUT limit.
+    /// </summary>
     public sealed record UpdateApplicationRuleRequest(
         bool ManuallyBlocked,
-        int? DailyLimitSeconds,
-        // Null keeps the stored schedule; see PUT schedule.
         WeeklySchedule? Schedule = null);
+
+    public sealed record UpdateLimitRequest(int? DailyLimitSeconds);
 
     [HttpGet]
     public async Task<IActionResult> List(Guid? deviceId, string? search, CancellationToken cancellationToken)
@@ -156,14 +160,12 @@ public sealed class ApplicationsController(
         UpdateApplicationRuleRequest request,
         CancellationToken cancellationToken)
     {
-        if (request.DailyLimitSeconds is < 60 or > 86_400) return BadRequest("Daily limit must be 60-86400 seconds.");
         if (request.Schedule is not null && ScheduleValidator.Validate(request.Schedule) is { } scheduleError)
             return BadRequest(scheduleError);
         var item = await dbContext.DeviceApplications.Include(x => x.Rule)
             .SingleOrDefaultAsync(x => x.Id == deviceApplicationId, cancellationToken);
         if (item is null) return NotFound();
         item.Rule.ManuallyBlocked = request.ManuallyBlocked;
-        item.Rule.DailyLimitSeconds = request.DailyLimitSeconds;
         if (request.Schedule is not null) item.Rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(request.Schedule);
         item.Rule.UpdatedAtUtc = timeProvider.GetUtcNow();
         var deviceRule = await dbContext.DeviceRules.SingleAsync(x => x.DeviceId == item.DeviceId, cancellationToken);
@@ -174,6 +176,22 @@ public sealed class ApplicationsController(
         await dbContext.SaveChangesAsync(cancellationToken);
         await hubContext.Clients.Group(DeviceHub.GroupName(item.DeviceId))
             .SendAsync("Command", new { command.Id, command.Type }, cancellationToken);
+        return NoContent();
+    }
+
+    /// <summary>Replaces one application's daily limit and nothing else; null removes it.</summary>
+    [HttpPut("{deviceApplicationId:guid}/limit")]
+    public async Task<IActionResult> UpdateLimit(
+        Guid deviceApplicationId,
+        UpdateLimitRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.DailyLimitSeconds is < 60 or > 86_400) return BadRequest("Daily limit must be 60-86400 seconds.");
+        var item = await dbContext.DeviceApplications.Include(x => x.Rule)
+            .SingleOrDefaultAsync(x => x.Id == deviceApplicationId, cancellationToken);
+        if (item is null) return NotFound();
+        item.Rule.DailyLimitSeconds = request.DailyLimitSeconds;
+        await MarkApplicationRuleChangedAsync(item, cancellationToken);
         return NoContent();
     }
 
@@ -188,8 +206,15 @@ public sealed class ApplicationsController(
         var item = await dbContext.DeviceApplications.Include(x => x.Rule)
             .SingleOrDefaultAsync(x => x.Id == deviceApplicationId, cancellationToken);
         if (item is null) return NotFound();
-        var now = timeProvider.GetUtcNow();
         item.Rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(schedule);
+        await MarkApplicationRuleChangedAsync(item, cancellationToken);
+        return NoContent();
+    }
+
+    /// <summary>An application's rule changed: bump the PC's revision, queue the command, push it.</summary>
+    private async Task MarkApplicationRuleChangedAsync(DeviceApplication item, CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
         item.Rule.UpdatedAtUtc = now;
         var deviceRule = await dbContext.DeviceRules.SingleAsync(x => x.DeviceId == item.DeviceId, cancellationToken);
         deviceRule.Revision++;
@@ -199,7 +224,6 @@ public sealed class ApplicationsController(
         await dbContext.SaveChangesAsync(cancellationToken);
         await hubContext.Clients.Group(DeviceHub.GroupName(item.DeviceId))
             .SendAsync("Command", new { command.Id, command.Type }, cancellationToken);
-        return NoContent();
     }
 
     private static ApplicationDescriptor ToDescriptor(DeviceApplication item) => new()

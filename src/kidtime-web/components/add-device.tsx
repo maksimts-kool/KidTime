@@ -190,7 +190,7 @@ export function AddDevice({ emptyState = false }: { emptyState?: boolean }) {
             </div>
             <AlertDialogFooter>
               <AlertDialogCancel>Close</AlertDialogCancel>
-              <Button render={<Link href={`/devices/${status.device.id}`} />}>Open device controls</Button>
+              <Button nativeButton={false} render={<Link href={`/devices/${status.device.id}`} />}>Open device controls</Button>
             </AlertDialogFooter>
           </>
         ) : (

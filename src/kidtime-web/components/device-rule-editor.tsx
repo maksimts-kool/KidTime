@@ -7,17 +7,16 @@ import { useRouter } from "next/navigation";
 import { agentLanguages, type DeviceRule, type WindowsUserAccount } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SwitchField } from "@/components/ui/switch";
 
 /**
- * Everything about the PC's rule except its schedule, which the schedule card above edits in
- * popups and saves on its own - so this form neither sends it nor overwrites it.
+ * Everything about the PC's rule except its schedule and daily limit, which the schedule card
+ * above edits in popups and saves on its own - so this form neither sends them nor overwrites them.
  */
 export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: string; rule: DeviceRule; accounts: WindowsUserAccount[] }) {
   const router = useRouter();
-  const [limitEnabled, setLimitEnabled] = useState(rule.dailyLimitSeconds != null);
   const [openAtSignIn, setOpenAtSignIn] = useState(rule.openWindowAtSignIn);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -28,8 +27,6 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
     setSaved(false); setError("");
     setBusy(true);
     const data = new FormData(event.currentTarget);
-    const hours = Number(data.get("limitHours"));
-    const minutes = Number(data.get("limitMinutes"));
     try {
       const response = await fetch(appPath(`/api/backend/devices/${deviceId}/rules`), {
         method: "PUT", headers: { "Content-Type": "application/json" },
@@ -37,12 +34,11 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
           controlledUserSid: data.get("controlledUserSid") || null,
           language: data.get("language"),
           openWindowAtSignIn: openAtSignIn,
-          dailyLimitSeconds: limitEnabled ? hours * 3600 + minutes * 60 : null,
           idleThresholdSeconds: Number(data.get("idleMinutes")) * 60,
         }),
       });
       if (!response.ok) {
-        setError(response.status === 400 ? "Check the limit and idle values, then try again." : "The PC rule could not be saved.");
+        setError(response.status === 400 ? "Check the idle value, then try again." : "The PC rule could not be saved.");
         return;
       }
       setSaved(true);
@@ -56,7 +52,7 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
 
   return (
     <form onSubmit={save} className="grid gap-4">
-      <Card>
+      <Card id="account" className="scroll-mt-20">
         <CardHeader><CardTitle>Controlled Windows account</CardTitle><CardDescription>KidTime counts usage and enforces limits only while this Windows profile is signed in.</CardDescription></CardHeader>
         <CardContent>
           <Field className="max-w-xl">
@@ -114,24 +110,6 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
             checked={openAtSignIn}
             onCheckedChange={setOpenAtSignIn}
           />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Daily PC limit</CardTitle><CardDescription>Only active, non-idle time counts toward this limit.</CardDescription></CardHeader>
-        <CardContent>
-          <FieldGroup>
-            <SwitchField
-              title="Use a daily limit"
-              description="Windows signs the user out when active time is exhausted."
-              checked={limitEnabled}
-              onCheckedChange={setLimitEnabled}
-            />
-            <div className="grid max-w-sm grid-cols-2 gap-3">
-              <Field><FieldLabel htmlFor="limitHours">Hours</FieldLabel><Input id="limitHours" name="limitHours" type="number" min="0" max="24" disabled={!limitEnabled} defaultValue={Math.floor((rule.dailyLimitSeconds ?? 18000) / 3600)} /></Field>
-              <Field><FieldLabel htmlFor="limitMinutes">Minutes</FieldLabel><Input id="limitMinutes" name="limitMinutes" type="number" min="0" max="59" disabled={!limitEnabled} defaultValue={Math.floor(((rule.dailyLimitSeconds ?? 18000) % 3600) / 60)} /></Field>
-            </div>
-          </FieldGroup>
         </CardContent>
       </Card>
 

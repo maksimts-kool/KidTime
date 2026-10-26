@@ -30,7 +30,7 @@ export default async function DiagnosticsPage({
         description="Crashes and errors reported by the KidTime service and tray agent on enrolled PCs. Reports arrive with the next synchronization, so an offline PC delivers them when it reconnects."
         actions={(
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="ghost" render={<Link href={includeResolved ? "/diagnostics" : "/diagnostics?resolved=1"} />}>
+            <Button variant="ghost" nativeButton={false} render={<Link href={includeResolved ? "/diagnostics" : "/diagnostics?resolved=1"} />}>
               {includeResolved ? "Hide handled" : "Show handled"}
             </Button>
             {open.length > 0 && <ResolveAllFaults deviceId={deviceId} />}

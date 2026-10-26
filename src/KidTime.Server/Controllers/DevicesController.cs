@@ -24,8 +24,11 @@ public sealed class DevicesController(
     TimeProvider timeProvider,
     ILogger<DevicesController> logger) : ControllerBase
 {
+    /// <summary>
+    /// The PC's rule form. The schedule and the daily limit are not on it: the panel edits both in
+    /// the schedule card, through PUT schedule and PUT limit, and saves each on its own.
+    /// </summary>
     public sealed record UpdateDeviceRuleRequest(
-        int? DailyLimitSeconds,
         int IdleThresholdSeconds,
         // Null keeps the stored schedule: the panel edits it on its own, in a popup that saves
         // through PUT schedule, so the rest of the rule form no longer carries it.
@@ -176,7 +179,6 @@ public sealed class DevicesController(
     {
         var rule = await dbContext.DeviceRules.SingleOrDefaultAsync(x => x.DeviceId == deviceId, cancellationToken);
         if (rule is null) return NotFound();
-        if (request.DailyLimitSeconds is < 60 or > 86_400) return BadRequest("Daily limit must be 60-86400 seconds.");
         if (request.Schedule is not null && ScheduleValidator.Validate(request.Schedule) is { } scheduleError)
             return BadRequest(scheduleError);
 
@@ -195,7 +197,6 @@ public sealed class DevicesController(
         if (request.Language is { } language && !Enum.IsDefined(language))
             return BadRequest("Choose a supported interface language.");
 
-        rule.DailyLimitSeconds = request.DailyLimitSeconds;
         rule.IdleThresholdSeconds = Math.Clamp(request.IdleThresholdSeconds, 30, 3_600);
         rule.Language = request.Language ?? rule.Language;
         rule.OpenWindowAtSignIn = request.OpenWindowAtSignIn ?? rule.OpenWindowAtSignIn;
@@ -220,6 +221,23 @@ public sealed class DevicesController(
         if (rule is null) return NotFound();
         if (ScheduleValidator.Validate(schedule) is { } scheduleError) return BadRequest(scheduleError);
         rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(schedule);
+        await MarkRulesChangedAsync(rule, cancellationToken);
+        return NoContent();
+    }
+
+    public sealed record UpdateLimitRequest(int? DailyLimitSeconds);
+
+    /// <summary>Replaces the PC's daily limit and nothing else; null removes it.</summary>
+    [HttpPut("{deviceId:guid}/limit")]
+    public async Task<IActionResult> UpdateLimit(
+        Guid deviceId,
+        UpdateLimitRequest request,
+        CancellationToken cancellationToken)
+    {
+        var rule = await dbContext.DeviceRules.SingleOrDefaultAsync(x => x.DeviceId == deviceId, cancellationToken);
+        if (rule is null) return NotFound();
+        if (request.DailyLimitSeconds is < 60 or > 86_400) return BadRequest("Daily limit must be 60-86400 seconds.");
+        rule.DailyLimitSeconds = request.DailyLimitSeconds;
         await MarkRulesChangedAsync(rule, cancellationToken);
         return NoContent();
     }

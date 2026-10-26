@@ -62,7 +62,7 @@ export default async function DashboardPage() {
                 </p>
               </div>
             </div>
-            <Button render={<Link href="/requests" />}>Review <ArrowRight data-icon="inline-end" /></Button>
+            <Button nativeButton={false} render={<Link href="/requests" />}>Review <ArrowRight data-icon="inline-end" /></Button>
           </CardContent>
         </Card>
       )}
@@ -123,7 +123,7 @@ export default async function DashboardPage() {
           <CardHeader>
             <CardTitle>Top applications</CardTitle>
             <CardDescription>Foreground usage today</CardDescription>
-            <CardAction><Button variant="ghost" size="sm" render={<Link href="/applications" />}>View all <ArrowRight data-icon="inline-end" /></Button></CardAction>
+            <CardAction><Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/applications" />}>View all <ArrowRight data-icon="inline-end" /></Button></CardAction>
           </CardHeader>
           <CardContent>
             {top.length ? <div>{top.map((app, index) => (
@@ -147,7 +147,7 @@ export default async function DashboardPage() {
           <CardHeader>
             <CardTitle>Daily active time</CardTitle>
             <CardDescription>Last 7 days, with this week&rsquo;s average marked</CardDescription>
-            <CardAction><Button variant="ghost" size="sm" render={<Link href="/statistics" />}>Details <ArrowRight data-icon="inline-end" /></Button></CardAction>
+            <CardAction><Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/statistics" />}>Details <ArrowRight data-icon="inline-end" /></Button></CardAction>
           </CardHeader>
           <CardContent>
             {statistics.daily.length ? (

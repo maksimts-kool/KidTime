@@ -1,73 +1,158 @@
 import Link from "next/link";
-import { ArrowLeft, CircleCheck, CloudDownload, CloudOff, RefreshCw, UserRound } from "lucide-react";
+import { ArrowLeft, CloudDownload, CloudOff, MonitorCheck, RefreshCw, TriangleAlert, UserRound, UserRoundX, Wifi } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
 import { formatSeen } from "@/lib/format";
-import type { DeviceDetail, SpecialPeriod } from "@/lib/types";
+import { describeTodayWindows } from "@/lib/schedule";
+import { deviceNowState } from "@/lib/status";
+import type { DeviceDetail, DeviceSummary, SpecialPeriod } from "@/lib/types";
+import { AutoRefresh } from "@/components/auto-refresh";
 import { DeviceRuleEditor } from "@/components/device-rule-editor";
 import { GiveExtraTime } from "@/components/give-extra-time";
 import { PageHeader } from "@/components/page-header";
 import { QuickBlock } from "@/components/quick-block";
 import { RemoveDevice } from "@/components/remove-device";
 import { ScheduleCard } from "@/components/schedule-card";
+import { ScheduleStrip } from "@/components/schedule-strip";
+import { ActionRow, NowCard, PageSection, StateBadge, StatusTile, type StatusTone } from "@/components/status-panel";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 
 export default async function DevicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [detail, periods] = await Promise.all([
+  const [detail, periods, devices] = await Promise.all([
     backendFetch<DeviceDetail>(`/api/devices/${id}`),
     backendFetch<SpecialPeriod[]>(`/api/special-periods?deviceId=${id}`),
+    // The list carries what today looks like - usage, the schedule's state, faults waiting - and
+    // the device's own endpoint carries its rules; the page needs both.
+    backendFetch<DeviceSummary[]>("/api/devices"),
   ]);
-  const online = detail.device.isOnline;
-  const synced = detail.device.appliedRuleRevision >= detail.rules.revision;
-  const updateValue = detail.device.isAgentUpToDate
-    ? `v${detail.device.agentVersion} is current`
-    : detail.device.agentUpdateStatus === "Installing" || detail.device.agentUpdateStatus === "Downloading"
-      ? `${detail.device.agentUpdateStatus} v${detail.device.latestAgentVersion ?? "latest"}`
-      : `v${detail.device.agentVersion ?? "unknown"} · latest v${detail.device.latestAgentVersion ?? "unpublished"}`;
-  const facts = [
-    { label: "Connection", value: online ? "Online" : `Last seen ${formatSeen(detail.device.lastSeenUtc)}`, icon: online ? CircleCheck : CloudOff, good: online },
-    { label: "Rule sync", value: synced ? `Revision ${detail.rules.revision} applied` : `Waiting for revision ${detail.rules.revision}`, icon: RefreshCw, good: synced },
-    { label: "Logged-in user", value: detail.device.loggedInUser ?? "Not reported", icon: UserRound, good: Boolean(detail.device.loggedInUser) },
-    { label: "KidTime services", value: updateValue, icon: CloudDownload, good: detail.device.isAgentUpToDate },
-  ];
+  const summary = devices.find(device => device.id === id) ?? null;
+  const { device, rules } = detail;
+  const online = device.isOnline;
+  const synced = device.appliedRuleRevision >= rules.revision;
+
+  const update: { value: string; hint: string; tone: StatusTone } = !device.agentVersion
+    ? { value: "Not reported yet", hint: "Appears after the PC's first sync.", tone: "idle" }
+    : device.isAgentUpToDate
+      ? { value: `v${device.agentVersion}`, hint: "Up to date.", tone: "ok" }
+      : device.agentUpdateStatus === "Failed"
+        ? { value: `v${device.agentVersion}`, hint: device.agentUpdateError ?? "The last update failed and was rolled back.", tone: "bad" }
+        : device.agentUpdateStatus === "Downloading" || device.agentUpdateStatus === "Installing"
+          ? { value: `Updating to v${device.latestAgentVersion}`, hint: `${device.agentUpdateStatus} now.`, tone: "warn" }
+          : device.latestAgentVersion
+            ? { value: `v${device.agentVersion}`, hint: `v${device.latestAgentVersion} is published; it installs on its own within minutes.`, tone: "warn" }
+            : { value: `v${device.agentVersion}`, hint: "No release is published on this server.", tone: "idle" };
+  const faults = summary?.unresolvedFaults ?? 0;
+
   return (
     <>
-      <Button variant="ghost" size="sm" className="mb-4 -ml-2" render={<Link href="/devices" />}><ArrowLeft data-icon="inline-start" />Devices</Button>
-      <PageHeader
-        eyebrow="Device settings"
-        title={detail.device.name}
-        description={`${detail.device.windowsVersion} · ${detail.device.timeZoneId}`}
-        actions={(
-          <div className="flex flex-wrap items-center gap-2">
-            <GiveExtraTime targets={[{ deviceId: id, deviceApplicationId: null, label: "PC screen time" }]} />
-            <QuickBlock deviceId={id} blocked={detail.rules.manuallyBlocked} />
-            <RemoveDevice deviceId={id} deviceName={detail.device.name} />
-          </div>
+      <AutoRefresh seconds={30} />
+      <Button variant="ghost" size="sm" className="mb-4 -ml-2" nativeButton={false} render={<Link href="/devices" />}><ArrowLeft data-icon="inline-start" />Devices</Button>
+      <PageHeader eyebrow="Device" title={device.name} description={`${device.windowsVersion} · ${device.timeZoneId}`} />
+
+      <PageSection title="Status" description="What the PC is doing now, and whether it is hearing your rules.">
+        {summary && (
+          <NowCard
+            state={deviceNowState(summary)}
+            usedSeconds={summary.todayActiveSeconds}
+            limitSeconds={summary.dailyLimitSeconds}
+            badges={(
+              <>
+                {summary.schedule.specialPeriod && <StateBadge tone="ok">{summary.schedule.specialPeriod.name} in force</StateBadge>}
+                {online && summary.foregroundApplication && <StateBadge>Using {summary.foregroundApplication}</StateBadge>}
+              </>
+            )}
+          >
+            {summary.schedule.configured && (
+              <div>
+                <p className="mb-1 text-xs text-muted-foreground tabular-nums">{describeTodayWindows(summary)}</p>
+                <ScheduleStrip windows={summary.schedule.todayWindows} nowMinute={summary.schedule.nowMinuteOfDay} />
+              </div>
+            )}
+          </NowCard>
         )}
-      />
-      <Card className="mb-4">
-        <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {facts.map(({ label, value, icon: Icon, good }) => (
-            <div className="flex items-center gap-3 rounded-lg bg-muted/60 p-3" key={label}>
-              <span className={good ? "flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary" : "flex size-9 items-center justify-center rounded-lg bg-background text-muted-foreground"}><Icon className="size-4" /></span>
-              <div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="truncate text-sm font-medium">{value}</p></div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-      <div className="mb-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <StatusTile
+            label="Connection"
+            icon={online ? Wifi : CloudOff}
+            tone={online ? "ok" : "warn"}
+            value={online ? "Online" : "Offline"}
+            hint={online
+              ? device.loggedInUser ? `Signed in as ${device.loggedInUser}.` : "Nobody is signed in."
+              : `Last seen ${formatSeen(device.lastSeenUtc).toLowerCase()}. Cached rules keep applying.`}
+          />
+          <StatusTile
+            label="Rules on the PC"
+            icon={RefreshCw}
+            tone={synced ? "ok" : "warn"}
+            value={synced ? "Up to date" : online ? "Syncing" : "Waiting for the PC"}
+            hint={synced ? `Revision ${rules.revision} applied.` : online ? `Revision ${rules.revision} is on its way.` : "Your latest changes apply when it reconnects."}
+          />
+          <StatusTile
+            label="Child's account"
+            icon={rules.controlledUserName ? UserRound : UserRoundX}
+            tone={rules.controlledUserName ? "ok" : "bad"}
+            value={rules.controlledUserName ?? "Not chosen"}
+            hint={rules.controlledUserName ? "Rules apply only while it is signed in." : "Nothing is enforced. Choose it below."}
+            href={rules.controlledUserName ? undefined : "#account"}
+          />
+          <StatusTile label="KidTime on the PC" icon={CloudDownload} tone={update.tone} value={update.value} hint={update.hint} />
+          <StatusTile
+            label="Errors"
+            icon={faults ? TriangleAlert : MonitorCheck}
+            tone={faults ? "bad" : "ok"}
+            value={faults ? `${faults} waiting` : "None"}
+            hint={faults ? "Open the error log to see what went wrong." : "Nothing has gone wrong on this PC."}
+            href={faults ? "/diagnostics" : undefined}
+          />
+        </div>
+      </PageSection>
+
+      <PageSection title="Settings" description="Everything you can change about this PC, in one place.">
+        <Card>
+          <CardHeader>
+            <CardTitle>Quick actions</CardTitle>
+            <CardDescription>They take effect with the PC&apos;s next sync and leave the rules below as they are.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <ActionRow title="Give extra time" description="Adds minutes to today, and opens a blocked or closed PC for that long.">
+              <GiveExtraTime targets={[{ deviceId: id, deviceApplicationId: null, label: "PC screen time" }]} />
+            </ActionRow>
+            <Separator />
+            <ActionRow
+              title={rules.manuallyBlocked ? "Unblock the PC" : "Block the PC now"}
+              description={rules.manuallyBlocked ? "The child can sign in again within the schedule and limit." : "The child gets a one-minute warning and is signed out."}
+            >
+              <QuickBlock deviceId={id} blocked={rules.manuallyBlocked} />
+            </ActionRow>
+          </CardContent>
+        </Card>
+
         <ScheduleCard
           scheduleEndpoint={`/api/backend/devices/${id}/schedule`}
-          schedule={detail.rules.schedule}
+          limitEndpoint={`/api/backend/devices/${id}/limit`}
+          schedule={rules.schedule}
           periods={periods}
           deviceId={id}
-          dailyLimitSeconds={detail.rules.dailyLimitSeconds}
+          dailyLimitSeconds={rules.dailyLimitSeconds}
           scope="the PC"
-          description="When the PC may be used: the same hours every week, and different ones on holidays or other dates you set."
+          description="How long and when the PC may be used: every week, and differently on holidays or other dates you set."
         />
-      </div>
-      <DeviceRuleEditor deviceId={id} rule={detail.rules} accounts={detail.availableWindowsUsers} />
+
+        <DeviceRuleEditor deviceId={id} rule={rules} accounts={detail.availableWindowsUsers} />
+
+        <Card className="ring-destructive/30">
+          <CardContent>
+            <ActionRow
+              title="Remove this PC"
+              description="Deletes its rules, history and credentials from the server. KidTime stays installed on the PC until it is removed there."
+            >
+              <RemoveDevice deviceId={id} deviceName={device.name} />
+            </ActionRow>
+          </CardContent>
+        </Card>
+      </PageSection>
     </>
   );
 }

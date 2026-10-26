@@ -2,8 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { CalendarClock, Eraser, Pencil, Plus, Trash2 } from "lucide-react";
+import { CalendarClock, Eraser, Hourglass, Pencil, Plus, Trash2 } from "lucide-react";
 import { appPath } from "@/lib/paths";
+import { formatDuration } from "@/lib/format";
 import type { SpecialPeriod, WeeklySchedule } from "@/lib/types";
 import { editableToSchedule, scheduleToEditable, validateEditableSchedule, type EditableDay } from "./weekly-schedule-editor";
 import { SpecialPeriods } from "./special-periods";
@@ -13,6 +14,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs";
 import { TimeInput } from "@/components/ui/time-input";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { SwitchField } from "@/components/ui/switch";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,14 +39,17 @@ const presets = [
 type Range = { id: string; start: string; end: string };
 
 /**
- * The schedule of the PC or of one application, as a card that only shows it. The weekly tab draws
- * the week; the second tab lists the special periods. Every change - adding a range, editing a
- * day, clearing the week, adding or removing a period - happens in a popup and is saved the moment
- * the popup is confirmed, through the schedule's own endpoint, so it never waits on the rest of the
- * rule form below and never carries that form's unsaved edits with it.
+ * When the PC or one application may be used, and for how long, as a card that only shows it. The
+ * weekly tab carries the daily limit and draws the week - the two rules that hold every week, read
+ * together the way a parent thinks of them ("two hours, and only in the evening") - and the second
+ * tab lists the special periods, which replace both. Every change - the limit, adding a range,
+ * editing a day, clearing the week, adding or removing a period - happens in a popup and is saved
+ * the moment the popup is confirmed, through its own endpoint, so it never waits on the rule form
+ * below and never carries that form's unsaved edits with it.
  */
 export function ScheduleCard({
   scheduleEndpoint,
+  limitEndpoint,
   schedule,
   periods,
   deviceId,
@@ -53,6 +60,8 @@ export function ScheduleCard({
 }: {
   /** `/api/backend/...` path the week is PUT to. */
   scheduleEndpoint: string;
+  /** `/api/backend/...` path the daily limit is PUT to. */
+  limitEndpoint: string;
   schedule: WeeklySchedule;
   periods: SpecialPeriod[];
   deviceId: string;
@@ -65,6 +74,7 @@ export function ScheduleCard({
   const router = useRouter();
   const week: WeeklySchedule = { days: schedule.days };
   const configured = week.days.length > 0;
+  const activePeriod = periods.find(period => period.isActive);
 
   /** Saves a whole week as a popup left it; returns why not, or null. */
   async function saveWeek(days: EditableDay[]): Promise<string | null> {
@@ -90,13 +100,13 @@ export function ScheduleCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Schedule</CardTitle>
+        <CardTitle>Schedule and daily limit</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="weekly">
           <TabsList>
-            <TabsTab value="weekly">Weekly schedule</TabsTab>
+            <TabsTab value="weekly">Every week</TabsTab>
             <TabsTab value="periods">
               Special periods
               {periods.length > 0 && <span className="rounded-full bg-primary/10 px-1.5 text-xs text-primary tabular-nums">{periods.length}</span>}
@@ -104,6 +114,22 @@ export function ScheduleCard({
           </TabsList>
 
           <TabsPanel value="weekly" className="grid gap-4">
+            <div className="flex flex-col gap-3 rounded-lg bg-muted/50 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Hourglass className="size-4" /></span>
+                <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground">Daily limit</p>
+                  <p className="text-sm font-medium">{dailyLimitSeconds == null ? "No daily limit" : `${formatDuration(dailyLimitSeconds)} a day`}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {activePeriod
+                      ? `${activePeriod.name} is in force, so its own limit applies today.`
+                      : "Only active time counts; time spent idle does not."}
+                  </p>
+                </div>
+              </div>
+              <LimitDialog endpoint={limitEndpoint} dailyLimitSeconds={dailyLimitSeconds} scope={scope} />
+            </div>
+
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm text-muted-foreground">
                 {configured
@@ -326,5 +352,88 @@ function ClearWeekDialog({ scope, onClear }: { scope: string; onClear: () => Pro
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+/** The limit on its own: on or off, and how long. Saved through its own endpoint at once. */
+function LimitDialog({ endpoint, dailyLimitSeconds, scope }: { endpoint: string; dailyLimitSeconds: number | null; scope: string }) {
+  const router = useRouter();
+  const fallback = dailyLimitSeconds ?? 7200;
+  const [open, setOpen] = useState(false);
+  const [enabled, setEnabled] = useState(dailyLimitSeconds != null);
+  const [hours, setHours] = useState(String(Math.floor(fallback / 3600)));
+  const [minutes, setMinutes] = useState(String(Math.floor((fallback % 3600) / 60)));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  function reset(next: boolean) {
+    setOpen(next);
+    if (!next) return;
+    setEnabled(dailyLimitSeconds != null);
+    setHours(String(Math.floor(fallback / 3600)));
+    setMinutes(String(Math.floor((fallback % 3600) / 60)));
+    setError("");
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const seconds = Number(hours) * 3600 + Number(minutes) * 60;
+    if (enabled && !(seconds >= 60 && seconds <= 86_400)) {
+      setError("Set a limit between 1 minute and 24 hours.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(appPath(endpoint), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dailyLimitSeconds: enabled ? seconds : null }),
+      });
+      if (!response.ok) {
+        const body = (await response.text()).trim().replace(/^"|"$/g, "");
+        setError(response.status === 400 && body ? body : "The limit could not be saved.");
+        return;
+      }
+      setOpen(false);
+      router.refresh();
+    } catch {
+      setError("Could not reach the KidTime server. Try again in a moment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={reset}>
+      <DialogTrigger render={<Button type="button" variant="outline" className="shrink-0" />}><Pencil data-icon="inline-start" />Change</DialogTrigger>
+      <DialogContent>
+        <form onSubmit={submit} className="flex min-h-0 flex-col">
+          <DialogHeader>
+            <DialogTitle>Daily limit</DialogTitle>
+            <DialogDescription>How much active time {scope} gets each day. When it runs out, {scope === "the PC" ? "Windows signs the child out" : "it closes"} after a warning.</DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <FieldGroup>
+              <SwitchField
+                title="Use a daily limit"
+                description="Off means no limit at all - only the schedule applies."
+                checked={enabled}
+                onCheckedChange={setEnabled}
+              />
+              <div className="grid max-w-xs grid-cols-2 gap-3">
+                <Field><FieldLabel htmlFor="limitDialogHours">Hours</FieldLabel><Input id="limitDialogHours" type="number" min="0" max="24" disabled={!enabled} value={hours} onChange={event => setHours(event.target.value)} /></Field>
+                <Field><FieldLabel htmlFor="limitDialogMinutes">Minutes</FieldLabel><Input id="limitDialogMinutes" type="number" min="0" max="59" disabled={!enabled} value={minutes} onChange={event => setMinutes(event.target.value)} /></Field>
+              </div>
+            </FieldGroup>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+          </DialogBody>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save limit"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

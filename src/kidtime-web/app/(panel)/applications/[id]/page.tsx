@@ -1,15 +1,18 @@
 import Link from "next/link";
-import { ArrowLeft, BadgeCheck, CalendarRange, Clock3, FileText, Flame, FolderOpen, Gauge } from "lucide-react";
+import { ArrowLeft, BadgeCheck, CalendarRange, FileText, Flame, FolderOpen, Gauge } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
 import { formatDuration } from "@/lib/format";
 import { busiestDay, changeAgainst, formatDayLabel, formatWeekday } from "@/lib/chart";
-import type { DailyUsage, SpecialPeriod, WeeklySchedule } from "@/lib/types";
+import type { ApplicationSummary, DailyUsage, SpecialPeriod, WeeklySchedule } from "@/lib/types";
+import { applicationNowState } from "@/lib/status";
 import { ApplicationIcon } from "@/components/application-icon";
-import { ApplicationRuleEditor } from "@/components/application-rule-editor";
+import { AutoRefresh } from "@/components/auto-refresh";
+import { ApplicationBlock } from "@/components/application-block";
 import { DailyUsageChart } from "@/components/charts/daily-usage-chart";
 import { GiveExtraTime } from "@/components/give-extra-time";
 import { ScheduleCard } from "@/components/schedule-card";
 import { StatCard } from "@/components/stat-card";
+import { ActionRow, NowCard, PageSection, StateBadge } from "@/components/status-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -41,8 +44,13 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
     backendFetch<Detail>(`/api/applications/${id}`),
     backendFetch<ApplicationStatistics>(`/api/statistics/applications/${id}?days=${days}`),
   ]);
-  const periods = await backendFetch<SpecialPeriod[]>(
-    `/api/special-periods?deviceId=${detail.device.id}&deviceApplicationId=${id}`);
+  const [periods, applications] = await Promise.all([
+    backendFetch<SpecialPeriod[]>(`/api/special-periods?deviceId=${detail.device.id}&deviceApplicationId=${id}`),
+    // The list is what knows whether the schedule is open right now and which limit is in force
+    // today, a special period's included.
+    backendFetch<ApplicationSummary[]>(`/api/applications?deviceId=${detail.device.id}`),
+  ]);
+  const summary = applications.find(application => application.id === id);
   // The last day of the range is the PC's own today, which is the one the child is still adding to.
   const today = statistics.to;
   const todaySeconds = statistics.daily.find(item => item.date === today)?.activeSeconds ?? 0;
@@ -53,73 +61,109 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
     { label: "Signed publisher", value: detail.application.signaturePublisher ?? "Not available", icon: BadgeCheck },
     { label: "Version / original file", value: `${detail.fileVersion ?? "Unknown"} · ${detail.application.originalFilename ?? detail.application.executableName}`, icon: FileText },
   ];
+  const limitToday = summary ? summary.dailyLimitSeconds : detail.rule.dailyLimitSeconds;
+  const now = applicationNowState({
+    manuallyBlocked: detail.rule.manuallyBlocked,
+    dailyLimitSeconds: limitToday,
+    todayActiveSeconds: todaySeconds,
+    scheduleConfigured: summary?.scheduleConfigured ?? detail.rule.schedule.days.length > 0,
+    withinSchedule: summary?.withinSchedule ?? true,
+  });
+  const activePeriod = periods.find(period => period.isActive);
   return (
     <>
-      <Button variant="ghost" size="sm" className="mb-4 -ml-2" render={<Link href="/applications" />}><ArrowLeft data-icon="inline-start" />Applications</Button>
+      <AutoRefresh seconds={30} />
+      <Button variant="ghost" size="sm" className="mb-4 -ml-2" nativeButton={false} render={<Link href="/applications" />}><ArrowLeft data-icon="inline-start" />Applications</Button>
       <div className="mb-6 flex items-center gap-4">
         <ApplicationIcon applicationId={id} displayName={detail.application.displayName} hasIcon={detail.hasIcon} size="large" />
         <div className="min-w-0 flex-1"><p className="mb-1 text-xs font-medium tracking-wide text-primary uppercase">{detail.device.name}</p><h1 className="truncate text-2xl font-semibold tracking-tight sm:text-3xl">{detail.application.displayName}</h1><p className="mt-1 truncate text-sm text-muted-foreground">{detail.application.signaturePublisher ?? detail.application.company ?? detail.application.executableName}</p></div>
-        <GiveExtraTime targets={[{ deviceId: detail.device.id, deviceApplicationId: id, label: detail.application.displayName }]} />
       </div>
-      <section className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Today"
-          value={formatDuration(todaySeconds)}
-          icon={Clock3}
-          detail={detail.rule.dailyLimitSeconds ? `${formatDuration(Math.max(0, detail.rule.dailyLimitSeconds - todaySeconds))} remaining` : "No daily limit"}
+
+      <PageSection title="Status" description={`Whether ${detail.application.displayName} can be used right now, and how much it has been.`}>
+        <NowCard
+          state={now}
+          usedSeconds={todaySeconds}
+          limitSeconds={limitToday}
+          badges={activePeriod && <StateBadge tone="ok">{activePeriod.name} in force</StateBadge>}
         />
-        <StatCard
-          label={`Last ${days} days`}
-          value={formatDuration(statistics.totalActiveSeconds)}
-          icon={CalendarRange}
-          trend={trend}
-          trendLabel={trend == null ? "Foreground active time" : `vs the ${days} days before`}
-        />
-        <StatCard label="Daily average" value={formatDuration(statistics.dailyAverageSeconds)} icon={Gauge} detail={`Across ${statistics.days} days`} />
-        <StatCard
-          label="Busiest day"
-          value={busiest ? formatDuration(busiest.activeSeconds) : "—"}
-          icon={Flame}
-          detail={busiest ? `${formatWeekday(busiest.date)}, ${formatDayLabel(busiest.date)}` : "Nothing recorded yet"}
-        />
-      </section>
-      <Card className="mb-4">
-        <CardHeader>
-          <CardTitle>Daily active time</CardTitle>
-          <CardDescription>
-            {formatDayLabel(statistics.from)} — {formatDayLabel(statistics.to)} · the dashed line is the average
-            {detail.rule.dailyLimitSeconds ? ", the red one this application's daily limit" : ""}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {statistics.totalActiveSeconds > 0 ? (
-            <DailyUsageChart daily={statistics.daily} limitSeconds={detail.rule.dailyLimitSeconds} today={today} height={240} />
-          ) : (
-            <p className="py-14 text-center text-sm text-muted-foreground">No foreground time has been recorded for these days.</p>
-          )}
-        </CardContent>
-      </Card>
-      <Card className="mb-4">
-        <CardHeader><CardTitle>Application details</CardTitle><CardDescription>Identity information reported by Windows.</CardDescription></CardHeader>
-        <CardContent>
-          {metadata.map(({ label, value, icon: Icon }, index) => (
-            <div key={label}>{index > 0 && <Separator />}<div className="flex gap-3 py-3"><Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" /><div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 break-all text-sm font-medium">{value}</p></div></div></div>
-          ))}
-        </CardContent>
-      </Card>
-      <div className="mb-4">
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatCard
+            label={`Last ${days} days`}
+            value={formatDuration(statistics.totalActiveSeconds)}
+            icon={CalendarRange}
+            trend={trend}
+            trendLabel={trend == null ? "Foreground active time" : `vs the ${days} days before`}
+          />
+          <StatCard label="Daily average" value={formatDuration(statistics.dailyAverageSeconds)} icon={Gauge} detail={`Across ${statistics.days} days`} />
+          <StatCard
+            label="Busiest day"
+            value={busiest ? formatDuration(busiest.activeSeconds) : "—"}
+            icon={Flame}
+            detail={busiest ? `${formatWeekday(busiest.date)}, ${formatDayLabel(busiest.date)}` : "Nothing recorded yet"}
+          />
+        </div>
+      </PageSection>
+
+      <PageSection title="Settings" description={`Everything you can change about ${detail.application.displayName} on ${detail.device.name}, in one place.`}>
+        <Card>
+          <CardHeader>
+            <CardTitle>Quick actions</CardTitle>
+            <CardDescription>They take effect with the PC&apos;s next sync and leave the schedule and limit below as they are.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <ActionRow title="Give extra time" description="Adds minutes to today, and opens it for that long if it is blocked or outside its schedule.">
+              <GiveExtraTime targets={[{ deviceId: detail.device.id, deviceApplicationId: id, label: detail.application.displayName }]} />
+            </ActionRow>
+            <Separator />
+            <ActionRow
+              title={detail.rule.manuallyBlocked ? "Unblock the application" : "Block the application"}
+              description={detail.rule.manuallyBlocked
+                ? "It may run again within its schedule and limit."
+                : "It closes after a warning, and whenever it starts, until you unblock it. This holds while the PC is offline too."}
+            >
+              <ApplicationBlock applicationId={id} displayName={detail.application.displayName} blocked={detail.rule.manuallyBlocked} />
+            </ActionRow>
+          </CardContent>
+        </Card>
         <ScheduleCard
           scheduleEndpoint={`/api/backend/applications/${id}/schedule`}
+          limitEndpoint={`/api/backend/applications/${id}/limit`}
           schedule={detail.rule.schedule}
           periods={periods}
           deviceId={detail.device.id}
           deviceApplicationId={id}
           dailyLimitSeconds={detail.rule.dailyLimitSeconds}
           scope={detail.application.displayName}
-          description="When the application may be used. It closes when its current allowed range ends."
+          description="How long and when the application may be used. It closes when its time or its current range runs out."
         />
-      </div>
-      <ApplicationRuleEditor applicationId={id} blocked={detail.rule.manuallyBlocked} dailyLimitSeconds={detail.rule.dailyLimitSeconds} />
+      </PageSection>
+
+      <PageSection title="History" description="Foreground time over the last two weeks, and what Windows reports about the application.">
+        <Card>
+          <CardHeader>
+            <CardTitle>Daily active time</CardTitle>
+            <CardDescription>
+              {formatDayLabel(statistics.from)} — {formatDayLabel(statistics.to)} · the dashed line is the average
+              {detail.rule.dailyLimitSeconds ? ", the red one this application's daily limit" : ""}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {statistics.totalActiveSeconds > 0 ? (
+              <DailyUsageChart daily={statistics.daily} limitSeconds={detail.rule.dailyLimitSeconds} today={today} height={240} />
+            ) : (
+              <p className="py-14 text-center text-sm text-muted-foreground">No foreground time has been recorded for these days.</p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle>Application details</CardTitle><CardDescription>Identity information reported by Windows.</CardDescription></CardHeader>
+          <CardContent>
+            {metadata.map(({ label, value, icon: Icon }, index) => (
+              <div key={label}>{index > 0 && <Separator />}<div className="flex gap-3 py-3"><Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" /><div className="min-w-0"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 break-all text-sm font-medium">{value}</p></div></div></div>
+            ))}
+          </CardContent>
+        </Card>
+      </PageSection>
     </>
   );
 }

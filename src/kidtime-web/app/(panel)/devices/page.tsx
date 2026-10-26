@@ -45,7 +45,7 @@ export default async function DevicesPage() {
                   <CardDescription>{device.windowsVersion} · Last seen {formatSeen(device.lastSeenUtc)}</CardDescription>
                   <CardAction className="flex items-center gap-2">
                     <QuickBlock deviceId={device.id} blocked={device.manuallyBlocked} />
-                    <Button variant="outline" size="icon" render={<Link href={`/devices/${device.id}`} aria-label={`Settings for ${device.name}`} />}><ChevronRight /></Button>
+                    <Button variant="outline" size="icon" nativeButton={false} render={<Link href={`/devices/${device.id}`} aria-label={`Settings for ${device.name}`} />}><ChevronRight /></Button>
                   </CardAction>
                 </CardHeader>
                 <CardContent className="grid gap-5 md:grid-cols-[1fr_200px_180px] md:items-end">

@@ -1183,13 +1183,26 @@ companion's query-log endpoints are therefore deliberately never called. See
   point. The exception escapes the window constructor, `AgentApplicationHost` never finishes, and
   the child is left with no tray icon, no screen-time window, and no notifications while
   enforcement carries on without them. Guard the handler; do not rely on attribute order.
-- **A schedule card shows; popups change.** `ScheduleCard` is the PC's or an application's schedule
-  as read-only week bars (`WeekView`) with the special periods on a second tab. Adding a range
-  (to any set of days at once), editing a day, clearing the week, and adding or removing a period
-  each happen in a popup that saves the moment it is confirmed, through `PUT .../schedule` and
-  `api/special-periods`. The card lives outside the rule editor's form and that form no longer
-  sends a schedule - the rules endpoints keep the stored one when it is absent - so neither can
-  overwrite the other's unsaved state. Emptying the last open day is refused in the day popup:
+- **A device or application page reads Status, then Settings.** Status says what is true now:
+  a `NowCard` with the state in the same precedence the PC applies (blocked by you, limit reached,
+  outside the schedule, allowed - `lib/status.ts`), today's time against the limit actually in
+  force, and for a PC the health tiles (`StatusTile`), each with the one line that says what it
+  means or what to do, toned `ok`/`warn`/`bad` and linking to the fix when there is one. Settings
+  holds **every** control - quick actions, the schedule card, the rule form, and removing the PC
+  last - so nothing that changes the PC sits in a page header. An application page adds a History
+  section after both.
+- **A button that navigates is `<Button nativeButton={false} render={<Link … />}>`.** Base UI
+  otherwise expects a native `<button>` and logs an error on every render.
+- **A schedule card shows; popups change.** `ScheduleCard` is the PC's or an application's daily
+  limit and schedule together - the two rules that hold every week, read as a parent says them,
+  "two hours, and only in the evening" - drawn read-only with the week as bars (`WeekView`), and
+  the special periods, which replace both, on a second tab. Changing the limit, adding a range (to
+  any set of days at once), editing a day, clearing the week, and adding or removing a period each
+  happen in a popup that saves the moment it is confirmed, through `PUT .../limit`,
+  `PUT .../schedule` and `api/special-periods`. The card lives outside the PC's rule form, and that
+  form carries neither the limit nor the schedule any more - the rules endpoints no longer take a
+  limit and keep the stored schedule when none is sent - so neither can overwrite the other's
+  unsaved state. An application has no rule form left: blocking it is a quick action. Emptying the last open day is refused in the day popup:
   a week with no ranges at all means *no schedule*, open at any time, and that has to be asked
   for by name with **Clear**.
 - **Times of day are typed on a 24-hour clock, never through `<input type="time">`.** The native
