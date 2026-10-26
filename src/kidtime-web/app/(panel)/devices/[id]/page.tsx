@@ -15,8 +15,7 @@ import { ScheduleCard } from "@/components/schedule-card";
 import { ScheduleStrip } from "@/components/schedule-strip";
 import { ActionRow, NowCard, PageSection, StateBadge, StatusTile, type StatusTone } from "@/components/status-panel";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default async function DevicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -51,7 +50,7 @@ export default async function DevicePage({ params }: { params: Promise<{ id: str
       <Button variant="ghost" size="sm" className="mb-4 -ml-2" nativeButton={false} render={<Link href="/devices" />}><ArrowLeft data-icon="inline-start" />Devices</Button>
       <PageHeader eyebrow="Device" title={device.name} description={`${device.windowsVersion} · ${device.timeZoneId}`} />
 
-      <PageSection title="Status" description="What the PC is doing now, and whether it is hearing your rules.">
+      <PageSection title="Status">
         {summary && (
           <NowCard
             state={deviceNowState(summary)}
@@ -109,23 +108,12 @@ export default async function DevicePage({ params }: { params: Promise<{ id: str
         </div>
       </PageSection>
 
-      <PageSection title="Settings" description="Everything you can change about this PC, in one place.">
+      <PageSection title="Settings">
         <Card>
-          <CardHeader>
-            <CardTitle>Quick actions</CardTitle>
-            <CardDescription>They take effect with the PC&apos;s next sync and leave the rules below as they are.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            <ActionRow title="Give extra time" description="Adds minutes to today, and opens a blocked or closed PC for that long.">
-              <GiveExtraTime targets={[{ deviceId: id, deviceApplicationId: null, label: "PC screen time" }]} />
-            </ActionRow>
-            <Separator />
-            <ActionRow
-              title={rules.manuallyBlocked ? "Unblock the PC" : "Block the PC now"}
-              description={rules.manuallyBlocked ? "The child can sign in again within the schedule and limit." : "The child gets a one-minute warning and is signed out."}
-            >
-              <QuickBlock deviceId={id} blocked={rules.manuallyBlocked} />
-            </ActionRow>
+          <CardHeader><CardTitle>Quick actions</CardTitle></CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <GiveExtraTime targets={[{ deviceId: id, deviceApplicationId: null, label: "PC screen time" }]} />
+            <QuickBlock deviceId={id} blocked={rules.manuallyBlocked} />
           </CardContent>
         </Card>
 

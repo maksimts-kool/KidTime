@@ -1,8 +1,7 @@
 import Link from "next/link";
-import { ArrowLeft, BadgeCheck, CalendarRange, FileText, Flame, FolderOpen, Gauge } from "lucide-react";
+import { ArrowLeft, BadgeCheck, FileText, FolderOpen } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
-import { formatDuration } from "@/lib/format";
-import { busiestDay, changeAgainst, formatDayLabel, formatWeekday } from "@/lib/chart";
+import { formatDayLabel } from "@/lib/chart";
 import type { ApplicationSummary, DailyUsage, SpecialPeriod, WeeklySchedule } from "@/lib/types";
 import { applicationNowState } from "@/lib/status";
 import { ApplicationIcon } from "@/components/application-icon";
@@ -11,8 +10,7 @@ import { ApplicationBlock } from "@/components/application-block";
 import { DailyUsageChart } from "@/components/charts/daily-usage-chart";
 import { GiveExtraTime } from "@/components/give-extra-time";
 import { ScheduleCard } from "@/components/schedule-card";
-import { StatCard } from "@/components/stat-card";
-import { ActionRow, NowCard, PageSection, StateBadge } from "@/components/status-panel";
+import { NowCard, PageSection, StateBadge } from "@/components/status-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -54,8 +52,6 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
   // The last day of the range is the PC's own today, which is the one the child is still adding to.
   const today = statistics.to;
   const todaySeconds = statistics.daily.find(item => item.date === today)?.activeSeconds ?? 0;
-  const busiest = busiestDay(statistics.daily);
-  const trend = changeAgainst(statistics.totalActiveSeconds, statistics.previousTotalActiveSeconds);
   const metadata = [
     { label: "Executable path", value: detail.executablePath, icon: FolderOpen },
     { label: "Signed publisher", value: detail.application.signaturePublisher ?? "Not available", icon: BadgeCheck },
@@ -79,66 +75,16 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
         <div className="min-w-0 flex-1"><p className="mb-1 text-xs font-medium tracking-wide text-primary uppercase">{detail.device.name}</p><h1 className="truncate text-2xl font-semibold tracking-tight sm:text-3xl">{detail.application.displayName}</h1><p className="mt-1 truncate text-sm text-muted-foreground">{detail.application.signaturePublisher ?? detail.application.company ?? detail.application.executableName}</p></div>
       </div>
 
-      <PageSection title="Status" description={`Whether ${detail.application.displayName} can be used right now, and how much it has been.`}>
+      <PageSection title="Status">
         <NowCard
           state={now}
           usedSeconds={todaySeconds}
           limitSeconds={limitToday}
           badges={activePeriod && <StateBadge tone="ok">{activePeriod.name} in force</StateBadge>}
         />
-        <div className="grid gap-4 sm:grid-cols-3">
-          <StatCard
-            label={`Last ${days} days`}
-            value={formatDuration(statistics.totalActiveSeconds)}
-            icon={CalendarRange}
-            trend={trend}
-            trendLabel={trend == null ? "Foreground active time" : `vs the ${days} days before`}
-          />
-          <StatCard label="Daily average" value={formatDuration(statistics.dailyAverageSeconds)} icon={Gauge} detail={`Across ${statistics.days} days`} />
-          <StatCard
-            label="Busiest day"
-            value={busiest ? formatDuration(busiest.activeSeconds) : "—"}
-            icon={Flame}
-            detail={busiest ? `${formatWeekday(busiest.date)}, ${formatDayLabel(busiest.date)}` : "Nothing recorded yet"}
-          />
-        </div>
       </PageSection>
 
-      <PageSection title="Settings" description={`Everything you can change about ${detail.application.displayName} on ${detail.device.name}, in one place.`}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick actions</CardTitle>
-            <CardDescription>They take effect with the PC&apos;s next sync and leave the schedule and limit below as they are.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            <ActionRow title="Give extra time" description="Adds minutes to today, and opens it for that long if it is blocked or outside its schedule.">
-              <GiveExtraTime targets={[{ deviceId: detail.device.id, deviceApplicationId: id, label: detail.application.displayName }]} />
-            </ActionRow>
-            <Separator />
-            <ActionRow
-              title={detail.rule.manuallyBlocked ? "Unblock the application" : "Block the application"}
-              description={detail.rule.manuallyBlocked
-                ? "It may run again within its schedule and limit."
-                : "It closes after a warning, and whenever it starts, until you unblock it. This holds while the PC is offline too."}
-            >
-              <ApplicationBlock applicationId={id} displayName={detail.application.displayName} blocked={detail.rule.manuallyBlocked} />
-            </ActionRow>
-          </CardContent>
-        </Card>
-        <ScheduleCard
-          scheduleEndpoint={`/api/backend/applications/${id}/schedule`}
-          limitEndpoint={`/api/backend/applications/${id}/limit`}
-          schedule={detail.rule.schedule}
-          periods={periods}
-          deviceId={detail.device.id}
-          deviceApplicationId={id}
-          dailyLimitSeconds={detail.rule.dailyLimitSeconds}
-          scope={detail.application.displayName}
-          description="How long and when the application may be used. It closes when its time or its current range runs out."
-        />
-      </PageSection>
-
-      <PageSection title="History" description="Foreground time over the last two weeks, and what Windows reports about the application.">
+      <PageSection title="History">
         <Card>
           <CardHeader>
             <CardTitle>Daily active time</CardTitle>
@@ -163,6 +109,27 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
             ))}
           </CardContent>
         </Card>
+      </PageSection>
+
+      <PageSection title="Settings">
+        <Card>
+          <CardHeader><CardTitle>Quick actions</CardTitle></CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <GiveExtraTime targets={[{ deviceId: detail.device.id, deviceApplicationId: id, label: detail.application.displayName }]} />
+            <ApplicationBlock applicationId={id} displayName={detail.application.displayName} blocked={detail.rule.manuallyBlocked} />
+          </CardContent>
+        </Card>
+        <ScheduleCard
+          scheduleEndpoint={`/api/backend/applications/${id}/schedule`}
+          limitEndpoint={`/api/backend/applications/${id}/limit`}
+          schedule={detail.rule.schedule}
+          periods={periods}
+          deviceId={detail.device.id}
+          deviceApplicationId={id}
+          dailyLimitSeconds={detail.rule.dailyLimitSeconds}
+          scope={detail.application.displayName}
+          description="How long and when the application may be used. It closes when its time or its current range runs out."
+        />
       </PageSection>
     </>
   );

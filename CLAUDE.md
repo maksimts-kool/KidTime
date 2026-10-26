@@ -1183,14 +1183,15 @@ companion's query-log endpoints are therefore deliberately never called. See
   point. The exception escapes the window constructor, `AgentApplicationHost` never finishes, and
   the child is left with no tray icon, no screen-time window, and no notifications while
   enforcement carries on without them. Guard the handler; do not rely on attribute order.
-- **A device or application page reads Status, then Settings.** Status says what is true now:
+- **A device or application page reads Status, then Settings, and an application page puts its
+  History between them.** Sections carry a heading and no subtitle, and quick actions are bare
+  buttons that name what they do. Status says what is true now:
   a `NowCard` with the state in the same precedence the PC applies (blocked by you, limit reached,
   outside the schedule, allowed - `lib/status.ts`), today's time against the limit actually in
   force, and for a PC the health tiles (`StatusTile`), each with the one line that says what it
   means or what to do, toned `ok`/`warn`/`bad` and linking to the fix when there is one. Settings
   holds **every** control - quick actions, the schedule card, the rule form, and removing the PC
-  last - so nothing that changes the PC sits in a page header. An application page adds a History
-  section after both.
+  last - so nothing that changes the PC sits in a page header.
 - **A button that navigates is `<Button nativeButton={false} render={<Link … />}>`.** Base UI
   otherwise expects a native `<button>` and logs an error on every render.
 - **A schedule card shows; popups change.** `ScheduleCard` is the PC's or an application's daily
