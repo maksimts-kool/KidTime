@@ -3,7 +3,8 @@ import { ArrowRight, CalendarRange, Clock3, HandHelping, Sparkles } from "lucide
 import { backendFetch } from "@/lib/backend";
 import { formatDuration, formatSeen } from "@/lib/format";
 import { changeAgainst } from "@/lib/chart";
-import { describeApplicationRules, describeSchedule, describeTodayWindows } from "@/lib/schedule";
+import { describeApplicationRules, describeOpenNow, describeSchedule, describeTodayWindows } from "@/lib/schedule";
+import { deviceNowState } from "@/lib/status";
 import type { ApplicationSummary, DeviceStatistics, DeviceSummary, TimeExtensionRequest } from "@/lib/types";
 import { ApplicationIcon } from "@/components/application-icon";
 import { AutoRefresh } from "@/components/auto-refresh";
@@ -14,6 +15,7 @@ import { QuickBlock } from "@/components/quick-block";
 import { ScheduleStrip } from "@/components/schedule-strip";
 import { StatCard } from "@/components/stat-card";
 import { StatusBadge } from "@/components/status-badge";
+import { NowBadge } from "@/components/status-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,6 +39,7 @@ export default async function DashboardPage() {
   // headline the daily limit used to hold twice over.
   const schedule = describeSchedule(device);
   const todayWindows = describeTodayWindows(device);
+  const openNow = describeOpenNow(device);
   const top = [...applications].sort((a, b) => b.todayActiveSeconds - a.todayActiveSeconds).slice(0, 5);
   const weekTrend = changeAgainst(statistics.totalActiveSeconds, statistics.previousTotalActiveSeconds);
 
@@ -68,7 +71,7 @@ export default async function DashboardPage() {
       )}
       <Card className="mb-4">
         <CardHeader className="border-b">
-          <div className="flex items-center gap-2"><StatusBadge online={device.isOnline} /><span className="text-sm text-muted-foreground">{device.windowsVersion}</span></div>
+          <div className="flex flex-wrap items-center gap-2"><StatusBadge online={device.isOnline} /><NowBadge state={deviceNowState(device)} /><span className="text-sm text-muted-foreground">{device.windowsVersion}</span></div>
           <CardTitle className="text-xl">{device.name}</CardTitle>
           {/* An offline PC reports nothing, so its last foreground application is a stale fact rather than a current one. */}
           <CardDescription>{!device.isOnline ? `Last seen ${formatSeen(device.lastSeenUtc)}` : device.foregroundApplication ? <>Currently using <span className="font-medium text-foreground">{device.foregroundApplication}</span></> : "No active application reported"}</CardDescription>
@@ -96,8 +99,8 @@ export default async function DashboardPage() {
             <div className="md:col-span-2">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground tabular-nums">{todayWindows}</p>
-                <Badge variant={device.schedule.withinWindow ? "secondary" : "outline"} className={device.schedule.withinWindow ? "text-primary" : "text-muted-foreground"}>
-                  {device.schedule.withinWindow ? "Open now" : "Closed now"}
+                <Badge variant={openNow.open ? "secondary" : "outline"} className={openNow.open ? "text-primary" : "text-muted-foreground"}>
+                  {openNow.label}
                 </Badge>
               </div>
               <ScheduleStrip windows={device.schedule.todayWindows} nowMinute={device.schedule.nowMinuteOfDay} />

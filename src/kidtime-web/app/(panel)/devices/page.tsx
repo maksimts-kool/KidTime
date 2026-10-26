@@ -2,13 +2,15 @@ import Link from "next/link";
 import { ChevronRight, Monitor, TriangleAlert } from "lucide-react";
 import { backendFetch } from "@/lib/backend";
 import { formatDuration, formatSeen } from "@/lib/format";
-import { describeSchedule, describeTodayWindows } from "@/lib/schedule";
+import { describeOpenNow, describeSchedule, describeTodayWindows } from "@/lib/schedule";
+import { deviceNowState } from "@/lib/status";
 import type { DeviceSummary } from "@/lib/types";
 import { EmptyDevices } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { QuickBlock } from "@/components/quick-block";
 import { ScheduleStrip } from "@/components/schedule-strip";
 import { StatusBadge } from "@/components/status-badge";
+import { NowBadge } from "@/components/status-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -26,12 +28,13 @@ export default async function DevicesPage() {
             const percent = device.dailyLimitSeconds ? Math.min(100, device.todayActiveSeconds / device.dailyLimitSeconds * 100) : 0;
             const schedule = describeSchedule(device);
             const todayWindows = describeTodayWindows(device);
+            const openNow = describeOpenNow(device);
             return (
               <Card key={device.id}>
                 <CardHeader>
                   <span className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary"><Monitor className="size-5" /></span>
                   <CardTitle className="mt-2 flex flex-wrap items-center gap-2">
-                    {device.name}<StatusBadge online={device.isOnline} />
+                    {device.name}<StatusBadge online={device.isOnline} /><NowBadge state={deviceNowState(device)} />
                     <Badge variant={device.isAgentUpToDate ? "secondary" : "destructive"} className={device.isAgentUpToDate ? "text-primary" : undefined}>
                       {device.isAgentUpToDate ? `Services v${device.agentVersion} current` : device.agentUpdateStatus === "Installing" ? "Services updating" : `Services outdated${device.latestAgentVersion ? ` · v${device.latestAgentVersion} available` : ""}`}
                     </Badge>
@@ -72,8 +75,8 @@ export default async function DevicesPage() {
                     <div className="md:col-span-3">
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                         <p className="text-xs text-muted-foreground tabular-nums">{todayWindows}</p>
-                        <Badge variant={device.schedule.withinWindow ? "secondary" : "outline"} className={device.schedule.withinWindow ? "text-primary" : "text-muted-foreground"}>
-                          {device.schedule.withinWindow ? "Open now" : "Closed now"}
+                        <Badge variant={openNow.open ? "secondary" : "outline"} className={openNow.open ? "text-primary" : "text-muted-foreground"}>
+                          {openNow.label}
                         </Badge>
                       </div>
                       <ScheduleStrip windows={device.schedule.todayWindows} nowMinute={device.schedule.nowMinuteOfDay} />

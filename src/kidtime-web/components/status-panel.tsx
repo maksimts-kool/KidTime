@@ -30,15 +30,15 @@ const toneRing: Record<StatusTone, string> = {
   idle: "",
 };
 
-/** A page section with a heading, so status and settings each read as one place. */
-export function PageSection({ id, title, description, children }: { id?: string; title: string; description?: string; children: ReactNode }) {
+/**
+ * A run of cards that belong together - what is true now, then what can be changed. The cards
+ * carry their own titles, so the section draws no heading of its own; `label` names it for a
+ * screen reader only.
+ */
+export function PageSection({ id, label, children }: { id?: string; label?: string; children: ReactNode }) {
   return (
-    <section id={id} className="mb-8 scroll-mt-20">
-      <div className="mb-3">
-        <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
-        {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
-      </div>
-      <div className="grid gap-4">{children}</div>
+    <section id={id} aria-label={label} className="mb-8 grid scroll-mt-20 gap-4">
+      {children}
     </section>
   );
 }
@@ -152,6 +152,11 @@ export function StateBadge({ children, tone = "idle" }: { children: ReactNode; t
       {children}
     </Badge>
   );
+}
+
+/** What a PC or an application is doing right now, as one badge for a list or a card header. */
+export function NowBadge({ state }: { state: NowState }) {
+  return <StateBadge tone={state.tone}>{state.title}</StateBadge>;
 }
 
 /** One setting that is a button rather than a field: what it does on the left, the button on the right. */

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { CalendarRange, CalendarX2, Plus, Trash2 } from "lucide-react";
+import { CalendarRange, CalendarX2, Pencil, Plus, Trash2 } from "lucide-react";
 import { appPath } from "@/lib/paths";
 import { errorMessage, unreachableMessage } from "@/lib/http";
 import { formatDuration } from "@/lib/format";
@@ -60,8 +60,8 @@ function describeWindows(schedule: WeeklySchedule) {
  * application. A period replaces the weekly schedule and the daily limit on its dates, and the PC
  * carries upcoming ones offline, so it switches over at its own midnight with nothing sent then.
  *
- * The tab only lists them. Adding one happens in a popup and removing one asks first; both save
- * at once.
+ * The tab only lists them. Adding or editing one happens in a popup and removing one asks first;
+ * all three save at once.
  */
 export function SpecialPeriods({
   deviceId,
@@ -86,7 +86,7 @@ export function SpecialPeriods({
         <p className="text-sm text-muted-foreground">
           Holidays, trips and other dates when {scope} follows a different schedule and daily limit. Afterwards the weekly rules come back on their own.
         </p>
-        <AddPeriodDialog
+        <PeriodDialog
           deviceId={deviceId}
           deviceApplicationId={deviceApplicationId}
           schedule={schedule}
@@ -115,7 +115,16 @@ export function SpecialPeriods({
                 </p>
               </div>
             </div>
-            <RemovePeriodDialog period={period} />
+            <div className="flex shrink-0 items-center gap-1">
+              <PeriodDialog
+                deviceId={deviceId}
+                deviceApplicationId={deviceApplicationId}
+                schedule={schedule}
+                dailyLimitSeconds={dailyLimitSeconds}
+                period={period}
+              />
+              <RemovePeriodDialog period={period} />
+            </div>
           </div>
           {/* A holiday whose days differ is easier to read as the week than as a sentence. */}
           {period.schedule.days.length > 0 && !sameEveryDay(period.schedule) && (
@@ -175,45 +184,53 @@ function RemovePeriodDialog({ period }: { period: SpecialPeriod }) {
   );
 }
 
-function AddPeriodDialog({
+/**
+ * Adds a period, or edits <paramref name="period"/> when one is given. A new period starts from
+ * the weekly rules as they are now; an existing one opens on what it already says.
+ */
+function PeriodDialog({
   deviceId,
   deviceApplicationId,
   schedule,
   dailyLimitSeconds,
+  period,
 }: {
   deviceId: string;
   deviceApplicationId: string | null;
   schedule: WeeklySchedule;
   dailyLimitSeconds: number | null;
+  period?: SpecialPeriod;
 }) {
   const router = useRouter();
-  const defaultLimit = dailyLimitSeconds ?? 10800;
+  const initialLimit = period ? period.dailyLimitSeconds : dailyLimitSeconds;
+  const defaultLimit = initialLimit ?? 10800;
+  const initialSchedule = period?.schedule ?? schedule;
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [days, setDays] = useState(() => scheduleToEditable({ days: schedule.days }));
-  const [limitEnabled, setLimitEnabled] = useState(dailyLimitSeconds != null);
+  const [name, setName] = useState(period?.name ?? "");
+  const [startDate, setStartDate] = useState(period?.startDate ?? "");
+  const [endDate, setEndDate] = useState(period?.endDate ?? "");
+  const [days, setDays] = useState(() => scheduleToEditable({ days: initialSchedule.days }));
+  const [limitEnabled, setLimitEnabled] = useState(initialLimit != null);
   const [hours, setHours] = useState(String(Math.floor(defaultLimit / 3600)));
   const [minutes, setMinutes] = useState(String(Math.floor((defaultLimit % 3600) / 60)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  /** Every opening starts from the weekly rules as they are now, not from a draft abandoned earlier. */
+  /** Every opening starts afresh, not from a draft abandoned earlier. */
   function reset(next: boolean) {
     setOpen(next);
     if (!next) return;
-    setName("");
-    setStartDate("");
-    setEndDate("");
-    setDays(scheduleToEditable({ days: schedule.days }));
-    setLimitEnabled(dailyLimitSeconds != null);
+    setName(period?.name ?? "");
+    setStartDate(period?.startDate ?? "");
+    setEndDate(period?.endDate ?? "");
+    setDays(scheduleToEditable({ days: initialSchedule.days }));
+    setLimitEnabled(initialLimit != null);
     setHours(String(Math.floor(defaultLimit / 3600)));
     setMinutes(String(Math.floor((defaultLimit % 3600) / 60)));
     setError("");
   }
 
-  async function create(event: FormEvent<HTMLFormElement>) {
+  async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     if (!name.trim()) {
@@ -231,12 +248,11 @@ function AddPeriodDialog({
     }
     setBusy(true);
     try {
-      const response = await fetch(appPath("/api/backend/special-periods"), {
-        method: "POST",
+      const response = await fetch(appPath(period ? `/api/backend/special-periods/${period.id}` : "/api/backend/special-periods"), {
+        method: period ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          deviceId,
-          deviceApplicationId,
+          ...(period ? {} : { deviceId, deviceApplicationId }),
           name: name.trim(),
           startDate,
           endDate,
@@ -259,11 +275,15 @@ function AddPeriodDialog({
 
   return (
     <Dialog open={open} onOpenChange={reset}>
-      <DialogTrigger render={<Button type="button" />}><Plus data-icon="inline-start" />Add special period</DialogTrigger>
+      {period ? (
+        <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label={`Edit ${period.name}`} />}><Pencil /></DialogTrigger>
+      ) : (
+        <DialogTrigger render={<Button type="button" />}><Plus data-icon="inline-start" />Add special period</DialogTrigger>
+      )}
       <DialogContent size="lg">
-        <form onSubmit={create} className="flex min-h-0 flex-col">
+        <form onSubmit={save} className="flex min-h-0 flex-col">
           <DialogHeader>
-            <DialogTitle>Add a special period</DialogTitle>
+            <DialogTitle>{period ? `Edit ${period.name}` : "Add a special period"}</DialogTitle>
             <DialogDescription>On these dates the schedule and daily limit below replace the weekly ones.</DialogDescription>
           </DialogHeader>
           <DialogBody>
@@ -279,7 +299,7 @@ function AddPeriodDialog({
             </FieldGroup>
             <div>
               <p className="text-sm font-medium">Schedule during the period</p>
-              <p className="text-xs text-muted-foreground">Starts from the weekly schedule. Set one day and use Copy to all days for the same hours every day; leave every day off to allow any time.</p>
+              <p className="text-xs text-muted-foreground">{period ? "The hours this period follows." : "Starts from the weekly schedule."} Set one day and use Copy to all days for the same hours every day; leave every day off to allow any time.</p>
               <WeeklyScheduleEditor days={days} onChange={setDays} />
             </div>
             <FieldGroup>
@@ -299,7 +319,7 @@ function AddPeriodDialog({
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Add period"}</Button>
+            <Button type="submit" disabled={busy}>{busy ? "Saving…" : period ? "Save period" : "Add period"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

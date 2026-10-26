@@ -24,7 +24,12 @@ import {
  * application on the child's screen after a warning - and unblocking does not, like the PC's own
  * block. The block also holds offline, from the cached rules.
  */
-export function ApplicationBlock({ applicationId, displayName, blocked }: { applicationId: string; displayName: string; blocked: boolean }) {
+export function ApplicationBlock({
+  applicationId,
+  displayName,
+  blocked,
+  size = "default",
+}: { applicationId: string; displayName: string; blocked: boolean; size?: "default" | "xl" }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -53,7 +58,7 @@ export function ApplicationBlock({ applicationId, displayName, blocked }: { appl
   if (blocked) {
     return (
       <div className="flex flex-col items-end gap-1">
-        <Button variant="outline" onClick={() => set(false)} disabled={busy}>
+        <Button variant="outline" size={size} onClick={() => set(false)} disabled={busy}>
           <CircleCheck data-icon="inline-start" />{busy ? "Sending…" : "Unblock"}
         </Button>
         {error && <p className="text-xs text-destructive">{error}</p>}
@@ -64,7 +69,7 @@ export function ApplicationBlock({ applicationId, displayName, blocked }: { appl
   return (
     <div className="flex flex-col items-end gap-1">
       <AlertDialog>
-        <AlertDialogTrigger render={<Button variant="destructive" disabled={busy} />}>
+        <AlertDialogTrigger render={<Button variant="destructive" size={size} disabled={busy} />}>
           <Ban data-icon="inline-start" />Block
         </AlertDialogTrigger>
         <AlertDialogContent>

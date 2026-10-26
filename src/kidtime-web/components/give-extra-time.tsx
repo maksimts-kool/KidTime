@@ -36,7 +36,11 @@ const selectClassName =
  * minutes are added to today's limit, a block or closed schedule opens for that long from now,
  * and the child is told once. With more than one target the dialog lets the parent pick which.
  */
-export function GiveExtraTime({ targets, variant = "outline" }: { targets: ExtraTimeTarget[]; variant?: "outline" | "default" }) {
+export function GiveExtraTime({
+  targets,
+  variant = "outline",
+  size = "default",
+}: { targets: ExtraTimeTarget[]; variant?: "outline" | "default"; size?: "default" | "xl" }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [targetIndex, setTargetIndex] = useState(0);
@@ -70,7 +74,7 @@ export function GiveExtraTime({ targets, variant = "outline" }: { targets: Extra
 
   return (
     <AlertDialog open={open} onOpenChange={next => { setOpen(next); if (next) { setMinutes(DEFAULT_MINUTES); setError(null); } }}>
-      <AlertDialogTrigger render={<Button variant={variant} />}>
+      <AlertDialogTrigger render={<Button variant={variant} size={size} />}>
         <TimerReset data-icon="inline-start" />Give extra time
       </AlertDialogTrigger>
       <AlertDialogContent>

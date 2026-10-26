@@ -149,5 +149,23 @@ public sealed class TimeExtensionsController(
     }
 
 
-    private Guid ParentUserId => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    /// <summary>
+    /// Takes back extra time that was given - a grant approved by mistake, or one the child no
+    /// longer deserves. The row goes, so the next snapshot carries neither its minutes nor the
+    /// window it held a block open, and it no longer counts against the child's daily requests.
+    /// Only a grant can be taken back: a refusal locks the scope on the PC itself, so deleting one
+    /// here would tell the parent the child may ask again while the PC still says no.
+    /// </summary>
+    [HttpDelete("{requestId:guid}")]
+    public async Task<IActionResult> Revoke(Guid requestId, CancellationToken cancellationToken)
+    {
+        var item = await dbContext.TimeExtensions.SingleOrDefaultAsync(row => row.Id == requestId, cancellationToken);
+        if (item is null) return NotFound();
+        if (item.Status != TimeExtensionStatuses.Approved) return Conflict("Only extra time that was given can be taken back.");
+        dbContext.TimeExtensions.Remove(item);
+        await ruleChanges.PublishAsync(item.DeviceId, cancellationToken);
+        return NoContent();
+    }
+
+    private Guid ParentUserId =>Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 }

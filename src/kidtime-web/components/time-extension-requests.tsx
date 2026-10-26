@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { AppWindow, Check, MonitorCog, X } from "lucide-react";
+import { AppWindow, Check, MonitorCog, Undo2, X } from "lucide-react";
 import { appPath } from "@/lib/paths";
 import { errorMessage, unreachableMessage } from "@/lib/http";
 import { formatSeen } from "@/lib/format";
@@ -11,6 +11,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 // The same stops the child's slider has, so an approval is always an amount they could have
 // asked for and there is nothing between the marks to negotiate over.
@@ -106,6 +118,57 @@ function PendingRequest({ request }: { request: TimeExtensionRequest }) {
   );
 }
 
+/**
+ * Takes back extra time that was given. The minutes come off today's limit and any block it held
+ * open closes again with the next sync. Only a grant can be taken back: a refusal is remembered on
+ * the PC itself, so removing one here would not let the child ask again.
+ */
+function RevokeGrant({ request }: { request: TimeExtensionRequest }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const scope = request.isPc ? "PC screen time" : request.displayName;
+
+  async function revoke() {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(appPath(`/api/backend/time-extensions/${request.id}`), { method: "DELETE" });
+      if (!response.ok && response.status !== 404) {
+        setError(await errorMessage(response, "The extra time could not be taken back."));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError(unreachableMessage);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AlertDialog onOpenChange={() => setError("")}>
+      <AlertDialogTrigger render={<Button variant="ghost" size="sm" />}>
+        <Undo2 data-icon="inline-start" />Take back
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogMedia><Undo2 /></AlertDialogMedia>
+          <AlertDialogTitle>Take back {request.grantedMinutes} minutes?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {scope} on {request.deviceName} loses the extra time with the next sync. If it was blocked or outside its schedule, it closes again with the usual warning.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep it</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" disabled={busy} onClick={revoke}>{busy ? "Taking back…" : "Take back"}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 export function TimeExtensionRequests({ requests }: { requests: TimeExtensionRequest[] }) {
   const pending = requests.filter(request => request.status === "Pending");
   const decided = requests.filter(request => request.status !== "Pending");
@@ -127,9 +190,12 @@ export function TimeExtensionRequests({ requests }: { requests: TimeExtensionReq
                   {request.deviceName} · {request.isPc ? "PC screen time" : request.displayName} ·{" "}
                   {request.initiatedByParent ? `given by you on ${request.localDate}` : `asked for ${request.requestedMinutes}m on ${request.localDate}`}
                 </span>
-                <Badge variant={request.status === "Approved" ? "secondary" : "outline"}>
-                  {request.status === "Approved" ? `${request.initiatedByParent ? "Gave" : "Granted"} ${request.grantedMinutes}m` : "Denied"}
-                </Badge>
+                <span className="flex items-center gap-2">
+                  {request.status === "Approved" && <RevokeGrant request={request} />}
+                  <Badge variant={request.status === "Approved" ? "secondary" : "outline"}>
+                    {request.status === "Approved" ? `${request.initiatedByParent ? "Gave" : "Granted"} ${request.grantedMinutes}m` : "Denied"}
+                  </Badge>
+                </span>
               </div>
             ))}
           </CardContent>

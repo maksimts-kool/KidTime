@@ -4,9 +4,10 @@ import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { formatDuration } from "@/lib/format";
 import { describeApplicationRules } from "@/lib/schedule";
+import { applicationNowState } from "@/lib/status";
 import type { ApplicationSummary } from "@/lib/types";
 import { ApplicationIcon } from "@/components/application-icon";
-import { Badge } from "@/components/ui/badge";
+import { NowBadge } from "@/components/status-panel";
 import { SwitchOption } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -122,11 +123,7 @@ export function ApplicationList({
                 */}
                 <TableCell className="text-muted-foreground tabular-nums">{describeApplicationRules(app) ?? "—"}</TableCell>
                 <TableCell className="pr-4">
-                  {app.extraTimeUntilLocal && (app.manuallyBlocked || (app.scheduleConfigured && !app.withinSchedule))
-                    ? <Badge variant="secondary" className="text-primary">Extra time</Badge>
-                    : app.manuallyBlocked ? <Badge variant="destructive">Blocked</Badge>
-                    : app.scheduleConfigured && !app.withinSchedule ? <Badge variant="outline" className="text-muted-foreground">Off schedule</Badge>
-                    : <Badge variant="secondary" className="text-primary">Allowed</Badge>}
+                  <NowBadge state={applicationNowState(app)} />
                 </TableCell>
               </TableRow>
             ))}

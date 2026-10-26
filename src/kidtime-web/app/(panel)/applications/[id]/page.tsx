@@ -72,12 +72,22 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
     <>
       <AutoRefresh seconds={30} />
       <Button variant="ghost" size="sm" className="mb-4 -ml-2" nativeButton={false} render={<Link href="/applications" />}><ArrowLeft data-icon="inline-start" />Applications</Button>
-      <div className="mb-6 flex items-center gap-4">
-        <ApplicationIcon applicationId={id} displayName={detail.application.displayName} hasIcon={detail.hasIcon} size="large" />
-        <div className="min-w-0 flex-1"><p className="mb-1 text-xs font-medium tracking-wide text-primary uppercase">{detail.device.name}</p><h1 className="truncate text-2xl font-semibold tracking-tight sm:text-3xl">{detail.application.displayName}</h1><p className="mt-1 truncate text-sm text-muted-foreground">{detail.application.signaturePublisher ?? detail.application.company ?? detail.application.executableName}</p></div>
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-center gap-4">
+          <ApplicationIcon applicationId={id} displayName={detail.application.displayName} hasIcon={detail.hasIcon} size="large" />
+          <div className="min-w-0 flex-1">
+            <p className="mb-1 text-xs font-medium tracking-wide text-primary uppercase">{detail.device.name}</p>
+            <h1 className="truncate text-2xl font-semibold tracking-tight sm:text-3xl">{detail.application.displayName}</h1>
+            <p className="mt-1 truncate text-sm text-muted-foreground">{detail.application.signaturePublisher ?? detail.application.company ?? detail.application.executableName}</p>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-start gap-2">
+          <GiveExtraTime size="xl" targets={[{ deviceId: detail.device.id, deviceApplicationId: id, label: detail.application.displayName }]} />
+          <ApplicationBlock size="xl" applicationId={id} displayName={detail.application.displayName} blocked={detail.rule.manuallyBlocked} />
+        </div>
       </div>
 
-      <PageSection title="Status">
+      <PageSection label="Status">
         <NowCard
           state={now}
           usedSeconds={todaySeconds}
@@ -86,7 +96,7 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
         />
       </PageSection>
 
-      <PageSection title="History">
+      <PageSection label="History">
         <Card>
           <CardHeader>
             <CardTitle>Daily active time</CardTitle>
@@ -113,14 +123,7 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
         </Card>
       </PageSection>
 
-      <PageSection title="Settings">
-        <Card>
-          <CardHeader><CardTitle>Quick actions</CardTitle></CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            <GiveExtraTime targets={[{ deviceId: detail.device.id, deviceApplicationId: id, label: detail.application.displayName }]} />
-            <ApplicationBlock applicationId={id} displayName={detail.application.displayName} blocked={detail.rule.manuallyBlocked} />
-          </CardContent>
-        </Card>
+      <PageSection label="Settings">
         <ScheduleCard
           scheduleEndpoint={`/api/backend/applications/${id}/schedule`}
           limitEndpoint={`/api/backend/applications/${id}/limit`}

@@ -288,7 +288,10 @@ enforcement boundary where it was.
    starting on the amount they asked for, so "yes, but twenty minutes" is one drag and one click. A decision — approve *or* deny —
    bumps `DeviceRule.Revision`, queues a command, and is pushed over the hub, because that is the
    one path the PC already watches, and a child left staring at "waiting for your parent" has been
-   told nothing at all.
+   told nothing at all. **A grant can be taken back** (`DELETE api/time-extensions/{id}`): the row
+   goes, so the next snapshot carries neither its minutes nor its window, and it stops counting
+   against the day's requests. A refusal cannot - the PC remembers it locally to hold the scope
+   shut for the allowance period, so deleting one on the server would change nothing the child sees.
 6. `RuleSnapshotFactory` reads today's approved grants back as a `TimeBonus` on the device rule and
    on each application rule, and `RuleEvaluator.EffectiveDailyLimitSeconds` is where every path
    must read a daily limit from. **A bonus carries the device-local date it was granted for**, so
@@ -354,7 +357,7 @@ change them. The panel calls them **Special periods** and draws them as the seco
 schedule card, beside **Weekly schedule**, on the device page and on each application's page.
 
 1. They live in their own `SpecialPeriods` table (device, optional application, name, first and
-   last device-local date inclusive, the days of a schedule, a daily limit). Adding or removing one
+   last device-local date inclusive, the days of a schedule, a daily limit). Adding, editing or removing one
    bumps `DeviceRule.Revision` and is pushed like any rule change. **They never live in a rule's
    `ScheduleJson`** — `SerializeSchedule` strips them — so saving the weekly schedule cannot
    overwrite or duplicate a holiday by sending back what the panel was shown.
@@ -1185,21 +1188,28 @@ companion's query-log endpoints are therefore deliberately never called. See
   the child is left with no tray icon, no screen-time window, and no notifications while
   enforcement carries on without them. Guard the handler; do not rely on attribute order.
 - **A device or application page reads Status, then Settings, and an application page puts its
-  History between them.** Sections carry a heading and no subtitle, and quick actions are bare
-  buttons that name what they do. Status says what is true now:
+  History between them.** The sections draw no heading of their own - every card already says
+  what it is. The two things a parent does in a hurry, **Give extra time** and **Block**, are
+  large buttons in the page header rather than a card further down. Status says what is true now:
   a `NowCard` with the state in the same precedence the PC applies (blocked by you, limit reached,
-  outside the schedule, allowed - `lib/status.ts`), today's time against the limit actually in
-  force, and for a PC the health tiles (`StatusTile`), each with the one line that says what it
-  means or what to do, toned `ok`/`warn`/`bad` and linking to the fix when there is one. Settings
-  holds **every** control - quick actions, the schedule card, the rule form, and removing the PC
-  last - so nothing that changes the PC sits in a page header.
+  outside the schedule, open on extra time, allowed - `lib/status.ts`), today's time against the
+  limit actually in force, and for a PC the health tiles (`StatusTile`), each with the one line
+  that says what it means or what to do, toned `ok`/`warn`/`bad` and linking to the fix when there
+  is one. Settings holds the rest - the schedule card, the rule form, and removing the PC last.
+  **Every list and card that names a state reads it from `lib/status.ts`** (`NowBadge`), so the
+  dashboard, the devices list and the applications table never disagree with the page they link to.
+- **The PC's rule form saves from a floating bar.** It is long and the page goes on below it, so
+  `DeviceRuleEditor` tracks what has changed and shows **Save changes** and **Discard** at the foot
+  of the window while anything has, and warns before leaving with unsaved changes. A rule that
+  changes underneath an untouched form (the page refreshes itself) replaces it; one that changes
+  under an edit in progress leaves the edit alone.
 - **A button that navigates is `<Button nativeButton={false} render={<Link … />}>`.** Base UI
   otherwise expects a native `<button>` and logs an error on every render.
 - **A schedule card shows; popups change.** `ScheduleCard` is the PC's or an application's daily
   limit and schedule together - the two rules that hold every week, read as a parent says them,
   "two hours, and only in the evening" - drawn read-only with the week as bars (`WeekView`), and
   the special periods, which replace both, on a second tab. Changing the limit, adding a range (to
-  any set of days at once), editing a day, clearing the week, and adding or removing a period each
+  any set of days at once), editing a day, clearing the week, and adding, editing or removing a period each
   happen in a popup that saves the moment it is confirmed, through `PUT .../limit`,
   `PUT .../schedule` and `api/special-periods`. The card lives outside the PC's rule form, and that
   form carries neither the limit nor the schedule any more - the rules endpoints no longer take a
@@ -1227,12 +1237,9 @@ companion's query-log endpoints are therefore deliberately never called. See
   so it is called Dashboard rather than Today with a seven-day card sitting under the heading.
   Statistics is one PC at a time over 7, 14, or 30 days, and its filters are one row above
   everything they scope, so both charts and every number below read the same slice.
-- **Settings earns its tab by telling the parent what to do next.** `lib/suggestions.ts` works the
-  list out from what the installation already knows - a PC enforcing nothing because no account was
-  chosen, a game that took hours this week with no rule on it, faults waiting, a child waiting on an
-  answer - and each one is a sentence and a link to the page that fixes it. **Nothing there changes
-  anything by itself**; a settings page that acts on its own suggestions is a settings page nobody
-  can predict.
+- **There is no Settings page.** Every setting belongs to a PC or an application and lives on its
+  page; what is installation-wide - who is signed in, signing out, a child waiting on an answer - is
+  in the header on every page (`AccountMenu`, and a link to Requests while any are pending).
 - **Charts are Recharts, in `components/charts/`, and they follow two colour rules.** One series
   wears the brand primary, because a second colour would mean a second thing and there isn't one;
   several wear `--chart-1` to `--chart-6` in the order they are declared, with everything past them

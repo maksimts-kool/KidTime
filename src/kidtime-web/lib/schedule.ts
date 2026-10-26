@@ -35,9 +35,21 @@ function weekdayOf(date: string) {
     .format(new Date(`${date}T00:00:00Z`));
 }
 
+/**
+ * Whether extra time is what has the PC open right now: a grant holds a block or a closed
+ * schedule off until the time it names, and the schedule alone would say the PC is shut.
+ */
+export function isOpenOnExtraTime(device: DeviceSummary) {
+  return device.extraTimeUntilLocal != null
+    && (device.manuallyBlocked || (device.schedule.configured && !device.schedule.withinWindow));
+}
+
 /** The one schedule fact worth a headline: what is open, and until or from when. */
 export function describeSchedule(device: DeviceSummary): { label: string; value: string } {
   const { schedule } = device;
+  if (isOpenOnExtraTime(device)) {
+    return { label: "Extra time until", value: formatDeviceClock(device.extraTimeUntilLocal!, schedule.localDate) };
+  }
   if (!schedule.configured) return { label: "Schedule", value: "Any time" };
   if (schedule.withinWindow) {
     return schedule.closesAtLocal
@@ -47,6 +59,12 @@ export function describeSchedule(device: DeviceSummary): { label: string; value:
   return schedule.opensAtLocal
     ? { label: "Allowed from", value: formatDeviceClock(schedule.opensAtLocal, schedule.localDate) }
     : { label: "Schedule", value: "Closed" };
+}
+
+/** The badge beside today's schedule strip: open or closed by the schedule, or open on extra time. */
+export function describeOpenNow(device: DeviceSummary): { open: boolean; label: string } {
+  if (isOpenOnExtraTime(device) && !device.manuallyBlocked) return { open: true, label: "Open on extra time" };
+  return device.schedule.withinWindow ? { open: true, label: "Open now" } : { open: false, label: "Closed now" };
 }
 
 /**

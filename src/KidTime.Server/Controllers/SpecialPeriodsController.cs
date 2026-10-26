@@ -60,6 +60,14 @@ public sealed class SpecialPeriodsController(
         }));
     }
 
+    /// <summary>A period's contents, as the add and edit popups send them.</summary>
+    public sealed record UpdatePeriodRequest(
+        string Name,
+        DateOnly StartDate,
+        DateOnly EndDate,
+        WeeklySchedule Schedule,
+        int? DailyLimitSeconds);
+
     [HttpPost]
     public async Task<IActionResult> Create(CreatePeriodRequest request, CancellationToken cancellationToken)
     {
@@ -70,8 +78,48 @@ public sealed class SpecialPeriodsController(
                 item => item.Id == applicationId && item.DeviceId == request.DeviceId, cancellationToken))
             return NotFound();
 
-        var today = RuleEvaluator.GetLocalDate(timeProvider.GetUtcNow(), device.TimeZoneId);
-        if (request.EndDate < today) return BadRequest("The period has already ended.");
+        var period = new SpecialPeriod
+        {
+            DeviceId = request.DeviceId,
+            DeviceApplicationId = request.DeviceApplicationId,
+            Name = string.Empty,
+            CreatedAtUtc = timeProvider.GetUtcNow()
+        };
+        var contents = new UpdatePeriodRequest(
+            request.Name, request.StartDate, request.EndDate, request.Schedule, request.DailyLimitSeconds);
+        if (await ApplyAsync(period, contents, device.TimeZoneId, cancellationToken) is { } error) return BadRequest(error);
+        dbContext.SpecialPeriods.Add(period);
+        await ruleChanges.PublishAsync(request.DeviceId, cancellationToken);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Replaces a period's name, dates, schedule and limit. A period already in force can be
+    /// changed too - a holiday extended by a day, or its evening moved - and lands like any rule.
+    /// </summary>
+    [HttpPut("{periodId:guid}")]
+    public async Task<IActionResult> Update(Guid periodId, UpdatePeriodRequest request, CancellationToken cancellationToken)
+    {
+        var period = await dbContext.SpecialPeriods.Include(x => x.Device)
+            .SingleOrDefaultAsync(x => x.Id == periodId, cancellationToken);
+        if (period is null) return NotFound();
+        if (await ApplyAsync(period, request, period.Device.TimeZoneId, cancellationToken) is { } error) return BadRequest(error);
+        await ruleChanges.PublishAsync(period.DeviceId, cancellationToken);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Validates <paramref name="request"/> against the PC's today and the other periods for the
+    /// same scope, and writes it onto <paramref name="period"/> when it passes.
+    /// </summary>
+    private async Task<string?> ApplyAsync(
+        SpecialPeriod period,
+        UpdatePeriodRequest request,
+        string timeZoneId,
+        CancellationToken cancellationToken)
+    {
+        var today = RuleEvaluator.GetLocalDate(timeProvider.GetUtcNow(), timeZoneId);
+        if (request.EndDate < today) return "The period has already ended.";
 
         var candidate = new ScheduleOverride
         {
@@ -81,28 +129,22 @@ public sealed class SpecialPeriodsController(
             Days = request.Schedule.Days,
             DailyLimitSeconds = request.DailyLimitSeconds
         };
-        if (candidate.Name.Length > 100) return BadRequest("Keep the name under 100 characters.");
-        var existing = await dbContext.SpecialPeriods.AsNoTracking()
-            .Where(period => period.DeviceId == request.DeviceId
-                             && period.DeviceApplicationId == request.DeviceApplicationId
-                             && period.EndDate >= today)
+        if (candidate.Name.Length > 100) return "Keep the name under 100 characters.";
+        var others = await dbContext.SpecialPeriods.AsNoTracking()
+            .Where(other => other.Id != period.Id
+                            && other.DeviceId == period.DeviceId
+                            && other.DeviceApplicationId == period.DeviceApplicationId
+                            && other.EndDate >= today)
             .ToListAsync(cancellationToken);
-        if (ScheduleValidator.ValidateOverride(candidate, existing.Select(RuleSnapshotFactory.ToOverride)) is { } error)
-            return BadRequest(error);
+        if (ScheduleValidator.ValidateOverride(candidate, others.Select(RuleSnapshotFactory.ToOverride)) is { } error)
+            return error;
 
-        dbContext.SpecialPeriods.Add(new SpecialPeriod
-        {
-            DeviceId = request.DeviceId,
-            DeviceApplicationId = request.DeviceApplicationId,
-            Name = candidate.Name,
-            StartDate = candidate.StartDate,
-            EndDate = candidate.EndDate,
-            ScheduleJson = RuleSnapshotFactory.SerializeSchedule(new WeeklySchedule { Days = candidate.Days }),
-            DailyLimitSeconds = candidate.DailyLimitSeconds,
-            CreatedAtUtc = timeProvider.GetUtcNow()
-        });
-        await ruleChanges.PublishAsync(request.DeviceId, cancellationToken);
-        return NoContent();
+        period.Name = candidate.Name;
+        period.StartDate = candidate.StartDate;
+        period.EndDate = candidate.EndDate;
+        period.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(new WeeklySchedule { Days = candidate.Days });
+        period.DailyLimitSeconds = candidate.DailyLimitSeconds;
+        return null;
     }
 
     [HttpDelete("{periodId:guid}")]

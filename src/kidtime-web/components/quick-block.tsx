@@ -18,7 +18,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-export function QuickBlock({ deviceId, blocked }: { deviceId: string; blocked: boolean }) {
+export function QuickBlock({ deviceId, blocked, size = "default" }: { deviceId: string; blocked: boolean; size?: "default" | "xl" }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   async function toggle() {
@@ -37,7 +37,7 @@ export function QuickBlock({ deviceId, blocked }: { deviceId: string; blocked: b
   }
   if (blocked) {
     return (
-      <Button variant="outline" onClick={toggle} disabled={busy}>
+      <Button variant="outline" size={size} onClick={toggle} disabled={busy}>
         <UnlockKeyhole data-icon="inline-start" />{busy ? "Sending…" : "Unblock PC"}
       </Button>
     );
@@ -45,7 +45,7 @@ export function QuickBlock({ deviceId, blocked }: { deviceId: string; blocked: b
 
   return (
     <AlertDialog>
-      <AlertDialogTrigger render={<Button variant="destructive" disabled={busy} />}>
+      <AlertDialogTrigger render={<Button variant="destructive" size={size} disabled={busy} />}>
         <LockKeyhole data-icon="inline-start" />Block PC
       </AlertDialogTrigger>
       <AlertDialogContent>

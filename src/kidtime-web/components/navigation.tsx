@@ -1,10 +1,9 @@
 "use client";
 
-import { appPath } from "@/lib/paths";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { AppWindow, BarChart3, Clock, Globe, LayoutDashboard, LogOut, MonitorCog, Settings, TriangleAlert } from "lucide-react";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { usePathname } from "next/navigation";
+import { AppWindow, BarChart3, Clock, Globe, LayoutDashboard, MonitorCog, TriangleAlert } from "lucide-react";
+import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const links = [
@@ -15,17 +14,10 @@ const links = [
   { href: "/statistics", label: "Statistics", icon: BarChart3 },
   { href: "/filtering", label: "Web filtering", icon: Globe },
   { href: "/diagnostics", label: "Error log", icon: TriangleAlert },
-  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Navigation() {
   const pathname = usePathname();
-  const router = useRouter();
-  async function signOut() {
-    await fetch(appPath("/api/session"), { method: "DELETE" });
-    router.replace("/login");
-    router.refresh();
-  }
 
   return (
     <aside className="border-b bg-sidebar lg:sticky lg:top-0 lg:flex lg:h-svh lg:flex-col lg:border-r lg:border-b-0">
@@ -50,11 +42,6 @@ export function Navigation() {
           </Link>
         ))}
       </nav>
-      <div className="hidden border-t p-3 lg:block">
-        <Button variant="ghost" size="lg" className="w-full justify-start text-muted-foreground" onClick={signOut}>
-          <LogOut aria-hidden="true" />Sign out
-        </Button>
-      </div>
     </aside>
   );
 }

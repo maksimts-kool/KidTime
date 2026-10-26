@@ -15,7 +15,7 @@ import { ScheduleCard } from "@/components/schedule-card";
 import { ScheduleStrip } from "@/components/schedule-strip";
 import { ActionRow, NowCard, PageSection, StateBadge, StatusTile, type StatusTone } from "@/components/status-panel";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 
 export default async function DevicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -48,9 +48,19 @@ export default async function DevicePage({ params }: { params: Promise<{ id: str
     <>
       <AutoRefresh seconds={30} />
       <Button variant="ghost" size="sm" className="mb-4 -ml-2" nativeButton={false} render={<Link href="/devices" />}><ArrowLeft data-icon="inline-start" />Devices</Button>
-      <PageHeader eyebrow="Device" title={device.name} description={`${device.windowsVersion} · ${device.timeZoneId}`} />
+      <PageHeader
+        eyebrow="Device"
+        title={device.name}
+        description={`${device.windowsVersion} · ${device.timeZoneId}`}
+        actions={(
+          <>
+            <GiveExtraTime size="xl" targets={[{ deviceId: id, deviceApplicationId: null, label: "PC screen time" }]} />
+            <QuickBlock size="xl" deviceId={id} blocked={rules.manuallyBlocked} />
+          </>
+        )}
+      />
 
-      <PageSection title="Status">
+      <PageSection label="Status">
         {summary && (
           <NowCard
             state={deviceNowState(summary)}
@@ -108,15 +118,7 @@ export default async function DevicePage({ params }: { params: Promise<{ id: str
         </div>
       </PageSection>
 
-      <PageSection title="Settings">
-        <Card>
-          <CardHeader><CardTitle>Quick actions</CardTitle></CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            <GiveExtraTime targets={[{ deviceId: id, deviceApplicationId: null, label: "PC screen time" }]} />
-            <QuickBlock deviceId={id} blocked={rules.manuallyBlocked} />
-          </CardContent>
-        </Card>
-
+      <PageSection label="Settings">
         <ScheduleCard
           scheduleEndpoint={`/api/backend/devices/${id}/schedule`}
           limitEndpoint={`/api/backend/devices/${id}/limit`}

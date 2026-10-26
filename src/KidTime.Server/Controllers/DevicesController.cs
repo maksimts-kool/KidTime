@@ -277,7 +277,10 @@ public sealed class DevicesController(
         var period = schedule.OverrideOn(localDate);
         return new
         {
-            configured = schedule.IsConfigured,
+            // Whether today's hours are restricted at all - by the weekly schedule, or by the period
+            // in force. An upcoming holiday makes the schedule "configured" without restricting
+            // today, and the card then read "Nothing scheduled today" about a PC open all day.
+            configured = (period?.Days ?? schedule.Days).Count > 0,
             // The holiday or trip whose rules are in force today, so the card can say why today
             // does not look like the weekly schedule.
             specialPeriod = period is null
