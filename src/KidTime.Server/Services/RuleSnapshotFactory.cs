@@ -24,26 +24,11 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext, TimeProvider
         // Extra time a parent granted today travels as part of the rules, so it reaches the PC
         // over the path that already exists and stops applying by itself once the device-local
         // date moves on. A grant for any other date adds no minutes to today's limit.
-        //
-        // Yesterday's grants are read as well, and only for the window a grant given during a
-        // block holds open: approved at ten to midnight for thirty minutes, it belongs to
-        // yesterday's date and is still running.
         var now = timeProvider.GetUtcNow();
         var today = RuleEvaluator.GetLocalDate(now, device.TimeZoneId);
-        var yesterday = today.AddDays(-1);
-        var grants = await dbContext.TimeExtensions.AsNoTracking()
-            .Where(item => item.DeviceId == deviceId
-                           && (item.LocalDate == today || item.LocalDate == yesterday)
-                           && item.Status == TimeExtensionStatuses.Approved
-                           && item.GrantedMinutes > 0)
-            .Select(item => new GrantRow(
-                item.ApplicationIdentityKey, item.GrantedMinutes, item.LocalDate, item.DecidedAtUtc))
+        var grants = await RecentGrants(dbContext.TimeExtensions.AsNoTracking().Where(item => item.DeviceId == deviceId), now)
             .ToListAsync(cancellationToken);
-        var pcGrants = grants.Where(grant => grant.ApplicationIdentityKey == null).ToList();
-        var pcBonus = BuildBonus(
-            today,
-            pcGrants.Where(grant => grant.LocalDate == today).Sum(grant => grant.GrantedMinutes),
-            LiftedUntil(pcGrants, now));
+        var pcBonus = BonusFor(grants.Where(grant => grant.ApplicationIdentityKey == null), today, now);
         var periods = await ActivePeriods(dbContext.SpecialPeriods.AsNoTracking(), now)
             .Where(period => period.DeviceId == deviceId)
             .ToListAsync(cancellationToken);
@@ -70,44 +55,70 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext, TimeProvider
                 periods.Where(period => period.DeviceApplicationId == null)),
             Bonus = pcBonus,
             Applications = appRules
-                .Where(item => ApplicationCatalogPolicy.IsUserManageable(ToDescriptor(item)))
+                .Where(item => ApplicationCatalogPolicy.IsUserManageable(item.ToDescriptor()))
                 .Select(item => new ApplicationRuleSnapshot
             {
                 IdentityKey = item.Application.IdentityKey,
-                DisplayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(ToDescriptor(item)),
+                DisplayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(item.ToDescriptor()),
                 ManuallyBlocked = item.Rule.ManuallyBlocked,
                 DailyLimitSeconds = item.Rule.DailyLimitSeconds,
                 Schedule = Compose(
                     item.Rule.ScheduleJson,
                     periods.Where(period => period.DeviceApplicationId == item.Id)),
-                Bonus = BuildApplicationBonus(today, now, applicationGrants, item.Application.IdentityKey),
+                Bonus = applicationGrants.TryGetValue(item.Application.IdentityKey, out var appGrants)
+                    ? BonusFor(appGrants, today, now)
+                    : null,
                 UpdatedAtUtc = item.Rule.UpdatedAtUtc
             }).ToList()
         };
     }
 
-    /// <summary>One approved grant, as much of it as the snapshot needs.</summary>
-    private sealed record GrantRow(
-        string? ApplicationIdentityKey,
-        int GrantedMinutes,
-        DateOnly LocalDate,
-        DateTimeOffset? DecidedAtUtc);
-
-    private static TimeBonus? BuildApplicationBonus(
-        DateOnly today,
-        DateTimeOffset now,
-        Dictionary<string, List<GrantRow>> grantsByIdentity,
-        string identityKey)
+    /// <summary>One approved grant, as much of it as a bonus needs.</summary>
+    public sealed record GrantRow
     {
-        if (!grantsByIdentity.TryGetValue(identityKey, out var grants)) return null;
-        return BuildBonus(
-            today,
-            grants.Where(grant => grant.LocalDate == today).Sum(grant => grant.GrantedMinutes),
-            LiftedUntil(grants, now));
+        public Guid DeviceId { get; init; }
+        public string? ApplicationIdentityKey { get; init; }
+        public int GrantedMinutes { get; init; }
+        public DateOnly LocalDate { get; init; }
+        public DateTimeOffset? DecidedAtUtc { get; init; }
     }
 
-    private static TimeBonus? BuildBonus(DateOnly localDate, int minutes, DateTimeOffset? liftedUntil) =>
-        minutes > 0 || liftedUntil is not null ? new TimeBonus(localDate, minutes * 60, liftedUntil) : null;
+    /// <summary>
+    /// Approved grants recent enough to matter now. Today's add minutes to today's limit;
+    /// yesterday's are read only for the window a grant given during a block holds open - approved
+    /// at ten to midnight for thirty minutes, it belongs to yesterday's date and is still running.
+    /// The dates are the PC's own and can sit a day either side of UTC's, so this keeps two days
+    /// back and leaves <see cref="BonusFor"/> to pick out what applies.
+    /// </summary>
+    public static IQueryable<GrantRow> RecentGrants(IQueryable<TimeExtension> source, DateTimeOffset now)
+    {
+        var earliest = DateOnly.FromDateTime(now.UtcDateTime).AddDays(-2);
+        return source
+            .Where(item => item.LocalDate >= earliest
+                           && item.Status == TimeExtensionStatuses.Approved
+                           && item.GrantedMinutes > 0)
+            .Select(item => new GrantRow
+            {
+                DeviceId = item.DeviceId,
+                ApplicationIdentityKey = item.ApplicationIdentityKey,
+                GrantedMinutes = item.GrantedMinutes,
+                LocalDate = item.LocalDate,
+                DecidedAtUtc = item.DecidedAtUtc
+            });
+    }
+
+    /// <summary>
+    /// What one scope's grants add up to on <paramref name="today"/>: the minutes granted for that
+    /// date, and the window the latest of them holds a block or closed schedule open.
+    /// </summary>
+    public static TimeBonus? BonusFor(IEnumerable<GrantRow> grants, DateOnly today, DateTimeOffset now)
+    {
+        var yesterday = today.AddDays(-1);
+        var recent = grants.Where(grant => grant.LocalDate == today || grant.LocalDate == yesterday).ToList();
+        var minutes = recent.Where(grant => grant.LocalDate == today).Sum(grant => grant.GrantedMinutes);
+        var liftedUntil = LiftedUntil(recent, now);
+        return minutes > 0 || liftedUntil is not null ? new TimeBonus(today, minutes * 60, liftedUntil) : null;
+    }
 
     /// <summary>
     /// How long a grant given while the scope was blocked outright keeps holding that block off:
@@ -127,20 +138,6 @@ public sealed class RuleSnapshotFactory(KidTimeDbContext dbContext, TimeProvider
 
         return latest;
     }
-
-    private static ApplicationDescriptor ToDescriptor(DeviceApplication item) => new()
-    {
-        DisplayName = item.Application.DisplayName,
-        ExecutableName = item.Application.ExecutableName,
-        ExecutablePath = item.ExecutablePath,
-        ProductName = item.Application.ProductName,
-        OriginalFilename = item.Application.OriginalFilename,
-        Company = item.Application.Company,
-        SignaturePublisher = item.Application.SignaturePublisher,
-        FileVersion = item.FileVersion,
-        PackageFamilyName = item.Application.PackageFamilyName,
-        Sha256 = item.Sha256
-    };
 
     /// <summary>
     /// Special periods that have not ended yet. Their dates are the PC's own, and the PC's day can

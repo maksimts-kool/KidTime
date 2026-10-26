@@ -2,11 +2,9 @@ using KidTime.Domain.Rules;
 using KidTime.Domain.Contracts;
 using KidTime.Domain.Localization;
 using KidTime.Server.Data;
-using KidTime.Server.Hubs;
 using KidTime.Server.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using System.Globalization;
 using System.Text.Json;
@@ -20,7 +18,7 @@ public sealed class DevicesController(
     KidTimeDbContext dbContext,
     RuleSnapshotFactory snapshots,
     AgentUpdateCatalog updates,
-    IHubContext<DeviceHub> hubContext,
+    RuleChangePublisher ruleChanges,
     TimeProvider timeProvider,
     ILogger<DevicesController> logger) : ControllerBase
 {
@@ -54,17 +52,28 @@ public sealed class DevicesController(
             .GroupBy(item => item.DeviceId)
             .Select(group => new { DeviceId = group.Key, Count = group.Count() })
             .ToDictionaryAsync(entry => entry.DeviceId, entry => entry.Count, cancellationToken);
+        var grants = (await RuleSnapshotFactory.RecentGrants(dbContext.TimeExtensions.AsNoTracking(), now)
+                .Where(grant => grant.ApplicationIdentityKey == null)
+                .ToListAsync(cancellationToken))
+            .ToLookup(grant => grant.DeviceId);
+        var localDates = devices.ToDictionary(device => device.Id, device => RuleEvaluator.GetLocalDate(now, device.TimeZoneId));
+        var earliestDate = localDates.Values.DefaultIfEmpty().Min();
+        var usage = (await dbContext.DailyDeviceUsages.AsNoTracking()
+                .Where(x => x.LocalDate >= earliestDate)
+                .Select(x => new { x.DeviceId, x.LocalDate, x.ActiveSeconds })
+                .ToListAsync(cancellationToken))
+            .ToDictionary(x => (x.DeviceId, x.LocalDate), x => x.ActiveSeconds);
         var result = new List<object>(devices.Count);
         foreach (var device in devices)
         {
-            var localDate = RuleEvaluator.GetLocalDate(now, device.TimeZoneId);
-            var today = await dbContext.DailyDeviceUsages.AsNoTracking()
-                .Where(x => x.DeviceId == device.Id && x.LocalDate == localDate)
-                .Select(x => (int?)x.ActiveSeconds)
-                .SingleOrDefaultAsync(cancellationToken) ?? 0;
+            var localDate = localDates[device.Id];
+            var today = usage.GetValueOrDefault((device.Id, localDate));
             var schedule = RuleSnapshotFactory.Compose(device.Rule.ScheduleJson, periods[device.Id]);
-            // A holiday can carry a limit of its own, so the card reads the one in force today.
-            var dailyLimit = RuleEvaluator.EffectiveDailyLimitSeconds(device.Rule.DailyLimitSeconds, schedule, null, localDate);
+            // The limit in force today: a holiday can carry one of its own, and extra time the
+            // parent gave raises it - the same figure the PC enforces, so a card never says
+            // "limit reached" about a PC the child has just been given more time on.
+            var bonus = RuleSnapshotFactory.BonusFor(grants[device.Id], localDate, now);
+            var dailyLimit = RuleEvaluator.EffectiveDailyLimitSeconds(device.Rule.DailyLimitSeconds, schedule, bonus, localDate);
             result.Add(new
             {
                 device.Id,
@@ -91,6 +100,9 @@ public sealed class DevicesController(
                 manuallyBlocked = device.Rule.ManuallyBlocked &&
                     (device.Rule.ManualBlockUntilUtc is null || device.Rule.ManualBlockUntilUtc > now),
                 device.Rule.ManualBlockUntilUtc,
+                // A grant given while the PC was blocked or outside its schedule opens it until
+                // then, so the card says so rather than "Blocked by you".
+                extraTimeUntilLocal = DeviceClock.ExtraTimeUntilLocal(bonus, now, device.TimeZoneId),
                 ruleRevision = device.Rule.Revision,
                 appliedRuleRevision = device.AppliedRuleRevision,
                 unresolvedFaults = faultCounts.GetValueOrDefault(device.Id)
@@ -203,7 +215,7 @@ public sealed class DevicesController(
         if (request.Schedule is not null) rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(request.Schedule);
         rule.ControlledUserSid = selectedUser?.Sid;
         rule.ControlledUserName = selectedUser?.AccountName;
-        await MarkRulesChangedAsync(rule, cancellationToken);
+        await ruleChanges.PublishAsync(rule, cancellationToken);
         return Ok(await snapshots.CreateAsync(deviceId, cancellationToken));
     }
 
@@ -221,7 +233,7 @@ public sealed class DevicesController(
         if (rule is null) return NotFound();
         if (ScheduleValidator.Validate(schedule) is { } scheduleError) return BadRequest(scheduleError);
         rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(schedule);
-        await MarkRulesChangedAsync(rule, cancellationToken);
+        await ruleChanges.PublishAsync(rule, cancellationToken);
         return NoContent();
     }
 
@@ -238,7 +250,7 @@ public sealed class DevicesController(
         if (rule is null) return NotFound();
         if (request.DailyLimitSeconds is < 60 or > 86_400) return BadRequest("Daily limit must be 60-86400 seconds.");
         rule.DailyLimitSeconds = request.DailyLimitSeconds;
-        await MarkRulesChangedAsync(rule, cancellationToken);
+        await ruleChanges.PublishAsync(rule, cancellationToken);
         return NoContent();
     }
 
@@ -275,11 +287,11 @@ public sealed class DevicesController(
             localDate = localDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             nowMinuteOfDay = localNow.Hour * 60 + localNow.Minute,
             closesAtLocal = withinWindow
-                ? ToLocalStamp(RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, now, timeZoneId), timeZoneId)
+                ? DeviceClock.ToLocalStamp(RuleEvaluator.FindCurrentAllowanceEndUtc(schedule, now, timeZoneId), timeZoneId)
                 : null,
             opensAtLocal = withinWindow
                 ? null
-                : ToLocalStamp(RuleEvaluator.FindNextAllowanceStartUtc(schedule, now, timeZoneId), timeZoneId),
+                : DeviceClock.ToLocalStamp(RuleEvaluator.FindNextAllowanceStartUtc(schedule, now, timeZoneId), timeZoneId),
             todayWindows = (period?.Days ?? schedule.Days)
                 .Where(day => day.Day == localDate.DayOfWeek)
                 .SelectMany(day => day.Windows)
@@ -290,10 +302,6 @@ public sealed class DevicesController(
     }
 
     /// <summary>An instant as an unzoned device-local stamp, "2026-08-31T21:00".</summary>
-    private static string? ToLocalStamp(DateTimeOffset? instant, string timeZoneId) =>
-        instant is { } value
-            ? RuleEvaluator.ToLocalTime(value, timeZoneId).ToString("yyyy-MM-dd'T'HH':'mm", CultureInfo.InvariantCulture)
-            : null;
 
     private static string ToClock(TimeOnly time) =>
         time.ToString("HH':'mm", CultureInfo.InvariantCulture);
@@ -315,7 +323,7 @@ public sealed class DevicesController(
         rule.ManualBlockUntilUtc = request.UntilUtc ?? (request.Minutes is int minutes
             ? now.AddMinutes(Math.Clamp(minutes, 1, 10_080))
             : null);
-        await MarkRulesChangedAsync(rule, cancellationToken, "BlockPc");
+        await ruleChanges.PublishAsync(rule, cancellationToken, "BlockPc");
         return Ok(await snapshots.CreateAsync(deviceId, cancellationToken));
     }
 
@@ -326,21 +334,7 @@ public sealed class DevicesController(
         if (rule is null) return NotFound();
         rule.ManuallyBlocked = false;
         rule.ManualBlockUntilUtc = null;
-        await MarkRulesChangedAsync(rule, cancellationToken, "UnblockPc");
+        await ruleChanges.PublishAsync(rule, cancellationToken, "UnblockPc");
         return Ok(await snapshots.CreateAsync(deviceId, cancellationToken));
-    }
-
-    private async Task MarkRulesChangedAsync(
-        DeviceRule rule,
-        CancellationToken cancellationToken,
-        string commandType = "RulesChanged")
-    {
-        rule.Revision++;
-        rule.UpdatedAtUtc = timeProvider.GetUtcNow();
-        var command = new DeviceCommand { DeviceId = rule.DeviceId, Type = commandType };
-        dbContext.DeviceCommands.Add(command);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await hubContext.Clients.Group(DeviceHub.GroupName(rule.DeviceId))
-            .SendAsync("Command", new { command.Id, command.Type }, cancellationToken);
     }
 }

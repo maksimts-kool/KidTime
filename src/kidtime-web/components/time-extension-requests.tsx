@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { AppWindow, Check, MonitorCog, X } from "lucide-react";
 import { appPath } from "@/lib/paths";
+import { errorMessage, unreachableMessage } from "@/lib/http";
 import { formatSeen } from "@/lib/format";
 import type { TimeExtensionRequest } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
@@ -39,20 +40,22 @@ function PendingRequest({ request }: { request: TimeExtensionRequest }) {
   async function decide(approved: boolean) {
     setBusy(true);
     setError(null);
-    const response = await fetch(appPath(`/api/backend/time-extensions/${request.id}/decision`), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approved, minutes: approved ? minutes : null }),
-    });
-    if (!response.ok) {
-      // The API answers a rejected decision with a bare JSON string, so the quotes come off.
-      const body = (await response.text()).trim().replace(/^"|"$/g, "");
-      setError(body || "The decision could not be saved.");
+    try {
+      const response = await fetch(appPath(`/api/backend/time-extensions/${request.id}/decision`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved, minutes: approved ? minutes : null }),
+      });
+      if (!response.ok) {
+        setError(await errorMessage(response, "The decision could not be saved."));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError(unreachableMessage);
+    } finally {
       setBusy(false);
-      return;
     }
-    router.refresh();
-    setBusy(false);
   }
 
   return (

@@ -50,6 +50,8 @@ export type DeviceSummary = {
   schedule: ScheduleState;
   manuallyBlocked: boolean;
   manualBlockUntilUtc: string | null;
+  /** On the PC's clock, while a grant holds a block or a closed schedule open; null otherwise. */
+  extraTimeUntilLocal: string | null;
   ruleRevision: number;
   appliedRuleRevision: number;
   unresolvedFaults: number;
@@ -141,6 +143,10 @@ export type ApplicationSummary = {
   dailyLimitSeconds: number | null;
   scheduleConfigured: boolean;
   withinSchedule: boolean;
+  /** The PC's own date, which the times below are read against. */
+  localDate: string;
+  /** On the PC's clock, while a grant holds a block or a closed schedule open; null otherwise. */
+  extraTimeUntilLocal: string | null;
 };
 
 export type DailyUsage = { date: string; activeSeconds: number };

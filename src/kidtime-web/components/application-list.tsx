@@ -122,7 +122,9 @@ export function ApplicationList({
                 */}
                 <TableCell className="text-muted-foreground tabular-nums">{describeApplicationRules(app) ?? "—"}</TableCell>
                 <TableCell className="pr-4">
-                  {app.manuallyBlocked ? <Badge variant="destructive">Blocked</Badge>
+                  {app.extraTimeUntilLocal && (app.manuallyBlocked || (app.scheduleConfigured && !app.withinSchedule))
+                    ? <Badge variant="secondary" className="text-primary">Extra time</Badge>
+                    : app.manuallyBlocked ? <Badge variant="destructive">Blocked</Badge>
                     : app.scheduleConfigured && !app.withinSchedule ? <Badge variant="outline" className="text-muted-foreground">Off schedule</Badge>
                     : <Badge variant="secondary" className="text-primary">Allowed</Badge>}
                 </TableCell>

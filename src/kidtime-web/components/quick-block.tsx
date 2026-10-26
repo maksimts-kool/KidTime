@@ -23,13 +23,17 @@ export function QuickBlock({ deviceId, blocked }: { deviceId: string; blocked: b
   const [busy, setBusy] = useState(false);
   async function toggle() {
     setBusy(true);
-    await fetch(appPath(`/api/backend/devices/${deviceId}/${blocked ? "unblock" : "block"}`), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: blocked ? undefined : JSON.stringify({ minutes: null, untilUtc: null }),
-    });
-    router.refresh();
-    setBusy(false);
+    try {
+      await fetch(appPath(`/api/backend/devices/${deviceId}/${blocked ? "unblock" : "block"}`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: blocked ? undefined : JSON.stringify({ minutes: null, untilUtc: null }),
+      });
+      router.refresh();
+    } finally {
+      // A request that never arrived must not leave the button stuck on "Sending…".
+      setBusy(false);
+    }
   }
   if (blocked) {
     return (

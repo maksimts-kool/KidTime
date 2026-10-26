@@ -1,11 +1,9 @@
 using System.Globalization;
 using KidTime.Domain.Rules;
 using KidTime.Server.Data;
-using KidTime.Server.Hubs;
 using KidTime.Server.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace KidTime.Server.Controllers;
@@ -21,7 +19,7 @@ namespace KidTime.Server.Controllers;
 [Route("api/special-periods")]
 public sealed class SpecialPeriodsController(
     KidTimeDbContext dbContext,
-    IHubContext<DeviceHub> hubContext,
+    RuleChangePublisher ruleChanges,
     TimeProvider timeProvider) : ControllerBase
 {
     public sealed record CreatePeriodRequest(
@@ -103,7 +101,7 @@ public sealed class SpecialPeriodsController(
             DailyLimitSeconds = candidate.DailyLimitSeconds,
             CreatedAtUtc = timeProvider.GetUtcNow()
         });
-        await MarkRulesChangedAsync(request.DeviceId, cancellationToken);
+        await ruleChanges.PublishAsync(request.DeviceId, cancellationToken);
         return NoContent();
     }
 
@@ -113,19 +111,7 @@ public sealed class SpecialPeriodsController(
         var period = await dbContext.SpecialPeriods.SingleOrDefaultAsync(x => x.Id == periodId, cancellationToken);
         if (period is null) return NotFound();
         dbContext.SpecialPeriods.Remove(period);
-        await MarkRulesChangedAsync(period.DeviceId, cancellationToken);
+        await ruleChanges.PublishAsync(period.DeviceId, cancellationToken);
         return NoContent();
-    }
-
-    private async Task MarkRulesChangedAsync(Guid deviceId, CancellationToken cancellationToken)
-    {
-        var rule = await dbContext.DeviceRules.SingleAsync(x => x.DeviceId == deviceId, cancellationToken);
-        rule.Revision++;
-        rule.UpdatedAtUtc = timeProvider.GetUtcNow();
-        var command = new DeviceCommand { DeviceId = deviceId, Type = "RulesChanged" };
-        dbContext.DeviceCommands.Add(command);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await hubContext.Clients.Group(DeviceHub.GroupName(deviceId))
-            .SendAsync("Command", new { command.Id, command.Type }, cancellationToken);
     }
 }

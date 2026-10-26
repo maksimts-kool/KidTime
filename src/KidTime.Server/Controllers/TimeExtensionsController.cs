@@ -3,10 +3,9 @@ using KidTime.Domain.Applications;
 using KidTime.Domain.Contracts;
 using KidTime.Domain.Rules;
 using KidTime.Server.Data;
-using KidTime.Server.Hubs;
+using KidTime.Server.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace KidTime.Server.Controllers;
@@ -24,7 +23,7 @@ namespace KidTime.Server.Controllers;
 [Route("api/time-extensions")]
 public sealed class TimeExtensionsController(
     KidTimeDbContext dbContext,
-    IHubContext<DeviceHub> hubContext,
+    RuleChangePublisher ruleChanges,
     TimeProvider timeProvider) : ControllerBase
 {
     public sealed record DecisionRequest(bool Approved, int? Minutes);
@@ -94,7 +93,7 @@ public sealed class TimeExtensionsController(
         // A denial bumps the revision too. The extra minutes are not the only thing that has to
         // reach the PC quickly - so does the answer, because a child left staring at "waiting for
         // your parent" has been told nothing at all.
-        await MarkRulesChangedAsync(item.DeviceId, now, cancellationToken);
+        await ruleChanges.PublishAsync(item.DeviceId, cancellationToken);
         return NoContent();
     }
 
@@ -124,19 +123,7 @@ public sealed class TimeExtensionsController(
                     cancellationToken);
             if (application is null) return NotFound();
             identityKey = application.Application.IdentityKey;
-            displayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(new ApplicationDescriptor
-            {
-                DisplayName = application.Application.DisplayName,
-                ExecutableName = application.Application.ExecutableName,
-                ExecutablePath = application.ExecutablePath,
-                ProductName = application.Application.ProductName,
-                OriginalFilename = application.Application.OriginalFilename,
-                Company = application.Application.Company,
-                SignaturePublisher = application.Application.SignaturePublisher,
-                FileVersion = application.FileVersion,
-                PackageFamilyName = application.Application.PackageFamilyName,
-                Sha256 = application.Sha256
-            });
+            displayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(application.ToDescriptor());
         }
 
         var now = timeProvider.GetUtcNow();
@@ -157,21 +144,10 @@ public sealed class TimeExtensionsController(
             DecidedByParentUserId = ParentUserId,
             InitiatedByParent = true
         });
-        await MarkRulesChangedAsync(request.DeviceId, now, cancellationToken);
+        await ruleChanges.PublishAsync(request.DeviceId, cancellationToken);
         return NoContent();
     }
 
-    private async Task MarkRulesChangedAsync(Guid deviceId, DateTimeOffset now, CancellationToken cancellationToken)
-    {
-        var deviceRule = await dbContext.DeviceRules.SingleAsync(rule => rule.DeviceId == deviceId, cancellationToken);
-        deviceRule.Revision++;
-        deviceRule.UpdatedAtUtc = now;
-        var command = new DeviceCommand { DeviceId = deviceId, Type = "RulesChanged" };
-        dbContext.DeviceCommands.Add(command);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await hubContext.Clients.Group(DeviceHub.GroupName(deviceId))
-            .SendAsync("Command", new { command.Id, command.Type }, cancellationToken);
-    }
 
     private Guid ParentUserId => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 }

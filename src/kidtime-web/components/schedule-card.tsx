@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { CalendarClock, Eraser, Hourglass, Pencil, Plus, Trash2 } from "lucide-react";
 import { appPath } from "@/lib/paths";
+import { errorMessage, unreachableMessage } from "@/lib/http";
 import { formatDuration } from "@/lib/format";
 import type { SpecialPeriod, WeeklySchedule } from "@/lib/types";
 import { editableToSchedule, scheduleToEditable, validateEditableSchedule, type EditableDay } from "./weekly-schedule-editor";
@@ -87,13 +88,12 @@ export function ScheduleCard({
         body: JSON.stringify(editableToSchedule(days)),
       });
       if (!response.ok) {
-        const body = (await response.text()).trim().replace(/^"|"$/g, "");
-        return response.status === 400 && body ? body : "The schedule could not be saved.";
+        return await errorMessage(response, "The schedule could not be saved.");
       }
       router.refresh();
       return null;
     } catch {
-      return "Could not reach the KidTime server. Try again in a moment.";
+      return unreachableMessage;
     }
   }
 
@@ -391,14 +391,13 @@ function LimitDialog({ endpoint, dailyLimitSeconds, scope }: { endpoint: string;
         body: JSON.stringify({ dailyLimitSeconds: enabled ? seconds : null }),
       });
       if (!response.ok) {
-        const body = (await response.text()).trim().replace(/^"|"$/g, "");
-        setError(response.status === 400 && body ? body : "The limit could not be saved.");
+        setError(await errorMessage(response, "The limit could not be saved."));
         return;
       }
       setOpen(false);
       router.refresh();
     } catch {
-      setError("Could not reach the KidTime server. Try again in a moment.");
+      setError(unreachableMessage);
     } finally {
       setBusy(false);
     }

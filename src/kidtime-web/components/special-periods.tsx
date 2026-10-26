@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { CalendarRange, CalendarX2, Plus, Trash2 } from "lucide-react";
 import { appPath } from "@/lib/paths";
+import { errorMessage, unreachableMessage } from "@/lib/http";
 import { formatDuration } from "@/lib/format";
 import type { SpecialPeriod, WeeklySchedule } from "@/lib/types";
 import { editableToSchedule, scheduleToEditable, validateEditableSchedule, WeeklyScheduleEditor } from "./weekly-schedule-editor";
@@ -129,19 +130,28 @@ export function SpecialPeriods({
 function RemovePeriodDialog({ period }: { period: SpecialPeriod }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   async function remove() {
     setBusy(true);
+    setError("");
     try {
-      await fetch(appPath(`/api/backend/special-periods/${period.id}`), { method: "DELETE" });
+      const response = await fetch(appPath(`/api/backend/special-periods/${period.id}`), { method: "DELETE" });
+      // Already gone is what was asked for; the refresh takes the row and this dialog away.
+      if (!response.ok && response.status !== 404) {
+        setError(await errorMessage(response, "The period could not be removed."));
+        return;
+      }
       router.refresh();
+    } catch {
+      setError(unreachableMessage);
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <AlertDialog>
+    <AlertDialog onOpenChange={() => setError("")}>
       <AlertDialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove ${period.name}`} />}>
         <Trash2 />
       </AlertDialogTrigger>
@@ -155,6 +165,7 @@ function RemovePeriodDialog({ period }: { period: SpecialPeriod }) {
               : "Those dates will follow the weekly schedule and daily limit."}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {error && <p className="text-sm text-destructive">{error}</p>}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction variant="destructive" disabled={busy} onClick={remove}>{busy ? "Removing…" : "Remove period"}</AlertDialogAction>
@@ -234,14 +245,13 @@ function AddPeriodDialog({
         }),
       });
       if (!response.ok) {
-        const body = (await response.text()).trim().replace(/^"|"$/g, "");
-        setError(response.status === 400 && body ? body : "The period could not be saved.");
+        setError(await errorMessage(response, "The period could not be saved."));
         return;
       }
       setOpen(false);
       router.refresh();
     } catch {
-      setError("Could not reach the KidTime server. Try again in a moment.");
+      setError(unreachableMessage);
     } finally {
       setBusy(false);
     }

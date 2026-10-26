@@ -1,6 +1,7 @@
 "use client";
 
 import { appPath } from "@/lib/paths";
+import { unreachableMessage } from "@/lib/http";
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -35,7 +36,7 @@ export function RemoveDevice({ deviceId, deviceName }: { deviceId: string; devic
       router.replace("/devices");
       router.refresh();
     } catch {
-      setError("Could not reach the KidTime server. Try again in a moment.");
+      setError(unreachableMessage);
     } finally {
       setBusy(false);
     }

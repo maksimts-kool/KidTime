@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Ban, CircleCheck } from "lucide-react";
 import { appPath } from "@/lib/paths";
+import { unreachableMessage } from "@/lib/http";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -43,7 +44,7 @@ export function ApplicationBlock({ applicationId, displayName, blocked }: { appl
       }
       router.refresh();
     } catch {
-      setError("Could not reach the KidTime server.");
+      setError(unreachableMessage);
     } finally {
       setBusy(false);
     }

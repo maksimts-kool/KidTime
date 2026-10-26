@@ -64,6 +64,8 @@ export default async function ApplicationPage({ params }: { params: Promise<{ id
     todayActiveSeconds: todaySeconds,
     scheduleConfigured: summary?.scheduleConfigured ?? detail.rule.schedule.days.length > 0,
     withinSchedule: summary?.withinSchedule ?? true,
+    localDate: summary?.localDate ?? today,
+    extraTimeUntilLocal: summary?.extraTimeUntilLocal ?? null,
   });
   const activePeriod = periods.find(period => period.isActive);
   return (

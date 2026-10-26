@@ -17,12 +17,12 @@ public sealed class ApplicationCatalogReconciler(
             .ToListAsync(cancellationToken);
         var changedDevices = new HashSet<Guid>();
         var groups = deviceApplications
-            .Where(item => ApplicationCatalogPolicy.IsUserManageable(ToDescriptor(item)))
+            .Where(item => ApplicationCatalogPolicy.IsUserManageable(item.ToDescriptor()))
             .GroupBy(item => new
             {
                 item.DeviceId,
                 IdentityKey = ApplicationIdentity.CreateKey(
-                    ApplicationCatalogPolicy.NormalizeForCatalog(ToDescriptor(item)))
+                    ApplicationCatalogPolicy.NormalizeForCatalog(item.ToDescriptor()))
             })
             .Where(group => group.Count() > 1)
             .ToList();
@@ -105,18 +105,4 @@ public sealed class ApplicationCatalogReconciler(
         rule.ManuallyBlocked
         || rule.DailyLimitSeconds is not null
         || RuleSnapshotFactory.DeserializeSchedule(rule.ScheduleJson).IsConfigured;
-
-    private static ApplicationDescriptor ToDescriptor(DeviceApplication item) => new()
-    {
-        DisplayName = item.Application.DisplayName,
-        ExecutableName = item.Application.ExecutableName,
-        ExecutablePath = item.ExecutablePath,
-        ProductName = item.Application.ProductName,
-        OriginalFilename = item.Application.OriginalFilename,
-        Company = item.Application.Company,
-        SignaturePublisher = item.Application.SignaturePublisher,
-        FileVersion = item.FileVersion,
-        PackageFamilyName = item.Application.PackageFamilyName,
-        Sha256 = item.Sha256
-    };
 }

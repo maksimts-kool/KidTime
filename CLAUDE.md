@@ -170,7 +170,8 @@ calls through those two, never by fetching the backend directly from the browser
 1. Parent edits rules → `DevicesController` / `ApplicationsController` mutate the rule row,
    **increment `DeviceRule.Revision`**, insert a `DeviceCommand`, and push it over
    `IHubContext<DeviceHub>` to the `device:<id>` group. Revision bumping and the SignalR push must
-   stay together — the agent detects change by revision.
+   stay together — the agent detects change by revision — which is why every controller does all
+   four through `RuleChangePublisher` rather than repeating them.
 2. `RuleSnapshotFactory` flattens device and application rules into the `DeviceRuleSnapshot` that
    crosses the wire, filtering out non-user-manageable apps via `ApplicationCatalogPolicy`.
 3. `AgentWorker` is the sync loop: upload discovered apps → upload durable usage batches →

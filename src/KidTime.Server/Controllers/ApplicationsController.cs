@@ -1,11 +1,9 @@
 using KidTime.Domain.Applications;
 using KidTime.Domain.Rules;
 using KidTime.Server.Data;
-using KidTime.Server.Hubs;
 using KidTime.Server.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace KidTime.Server.Controllers;
@@ -15,7 +13,7 @@ namespace KidTime.Server.Controllers;
 [Route("api/applications")]
 public sealed class ApplicationsController(
     KidTimeDbContext dbContext,
-    IHubContext<DeviceHub> hubContext,
+    RuleChangePublisher ruleChanges,
     TimeProvider timeProvider) : ControllerBase
 {
     /// <summary>
@@ -31,25 +29,45 @@ public sealed class ApplicationsController(
     [HttpGet]
     public async Task<IActionResult> List(Guid? deviceId, string? search, CancellationToken cancellationToken)
     {
-        var query = dbContext.DeviceApplications.AsNoTracking()
-            .Include(x => x.Device)
-            .Include(x => x.Application)
-            .Include(x => x.Rule)
-            .AsQueryable();
+        var query = dbContext.DeviceApplications.AsNoTracking();
         if (deviceId is not null) query = query.Where(x => x.DeviceId == deviceId);
-        var applications = (await query.ToListAsync(cancellationToken))
-            .Where(item => ApplicationCatalogPolicy.IsUserManageable(ToDescriptor(item)))
-            .Where(item => string.IsNullOrWhiteSpace(search)
-                           || ApplicationCatalogPolicy.GetFriendlyDisplayName(ToDescriptor(item))
-                               .Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)
-                           || item.Application.ExecutableName.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase))
-            .GroupBy(item => new
+        // Icons are left out deliberately: the list only says whether one exists, and the browser
+        // fetches each one by itself - loading every icon's bytes here made the whole catalog
+        // travel from the database on every page that lists applications.
+        var loaded = await query
+            .Select(x => new
             {
-                item.DeviceId,
-                DisplayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(ToDescriptor(item)).ToUpperInvariant()
+                Item = new DeviceApplication
+                {
+                    Id = x.Id,
+                    DeviceId = x.DeviceId,
+                    Device = x.Device,
+                    ApplicationId = x.ApplicationId,
+                    Application = x.Application,
+                    ExecutablePath = x.ExecutablePath,
+                    FileVersion = x.FileVersion,
+                    Sha256 = x.Sha256,
+                    FirstSeenUtc = x.FirstSeenUtc,
+                    LastSeenUtc = x.LastSeenUtc,
+                    Rule = x.Rule
+                },
+                HasIcon = x.IconPng != null && x.IconPng.Length > 0
             })
-            .Select(group => group.OrderByDescending(item => item.LastSeenUtc).First())
-            .OrderBy(item => ApplicationCatalogPolicy.GetFriendlyDisplayName(ToDescriptor(item)))
+            .ToListAsync(cancellationToken);
+        var withIcon = loaded.Where(row => row.HasIcon).Select(row => row.Item.Id).ToHashSet();
+        var term = search?.Trim();
+        // The descriptor and the friendly name are worked out once per row: filtering, grouping,
+        // sorting and the response all read them.
+        var applications = loaded
+            .Select(row => (row.Item, Descriptor: row.Item.ToDescriptor()))
+            .Where(row => ApplicationCatalogPolicy.IsUserManageable(row.Descriptor))
+            .Select(row => (row.Item, row.Descriptor, Name: ApplicationCatalogPolicy.GetFriendlyDisplayName(row.Descriptor)))
+            .Where(row => string.IsNullOrEmpty(term)
+                          || row.Name.Contains(term, StringComparison.OrdinalIgnoreCase)
+                          || row.Item.Application.ExecutableName.Contains(term, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(row => (row.Item.DeviceId, Name: row.Name.ToUpperInvariant()))
+            .Select(group => group.MaxBy(row => row.Item.LastSeenUtc))
+            .OrderBy(row => row.Name)
             .ToList();
         var result = new List<object>(applications.Count);
         var now = timeProvider.GetUtcNow();
@@ -57,34 +75,48 @@ public sealed class ApplicationsController(
                 .Where(period => period.DeviceApplicationId != null)
                 .ToListAsync(cancellationToken))
             .ToLookup(period => period.DeviceApplicationId);
-        foreach (var item in applications)
+        var grants = (await RuleSnapshotFactory.RecentGrants(dbContext.TimeExtensions.AsNoTracking(), now)
+                .Where(grant => grant.ApplicationIdentityKey != null)
+                .ToListAsync(cancellationToken))
+            .ToLookup(grant => (grant.DeviceId, grant.ApplicationIdentityKey));
+        var localDates = applications
+            .Select(row => row.Item.Device).DistinctBy(device => device.Id)
+            .ToDictionary(device => device.Id, device => RuleEvaluator.GetLocalDate(now, device.TimeZoneId));
+        var earliestDate = localDates.Values.DefaultIfEmpty().Min();
+        var applicationIds = applications.Select(row => row.Item.Id).ToList();
+        var usage = (await dbContext.DailyApplicationUsages.AsNoTracking()
+                .Where(x => applicationIds.Contains(x.DeviceApplicationId) && x.LocalDate >= earliestDate)
+                .Select(x => new { x.DeviceApplicationId, x.LocalDate, x.ActiveSeconds })
+                .ToListAsync(cancellationToken))
+            .ToDictionary(x => (x.DeviceApplicationId, x.LocalDate), x => x.ActiveSeconds);
+        foreach (var (item, descriptor, displayName) in applications)
         {
-            var today = RuleEvaluator.GetLocalDate(now, item.Device.TimeZoneId);
+            var today = localDates[item.DeviceId];
             var schedule = RuleSnapshotFactory.Compose(item.Rule.ScheduleJson, periods[item.Id]);
-            var seconds = await dbContext.DailyApplicationUsages.AsNoTracking()
-                .Where(x => x.DeviceApplicationId == item.Id && x.LocalDate == today)
-                .Select(x => (int?)x.ActiveSeconds).SingleOrDefaultAsync(cancellationToken) ?? 0;
+            var bonus = RuleSnapshotFactory.BonusFor(grants[(item.DeviceId, item.Application.IdentityKey)], today, now);
             result.Add(new
             {
                 id = item.Id,
                 deviceId = item.DeviceId,
                 deviceName = item.Device.Name,
                 identityKey = item.Application.IdentityKey,
-                displayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(ToDescriptor(item)),
+                displayName,
                 executableName = item.Application.ExecutableName,
                 item.ExecutablePath,
                 item.FileVersion,
                 publisher = item.Application.SignaturePublisher ?? item.Application.Company,
                 item.FirstSeenUtc,
                 item.LastSeenUtc,
-                todayActiveSeconds = seconds,
-                hasIcon = item.IconPng is { Length: > 0 },
+                todayActiveSeconds = usage.GetValueOrDefault((item.Id, today)),
+                hasIcon = withIcon.Contains(item.Id),
                 // The panel hides Windows' own applications behind a switch. The classification is
                 // made here rather than in the browser because only the server sees the publisher
                 // and package family the decision is made from.
-                isMicrosoft = ApplicationCatalogPolicy.IsMicrosoftPublished(ToDescriptor(item)),
+                isMicrosoft = ApplicationCatalogPolicy.IsMicrosoftPublished(descriptor),
                 item.Rule.ManuallyBlocked,
-                dailyLimitSeconds = RuleEvaluator.EffectiveDailyLimitSeconds(item.Rule.DailyLimitSeconds, schedule, null, today),
+                dailyLimitSeconds = RuleEvaluator.EffectiveDailyLimitSeconds(item.Rule.DailyLimitSeconds, schedule, bonus, today),
+                localDate = DeviceClock.ToLocalDate(today),
+                extraTimeUntilLocal = DeviceClock.ExtraTimeUntilLocal(bonus, now, item.Device.TimeZoneId),
                 // A schedule is the rule most of these applications actually carry, so the list
                 // says whether one is set and whether it is open right now. Without it every row
                 // reads "Allowed" while the schedule has the application shut.
@@ -103,7 +135,7 @@ public sealed class ApplicationsController(
             .Include(x => x.Device).Include(x => x.Application).Include(x => x.Rule)
             .SingleOrDefaultAsync(x => x.Id == deviceApplicationId, cancellationToken);
         if (item is null) return NotFound();
-        if (!ApplicationCatalogPolicy.IsUserManageable(ToDescriptor(item))) return NotFound();
+        if (!ApplicationCatalogPolicy.IsUserManageable(item.ToDescriptor())) return NotFound();
         var usage = await dbContext.DailyApplicationUsages.AsNoTracking()
             .Where(x => x.DeviceApplicationId == item.Id)
             .OrderByDescending(x => x.LocalDate).Take(60)
@@ -118,7 +150,7 @@ public sealed class ApplicationsController(
             {
                 item.Application.Id,
                 item.Application.IdentityKey,
-                DisplayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(ToDescriptor(item)),
+                DisplayName = ApplicationCatalogPolicy.GetFriendlyDisplayName(item.ToDescriptor()),
                 item.Application.ExecutableName,
                 item.Application.ProductName,
                 item.Application.OriginalFilename,
@@ -167,15 +199,7 @@ public sealed class ApplicationsController(
         if (item is null) return NotFound();
         item.Rule.ManuallyBlocked = request.ManuallyBlocked;
         if (request.Schedule is not null) item.Rule.ScheduleJson = RuleSnapshotFactory.SerializeSchedule(request.Schedule);
-        item.Rule.UpdatedAtUtc = timeProvider.GetUtcNow();
-        var deviceRule = await dbContext.DeviceRules.SingleAsync(x => x.DeviceId == item.DeviceId, cancellationToken);
-        deviceRule.Revision++;
-        deviceRule.UpdatedAtUtc = timeProvider.GetUtcNow();
-        var command = new DeviceCommand { DeviceId = item.DeviceId, Type = "RulesChanged" };
-        dbContext.DeviceCommands.Add(command);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await hubContext.Clients.Group(DeviceHub.GroupName(item.DeviceId))
-            .SendAsync("Command", new { command.Id, command.Type }, cancellationToken);
+        await MarkApplicationRuleChangedAsync(item, cancellationToken);
         return NoContent();
     }
 
@@ -211,32 +235,10 @@ public sealed class ApplicationsController(
         return NoContent();
     }
 
-    /// <summary>An application's rule changed: bump the PC's revision, queue the command, push it.</summary>
-    private async Task MarkApplicationRuleChangedAsync(DeviceApplication item, CancellationToken cancellationToken)
+    /// <summary>An application's rule changed, which is a change to its PC's rules.</summary>
+    private Task MarkApplicationRuleChangedAsync(DeviceApplication item, CancellationToken cancellationToken)
     {
-        var now = timeProvider.GetUtcNow();
-        item.Rule.UpdatedAtUtc = now;
-        var deviceRule = await dbContext.DeviceRules.SingleAsync(x => x.DeviceId == item.DeviceId, cancellationToken);
-        deviceRule.Revision++;
-        deviceRule.UpdatedAtUtc = now;
-        var command = new DeviceCommand { DeviceId = item.DeviceId, Type = "RulesChanged" };
-        dbContext.DeviceCommands.Add(command);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await hubContext.Clients.Group(DeviceHub.GroupName(item.DeviceId))
-            .SendAsync("Command", new { command.Id, command.Type }, cancellationToken);
+        item.Rule.UpdatedAtUtc = timeProvider.GetUtcNow();
+        return ruleChanges.PublishAsync(item.DeviceId, cancellationToken);
     }
-
-    private static ApplicationDescriptor ToDescriptor(DeviceApplication item) => new()
-    {
-        DisplayName = item.Application.DisplayName,
-        ExecutableName = item.Application.ExecutableName,
-        ExecutablePath = item.ExecutablePath,
-        ProductName = item.Application.ProductName,
-        OriginalFilename = item.Application.OriginalFilename,
-        Company = item.Application.Company,
-        SignaturePublisher = item.Application.SignaturePublisher,
-        FileVersion = item.FileVersion,
-        PackageFamilyName = item.Application.PackageFamilyName,
-        Sha256 = item.Sha256
-    };
 }

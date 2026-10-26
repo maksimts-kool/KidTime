@@ -1,6 +1,7 @@
 "use client";
 
 import { appPath } from "@/lib/paths";
+import { unreachableMessage } from "@/lib/http";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { AlertTriangle, Check, ChevronDown, CircleX, Trash2, TriangleAlert } from "lucide-react";
@@ -24,15 +25,23 @@ export function DiagnosticEvents({ events }: { events: DiagnosticEvent[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ id: string; message: string } | null>(null);
 
   async function act(id: string, action: "resolve" | "delete") {
     setBusy(id);
+    setFailure(null);
     try {
-      await fetch(
+      const response = await fetch(
         appPath(action === "resolve" ? `/api/backend/diagnostics/${id}/resolve` : `/api/backend/diagnostics/${id}`),
         { method: action === "resolve" ? "POST" : "DELETE" },
       );
+      if (!response.ok) {
+        setFailure({ id, message: action === "resolve" ? "The report could not be marked handled." : "The report could not be deleted." });
+        return;
+      }
       router.refresh();
+    } catch {
+      setFailure({ id, message: unreachableMessage });
     } finally {
       setBusy(null);
     }
@@ -106,6 +115,7 @@ export function DiagnosticEvents({ events }: { events: DiagnosticEvent[] }) {
                   </Button>
                 </div>
               </div>
+              {failure?.id === event.id && <p className="text-sm text-destructive">{failure.message}</p>}
               {open && event.detail && (
                 <pre className="max-h-80 overflow-auto rounded-lg bg-muted/60 p-3 font-mono text-xs whitespace-pre-wrap">
                   {event.detail}
@@ -122,22 +132,33 @@ export function DiagnosticEvents({ events }: { events: DiagnosticEvent[] }) {
 export function ResolveAllFaults({ deviceId }: { deviceId?: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   async function resolveAll() {
     setBusy(true);
+    setError("");
     try {
-      await fetch(appPath(`/api/backend/diagnostics/resolve${deviceId ? `?deviceId=${deviceId}` : ""}`), {
+      const response = await fetch(appPath(`/api/backend/diagnostics/resolve${deviceId ? `?deviceId=${deviceId}` : ""}`), {
         method: "POST",
       });
+      if (!response.ok) {
+        setError("The reports could not be marked handled.");
+        return;
+      }
       router.refresh();
+    } catch {
+      setError(unreachableMessage);
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Button variant="outline" onClick={resolveAll} disabled={busy}>
-      <Check data-icon="inline-start" />{busy ? "Marking…" : "Mark all handled"}
-    </Button>
+    <div className="flex flex-col items-end gap-1">
+      <Button variant="outline" onClick={resolveAll} disabled={busy}>
+        <Check data-icon="inline-start" />{busy ? "Marking…" : "Mark all handled"}
+      </Button>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { appPath } from "@/lib/paths";
+import { unreachableMessage } from "@/lib/http";
 import { FormEvent, useState } from "react";
 import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -44,7 +45,7 @@ export function DeviceRuleEditor({ deviceId, rule, accounts }: { deviceId: strin
       setSaved(true);
       router.refresh();
     } catch {
-      setError("Could not reach the KidTime server. Try again in a moment.");
+      setError(unreachableMessage);
     } finally {
       setBusy(false);
     }

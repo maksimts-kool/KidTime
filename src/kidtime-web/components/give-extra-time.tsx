@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { TimerReset } from "lucide-react";
 import { appPath } from "@/lib/paths";
+import { errorMessage, unreachableMessage } from "@/lib/http";
 import { formatDuration } from "@/lib/format";
 import type { ExtraTimeTarget } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -55,14 +56,13 @@ export function GiveExtraTime({ targets, variant = "outline" }: { targets: Extra
         body: JSON.stringify({ deviceId: target.deviceId, deviceApplicationId: target.deviceApplicationId, minutes }),
       });
       if (!response.ok) {
-        const body = (await response.text()).trim().replace(/^"|"$/g, "");
-        setError(body || "The extra time could not be given.");
+        setError(await errorMessage(response, "The extra time could not be given."));
         return;
       }
       setOpen(false);
       router.refresh();
     } catch {
-      setError("Could not reach the KidTime server. Try again in a moment.");
+      setError(unreachableMessage);
     } finally {
       setBusy(false);
     }

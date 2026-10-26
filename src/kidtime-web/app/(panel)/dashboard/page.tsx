@@ -135,7 +135,7 @@ export default async function DashboardPage() {
                     <p className="truncate text-sm font-medium">{app.displayName}</p>
                     <p className="truncate text-xs text-muted-foreground">{describeApplicationRules(app) ?? app.publisher ?? app.executableName}</p>
                   </div>
-                  {app.manuallyBlocked && <Badge variant="destructive">Blocked</Badge>}
+                  {app.manuallyBlocked && !app.extraTimeUntilLocal && <Badge variant="destructive">Blocked</Badge>}
                   <span className="text-sm font-medium tabular-nums">{formatDuration(app.todayActiveSeconds)}</span>
                 </Link>
               </div>

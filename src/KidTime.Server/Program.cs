@@ -42,6 +42,7 @@ if (!string.IsNullOrWhiteSpace(dataProtectionCertificatePath)
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddDbContext<KidTimeDbContext>(options => options.UseNpgsql(connectionString));
 builder.Services.AddScoped<RuleSnapshotFactory>();
+builder.Services.AddScoped<RuleChangePublisher>();
 builder.Services.AddScoped<ApplicationCatalogReconciler>();
 builder.Services.AddSingleton<AgentUpdateCatalog>();
 // The household's DNS filter. It is optional and read-only: with nothing configured the panel
